@@ -40,16 +40,26 @@ delete that file. No stock files touched.
   output to the hardware DAC device.
 - **Library/tags:** lightweight tag reader (FLAC VorbisComment + PICTURE block,
   MP3 ID3v2 APIC) to build the Artist→Album→Song tree and extract cover art.
+- **SD card layout (two sources):**
+  - `music/` → the tag-based **Artist → Album → Song** library.
+  - `others/` → **Stories & Podcasts** (kids' content): a simple **folder browser**
+    (directory → files), cover art from `folder.jpg`/`cover.jpg` or embedded tag,
+    with resume-position memory per item (long stories/episodes).
 - **Bluetooth (both directions):**
   - Transmit (A2DP **source**) → pair/connect a HiFi BT speaker / headphones.
   - Receive (A2DP **sink**, "Bluetooth DAC") → iPhone/iPod streams into the R3 II.
   - Driven via BlueZ `bluetoothd` (D-Bus or `bluetoothctl`) + bluealsa (stock has it).
-- **Extras (optional launcher):** Tetris (written from scratch) and Doom
+- **Games (main-menu item):** Tetris (written from scratch) and Doom
   (doomgeneric; **user supplies the WAD** — no copyrighted data shipped).
 
 ## Minimalist design
 
-- Artist list → album grid/list → song list → player.
+- **Main menu (4 items):** Music · Podcasts · Games · Settings.
+- Music: Artist list → album grid/list → song list → player.
+- Podcasts (kids' stories & podcasts from `others/`): folder list → item list →
+  player (same player screen, with resume-from-last-position).
+- Games: Tetris (from scratch) and Doom (user-supplied WAD).
+- Settings: Bluetooth only.
 - Player screen: large album cover, title/artist, play/pause, prev/next, seek,
   volume. Nothing else.
 - Settings screen: Bluetooth only (transmit pair + receive toggle).
@@ -61,10 +71,11 @@ delete that file. No stock files touched.
 1. **Toolchain + bring-up** — static mipsel hard-float cross-compiler; "hello
    framebuffer" + touch-dump; verify on device via adb push/run.
 2. **Core player** — LVGL skeleton + miniaudio playing one file; Now Playing + cover.
-3. **Library browser** — scan storage, build Artist→Album→Song, grouping from tags.
+3. **Library browser** — scan `music/` → Artist→Album→Song from tags; scan
+   `others/` → Stories & Podcasts folder browser with resume positions.
 4. **Transport + theme** — play/pause/seek/next/prev/volume; minimalist theme.
 5. **Bluetooth** — transmit + receive settings.
-6. **Extras** — Tetris, then Doom.
+6. **Games** — Tetris, then Doom.
 7. **Packaging** — reversible drop-in installer; then flashable `.upt`.
 
 ## Risks / open questions
