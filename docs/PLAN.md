@@ -90,8 +90,17 @@ persistent dev shell.**
 2. After that one flash: live root access → iterate on `/ui_data/player` **without
    reflashing**. Restores the fast loop.
 3. Keep a **stock `.upt` for one-tap rollback** (low brick risk; kernel untouched).
-- Requires repacking `system.ubi` (UBIFS): geometry LEB 126976, min-I/O 2048, PEB
-  from the stock image; tools `mkfs.ubifs` + `ubinize` on the host.
+- Requires repacking `system.ubi` (UBIFS): `mkfs.ubifs -m 2048 -e 126976 -c 480 -f 8
+  -x lzo`. **Validated:** repacking the stock rootfs reproduces the image byte-for-byte
+  in size (57,012,224). Extract with `os.chown` neutralized so modes/symlinks are
+  preserved (no root/fakeroot needed; device runs as root, `/dev` is tmpfs via mdev).
+- **Update delivery (confirmed in firmware):** `hiby_player` looks for
+  `/mnt/sd_0/<name>.upt` on the SD card; applier uses `ubiupdatevol`/`ubiformat`.
+  So: name the file `r3ii.upt`, copy to SD root, trigger update in the device UI.
+  No signature check. `.upt` = ISO9660 (built here with `pycdlib`, no sudo) holding
+  SYSTEM.UBI + UIMAGE.BIN + UBOOT.BIN + UPDATE.TXT (md5s) + VERSION.TXT + _GITIGNO.
+- Keep stock UIMAGE.BIN/UBOOT.BIN untouched; only SYSTEM.UBI changes → low brick risk.
+- Also build a faithful **stock rollback `r3ii.upt`**.
 
 ## Architecture
 
