@@ -1,0 +1,82 @@
+# r3ii-player — minimalist drop-in music UI for HiBy R3 II
+
+A clean, minimalist replacement music UI for the HiBy R3 II, installed as a
+**reversible drop-in** beside the stock firmware. Later packaged as a flashable
+`.upt` image.
+
+## Target hardware (from stock firmware `r3ii.upt`, 2024-12-20)
+
+| Property | Value |
+|----------|-------|
+| SoC | Ingenic (MIPS32r2, XBurst), little-endian |
+| ABI | O32, **hard-float**, `e_flags=0x70001005` |
+| libc | glibc 2.16 (Ingenic 2015.02), `ld-2.16.so` |
+| Kernel | Linux 3.10.14 |
+| RAM | 32 MB (`mem=32M`) — memory is tight |
+| Display | `/dev/fb0` framebuffer (res/format TBD on device) |
+| Touch | GT9xx capacitive, `/dev/input/eventX` |
+| Audio | ALSA (`libasound`), HiBy-driven DAC |
+| Stock UI | `hiby_player` — SDL 1.2 app (we replace this) |
+
+## Strategy: avoid the old glibc
+
+Build **fully-static mipsel binaries** (target: `mips32r2`, O32, hard-float) so
+we depend only on the stable kernel syscall ABI, not glibc 2.16. Likely a musl
+cross-toolchain; fallback is a glibc toolchain using the extracted rootfs as
+sysroot.
+
+## Injection point (reversible)
+
+`/etc/init.d/S92_03_start_music_player` runs `/ui_data/player` if it exists, else
+the stock `hiby_player`. So we install our binary at `/ui_data/player`. Undo =
+delete that file. No stock files touched.
+
+## Architecture
+
+- **One static binary.** UI + audio + library index in a single process (32 MB RAM).
+- **UI:** LVGL on fbdev + evdev. Screens: Artists → Albums → Songs → Now Playing
+  (with album cover) → minimal Settings.
+- **Audio:** miniaudio (ALSA backend) + decoders FLAC / MP3 / Vorbis / Opus / WAV,
+  output to the hardware DAC device.
+- **Library/tags:** lightweight tag reader (FLAC VorbisComment + PICTURE block,
+  MP3 ID3v2 APIC) to build the Artist→Album→Song tree and extract cover art.
+- **Bluetooth (both directions):**
+  - Transmit (A2DP **source**) → pair/connect a HiFi BT speaker / headphones.
+  - Receive (A2DP **sink**, "Bluetooth DAC") → iPhone/iPod streams into the R3 II.
+  - Driven via BlueZ `bluetoothd` (D-Bus or `bluetoothctl`) + bluealsa (stock has it).
+- **Extras (optional launcher):** Tetris (written from scratch) and Doom
+  (doomgeneric; **user supplies the WAD** — no copyrighted data shipped).
+
+## Minimalist design
+
+- Artist list → album grid/list → song list → player.
+- Player screen: large album cover, title/artist, play/pause, prev/next, seek,
+  volume. Nothing else.
+- Settings screen: Bluetooth only (transmit pair + receive toggle).
+
+## Milestones
+
+0. **Device access** — adb up; probe fb0 (res/bpp/format), touch evdev range,
+   ALSA device names, BlueZ/bluealsa layout. *(needs device)*
+1. **Toolchain + bring-up** — static mipsel hard-float cross-compiler; "hello
+   framebuffer" + touch-dump; verify on device via adb push/run.
+2. **Core player** — LVGL skeleton + miniaudio playing one file; Now Playing + cover.
+3. **Library browser** — scan storage, build Artist→Album→Song, grouping from tags.
+4. **Transport + theme** — play/pause/seek/next/prev/volume; minimalist theme.
+5. **Bluetooth** — transmit + receive settings.
+6. **Extras** — Tetris, then Doom.
+7. **Packaging** — reversible drop-in installer; then flashable `.upt`.
+
+## Risks / open questions
+
+- DAC gain/digital-filter control lives in `hiby_player`; plain ALSA gives audio
+  but maybe not every hardware feature. Confirm on device.
+- BT routing depends on how HiBy wired bluealsa; confirm on device.
+- Display rotation/pixel format must be confirmed on hardware.
+- Flashing `.upt` can brick the device → drop-in first, flash only once proven.
+
+## Status
+
+- [x] Analyzed stock `r3ii.upt`, extracted rootfs, pinned toolchain target.
+- [ ] adb access to device (blocked: adb not installed + device USB mode).
+- [ ] Toolchain acquisition (blocked: sandbox denied external download).

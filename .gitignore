@@ -1,0 +1,8 @@
+/build/
+/dist/*.upt
+/toolchain/*/
+*.o
+*.a
+*.elf
+*.bin.tmp
+/device-probe/*.raw
