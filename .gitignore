@@ -6,3 +6,5 @@
 *.elf
 *.bin.tmp
 /device-probe/*.raw
+/toolchain/tc.tgz
+/toolchain/mipsel-linux-musl-cross/

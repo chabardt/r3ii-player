@@ -38,13 +38,15 @@ delete that file. No stock files touched.
   (with album cover) → minimal Settings.
 - **Audio:** miniaudio (ALSA backend) + decoders FLAC / MP3 / Vorbis / Opus / WAV,
   output to the hardware DAC device.
-- **Library/tags:** lightweight tag reader (FLAC VorbisComment + PICTURE block,
-  MP3 ID3v2 APIC) to build the Artist→Album→Song tree and extract cover art.
+- **Browsing model:** both Music and Podcasts are **directory browsers** that mirror
+  the SD folders directly (no tag database needed). Tags are read only to display
+  track title/duration and cover; grouping comes from the folder layout.
 - **SD card layout (two sources):**
-  - `music/` → the tag-based **Artist → Album → Song** library.
-  - `others/` → **Stories & Podcasts** (kids' content): a simple **folder browser**
-    (directory → files), cover art from `folder.jpg`/`cover.jpg` or embedded tag,
-    with resume-position memory per item (long stories/episodes).
+  - `music/` → browsed as its own directory tree (Artist/Album/Song if laid out so).
+  - `others/` → **Podcasts**: kids' stories & podcasts, one folder per show
+    (`bestioles`, `Coluche`, `Francois Perusse`, `oli`, …).
+  - Cover art per folder from `folder.jpg`/`cover.jpg` or embedded tag.
+  - Resume-position memory per item (long stories/episodes).
 - **Bluetooth (both directions):**
   - Transmit (A2DP **source**) → pair/connect a HiFi BT speaker / headphones.
   - Receive (A2DP **sink**, "Bluetooth DAC") → iPhone/iPod streams into the R3 II.
@@ -55,11 +57,20 @@ delete that file. No stock files touched.
 ## Minimalist design
 
 - **Main menu (4 items):** Music · Podcasts · Games · Settings.
-- Music: Artist list → album grid/list → song list → player.
-- Podcasts (kids' stories & podcasts from `others/`): folder list → item list →
-  player (same player screen, with resume-from-last-position).
-- Games: Tetris (from scratch) and Doom (user-supplied WAD).
-- Settings: Bluetooth only.
+- **Music** → browses the `music/` **directory tree as-is** ("same as the
+  directories there"): folder → subfolder → tracks → player. If the user's folders
+  are Artist/Album/Song, that's exactly what shows. Cover from folder art or tag.
+- **Podcasts** → browses the `others/` directory tree (e.g. `bestioles`, `Coluche`,
+  `Francois Perusse`, `oli`, …): folder → items → player, with
+  **resume-from-last-position** per item.
+- **Games** → Doom (user-supplied WAD), Tetris (from scratch).
+- **Settings** (5 items):
+  - **Set BT sink** — enable/receive: device acts as A2DP sink / "Bluetooth DAC"
+    for an iPhone/iPod streaming in.
+  - **Set BT devices** — scan/pair/connect A2DP output (HiFi speaker, headphones).
+  - **Sounds** — volume, gain/output options (and EQ if feasible).
+  - **Display** — brightness, screen timeout, (rotation if needed).
+  - **Hour / date-time** — set the clock.
 - Player screen: large album cover, title/artist, play/pause, prev/next, seek,
   volume. Nothing else.
 - Settings screen: Bluetooth only (transmit pair + receive toggle).
@@ -71,10 +82,10 @@ delete that file. No stock files touched.
 1. **Toolchain + bring-up** — static mipsel hard-float cross-compiler; "hello
    framebuffer" + touch-dump; verify on device via adb push/run.
 2. **Core player** — LVGL skeleton + miniaudio playing one file; Now Playing + cover.
-3. **Library browser** — scan `music/` → Artist→Album→Song from tags; scan
-   `others/` → Stories & Podcasts folder browser with resume positions.
+3. **Directory browsers** — `music/` and `others/` folder navigation, cover art,
+   track metadata, resume positions for podcasts.
 4. **Transport + theme** — play/pause/seek/next/prev/volume; minimalist theme.
-5. **Bluetooth** — transmit + receive settings.
+5. **Settings** — Set BT sink, Set BT devices, Sounds, Display, Hour/date-time.
 6. **Games** — Tetris, then Doom.
 7. **Packaging** — reversible drop-in installer; then flashable `.upt`.
 
