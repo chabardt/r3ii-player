@@ -69,6 +69,29 @@ sysroot.
 the stock `hiby_player`. So we install our binary at `/ui_data/player`. Undo =
 delete that file. No stock files touched.
 
+## Deployment & dev access (ADB is NOT available)
+
+Investigated on the real device: **no shell via USB or TCP.**
+- USB menu only offers Charge / Storage / DAC. Device enumerates as pure
+  mass-storage (`32bb:0101`, class 08); the `mass_storage,adb` gadget in the UI
+  binary is never selectable. Booting with `/mnt/sd_0/hiby_linux_auto_test` did not
+  enable adb.
+- It's Buildroot (no Android property system), so `adbd` is USB-only; TCP adb and the
+  `adb connect` strings are for HiByLink (phone remote), not a PC shell.
+- `sshd`/`thttpd` exist but are not auto-started (rcS runs only `S??` scripts;
+  `K*`/services are started on demand by the app).
+
+**Plan: deploy via the stock `.upt` System Update, and flash once to open a
+persistent dev shell.**
+1. First `.upt`: **stock rootfs + a small `S`-init script** that starts a shell on
+   Wi-Fi (dropbear/telnetd; root has empty password) and/or sets the
+   `mass_storage,adb` gadget. Keep the stock kernel untouched.
+2. After that one flash: live root access → iterate on `/ui_data/player` **without
+   reflashing**. Restores the fast loop.
+3. Keep a **stock `.upt` for one-tap rollback** (low brick risk; kernel untouched).
+- Requires repacking `system.ubi` (UBIFS): geometry LEB 126976, min-I/O 2048, PEB
+  from the stock image; tools `mkfs.ubifs` + `ubinize` on the host.
+
 ## Architecture
 
 - **One static binary.** UI + audio + library index in a single process (32 MB RAM).
