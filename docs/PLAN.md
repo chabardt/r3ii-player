@@ -79,12 +79,16 @@ delete that file. No stock files touched.
 - **Browsing model:** both Music and Podcasts are **directory browsers** that mirror
   the SD folders directly (no tag database needed). Tags are read only to display
   track title/duration and cover; grouping comes from the folder layout.
-- **SD card layout (two sources):**
-  - `music/` → browsed as its own directory tree (Artist/Album/Song if laid out so).
-  - `others/` → **Podcasts**: kids' stories & podcasts, one folder per show
-    (`bestioles`, `Coluche`, `Francois Perusse`, `oli`, …).
+- **SD card layout (confirmed on the user's card, 932 GB exFAT, label `MUSICTC`):**
+  - `Music/` → **Artist / Album / `NN. Title.mp3`** (648 artists). Browsed as the
+    directory tree = Artist→Album→Song for free. Strip leading `NN. ` for display;
+    read ID3 tags lazily (title/cover) only on open.
+  - `Others/` → **Podcasts**: one folder per show (`bestioles`, `book`, `Coluche`,
+    `François Pérusse`, `oli`, `petit vulgaire`), some with sub-folders.
   - Cover art per folder from `folder.jpg`/`cover.jpg` or embedded tag.
   - Resume-position memory per item (long stories/episodes).
+  - Note: folder names are **capitalized** (`Music`, `Others`); card mounts on the
+    device under its SD path (confirm exact mountpoint via probe, e.g. `/mnt/sd_0`).
 - **Bluetooth (both directions):**
   - Transmit (A2DP **source**) → pair/connect a HiFi BT speaker / headphones.
   - Receive (A2DP **sink**, "Bluetooth DAC") → iPhone/iPod streams into the R3 II.
