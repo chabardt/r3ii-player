@@ -18,6 +18,25 @@ A clean, minimalist replacement music UI for the HiBy R3 II, installed as a
 | Audio | ALSA (`libasound`), HiBy-driven DAC |
 | Stock UI | `hiby_player` — SDL 1.2 app (we replace this) |
 
+## Performance is the #1 requirement
+
+User's top priority: **no lag** — fast boot, smooth scrolling — with a **large**
+music collection. The binding constraint is **32 MB RAM** on a single ~1 GHz MIPS core.
+
+Design rules (non-negotiable):
+- **No boot-time library scan / media DB.** Music and Podcasts are *on-demand
+  directory browsers*: `readdir` one folder when it's opened. Boot and nav cost are
+  independent of collection size. (This is the legacy player's main stall.)
+- **Never hold the collection in RAM.** Virtualized lists — only visible rows exist
+  as widgets; one directory's entries in memory at a time; lazy sort for huge folders.
+- **Partial/dirty-rect rendering** to `/dev/fb0` (LVGL), never full-screen blits.
+- **Lazy cover art**: decode only visible thumbnails; cache as small RGB565 on
+  `/data`; evict. Never bulk-decode a folder.
+- **Single static binary** — no dynamic-linker startup cost (legacy links ~30 .so).
+- Optional later: a tiny *incremental* folder cache (by dir mtime) on `/data` to make
+  re-opening big folders instant — only if measurements show it's needed.
+- Keep animations minimal; target a steady, tear-free redraw via fb pan/double-buffer.
+
 ## Strategy: avoid the old glibc
 
 Build **fully-static mipsel binaries** (target: `mips32r2`, O32, hard-float) so
