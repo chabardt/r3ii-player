@@ -18,6 +18,25 @@ A clean, minimalist replacement music UI for the HiBy R3 II, installed as a
 | Audio | ALSA (`libasound`), HiBy-driven DAC |
 | Stock UI | `hiby_player` — SDL 1.2 app (we replace this) |
 
+## Hardware controls, audio routing & resume
+
+- **Power key:** short press toggles **Now Playing ↔ previous screen**; **long press**
+  = power on/off (sleep). **Volume rocker** = volume. A side key = **play/pause**.
+- **Resume:** on power-off, persist the current item + position (+ playing state) to
+  `/data`; on boot, restore it so it feels like resuming — the player opens on Now
+  Playing with the same track.
+- **Primary use case:** iPhone → **Bluetooth (A2DP sink)** → R3 II → **3.5mm jack**
+  → powered speaker. The R3 II is a Bluetooth DAC feeding a wired speaker.
+- **Quick Switch** panel (reachable by tapping the status bar — one or two taps from
+  anywhere), two selectors:
+  - **Output:** Headphone **Jack** ↔ **BT speaker** (fast switch between remembered
+    speakers).
+  - **Source:** **SD library** ↔ **Bluetooth-in (iPhone)**.
+- **BT speaker works out of the box:** once paired, the remembered speaker
+  **auto-connects on boot** (BlueZ bond + auto-reconnect); no menu diving.
+- Audio streams to **one** BT device at a time (A2DP/bluealsa limit) — remember many,
+  switch fast; not simultaneous. Source vs output are separate roles.
+
 ## Performance is the #1 requirement
 
 User's top priority: **no lag** — fast boot, smooth scrolling — with a **large**
@@ -83,10 +102,15 @@ delete that file. No stock files touched.
   `Francois Perusse`, `oli`, …): folder → items → player, with
   **resume-from-last-position** per item.
 - **Games** → Doom (user-supplied WAD), Tetris (from scratch).
+- **Theme:** two skins — **Cream** (default retro) and **Dark = black + orange**.
+  Token-driven; selectable under Settings → Display.
 - **Settings** (5 items):
   - **Set BT sink** — enable/receive: device acts as A2DP sink / "Bluetooth DAC"
     for an iPhone/iPod streaming in.
   - **Set BT devices** — scan/pair/connect A2DP output (HiFi speaker, headphones).
+    **Remembers all pairings** (BlueZ bonds in `/var/lib/bluetooth`); one marked
+    **auto-reconnect**, reconnected on boot. Audio streams to **one** device at a
+    time (A2DP/bluealsa limit) — many remembered, fast switch, not simultaneous.
   - **Sounds** — volume, gain/output options (and EQ if feasible).
   - **Display** — brightness, screen timeout, (rotation if needed).
   - **Hour / date-time** — set the clock.
