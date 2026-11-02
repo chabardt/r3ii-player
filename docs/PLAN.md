@@ -91,6 +91,16 @@ delete that file. No stock files touched.
   - Driven via BlueZ `bluetoothd` (D-Bus or `bluetoothctl`) + bluealsa (stock has it).
 - **Games (main-menu item):** Tetris (written from scratch) and Doom
   (doomgeneric; **user supplies the WAD** — no copyrighted data shipped).
+  - **Doom WADs** (user's own, 2024 KEX re-release): use classic IWADs
+    `doom.wad` / `doom2.wad` (also plutonia/tnt + PWADs sigil/nerve). Skip the
+    ID24 "Legacy of Rust" files (`id1.wad`, `id24res.wad`, …) — need the KEX engine.
+  - **Engine:** doomgeneric; implement `DG_Init/DrawFrame/SleepMs/GetTicksMs/GetKey`.
+    Render 320×200 → nearest ×1.5 → 480×300 letterbox; extend port with **mouse-event
+    injection** for analog turning.
+  - **Layout:** portrait — game on top, touch control deck below.
+  - **Input:** multitouch (evdev `ABS_MT_*`) left thumbstick (move+strafe, auto-run);
+    **swipe-right = analog turn**; on-screen Fire; physical keys: play/pause = Use,
+    volume rocker = weapon prev/next, power short = Esc/menu.
 
 ## Minimalist design
 
