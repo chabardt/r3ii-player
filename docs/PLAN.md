@@ -83,9 +83,10 @@ Investigated on the real device: **no shell via USB or TCP.**
 
 **Plan: deploy via the stock `.upt` System Update, and flash once to open a
 persistent dev shell.**
-1. First `.upt`: **stock rootfs + a small `S`-init script** that starts a shell on
-   Wi-Fi (dropbear/telnetd; root has empty password) and/or sets the
-   `mass_storage,adb` gadget. Keep the stock kernel untouched.
+1. First `.upt`: **stock rootfs + a small `S`-init script** that starts **`sshd`** on
+   boot (busybox has no telnetd, but `/bin/sshd` + host keys ship in the rootfs).
+   Set a root password and `PermitRootLogin yes` in the image. Keep the stock kernel
+   untouched. Reachable once the user connects Wi-Fi in the HiBy UI.
 2. After that one flash: live root access → iterate on `/ui_data/player` **without
    reflashing**. Restores the fast loop.
 3. Keep a **stock `.upt` for one-tap rollback** (low brick risk; kernel untouched).
@@ -139,6 +140,9 @@ persistent dev shell.**
   `Francois Perusse`, `oli`, …): folder → items → player, with
   **resume-from-last-position** per item.
 - **Games** → Doom (user-supplied WAD), Tetris (from scratch).
+- **A–Z quick-scrub rail** on the right of *every* directory listing (artists, albums,
+  podcasts) — draggable, with a letter bubble, like the old firmware's artist index.
+  Ignores a leading "The ". Essential for 648 artists.
 - **Theme:** two skins — **Cream** (default retro) and **Dark = black + orange**.
   Token-driven; selectable under Settings → Display.
 - **Settings** (5 items):
