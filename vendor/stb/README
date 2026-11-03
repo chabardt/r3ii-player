@@ -1,0 +1,2 @@
+stb_image.h v2.30 from https://github.com/nothings/stb @ d14d46f6b44456eb88beac58cba833a4135d4c89 (public domain / MIT).
+Used by src/ui/cover.c for progressive JPEG + PNG album art.

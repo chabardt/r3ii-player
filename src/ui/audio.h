@@ -12,4 +12,9 @@ int  audio_get_volume(void);
 long audio_pos_ms(void);
 long audio_dur_ms(void);
 void audio_seek(long ms);           /* jump to position (ms) */
+int  audio_bt_failed(void);         /* 1 once if the BT speaker vanished mid-track */
+int  audio_on_jack(void);           /* local playback currently holds the DAC */
+void audio_dac_follow(void);        /* receiver mode: keep DAC routing/volume applied */
+void audio_play_at(const char*path,long ms);   /* start at a position (resume) */
+void audio_reroute(int bt_ready);   /* output selection changed: switch sinks mid-track */
 #endif

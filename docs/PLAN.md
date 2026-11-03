@@ -193,5 +193,21 @@ persistent dev shell.**
 ## Status
 
 - [x] Analyzed stock `r3ii.upt`, extracted rootfs, pinned toolchain target.
-- [ ] adb access to device (blocked: adb not installed + device USB mode).
-- [ ] Toolchain acquisition (blocked: sandbox denied external download).
+- [x] adb access (stock adbd, enabled at boot by the modified launcher) + musl toolchain.
+- [x] M1–M4: bring-up, player (mp3/flac/wav/m4a), browsers, transport, theme, resume.
+- [x] Persistent install via `.upt`; r3player updated by `adb push` + kill (see PERSIST.md).
+- [x] Idle watch face (analog + date) after 30 s idle; idle while playing → Now Playing.
+- [~] M5 Settings → Bluetooth (`src/ui/bt.c`):
+  - [x] Paired list from BlueZ storage, live state via `hcitool con`; scan/pair/forget.
+  - [x] Receiver (phone → R3 → jack): bluealsa restarted with `a2dp-sink`, `bluealsa-aplay -D hw:0,0`;
+        R3 advertises Audio Sink, iPhone connects. Audible playback not yet confirmed by ear.
+  - [x] Speaker out (`aplay -D r3bt` via bluealsa plugin): verified by ear on Shokz OpenRun Pro 2 (SBC 48 kHz). Software volume on BT not yet checked.
+  - [ ] Sounds / Display / Date-time pages.
+- [ ] M6 Games, M7 polish.
+
+### Bluetooth notes
+- Stock: bluetoothd, `bt-agent -c NoInputNoOutput`, `bluealsa -p a2dp-source`. Bonds persist in
+  `/usr/data/bluetooth/<adapter>/<peer>/info`; adapter alias "HiBy R3PROII".
+- adb-shell-spawned daemons die with the shell (SIGHUP): start them with `setsid sh -c '... &'`.
+- Our state: `/usr/data/r3_bt` (`out=<mac>`, `rx=0|1`); ALSA conf for output in `/tmp/r3bt_alsa.conf`.
+- Fonts are ASCII-only; `fold()` maps Latin accents to ASCII for display.
