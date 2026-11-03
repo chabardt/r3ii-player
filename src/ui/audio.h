@@ -6,8 +6,10 @@ void audio_stop(void);
 void audio_toggle_pause(void);
 int  audio_is_playing(void);
 int  audio_is_paused(void);
+int  audio_finished(void);          /* 1 once if the last track ended on its own (not stop/skip) */
 void audio_set_volume(int v);       /* 0..255 (DAC L/R Playback Volume) */
 int  audio_get_volume(void);
 long audio_pos_ms(void);
 long audio_dur_ms(void);
+void audio_seek(long ms);           /* jump to position (ms) */
 #endif

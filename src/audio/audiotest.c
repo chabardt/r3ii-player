@@ -22,6 +22,7 @@ static void set_vol(int v){
     struct mixer_ctl*mo=mixer_get_ctl_by_name(m,"Mute Output");
     struct mixer_ctl*sm=mixer_get_ctl_by_name(m,"Soft Mute");
     struct mixer_ctl*op=mixer_get_ctl_by_name(m,"Output Port Switch");
+    struct mixer_ctl*be=mixer_get_ctl_by_name(m,"Balance Lineout En");
     if(l)mixer_ctl_set_value(l,0,v);
     if(r)mixer_ctl_set_value(r,0,v);
     if(mo)mixer_ctl_set_value(mo,0,0);
@@ -30,6 +31,7 @@ static void set_vol(int v){
     int hs =readint("/sys/class/switch/headset/state");
     int port = bal==1 ? 3 : (hs==1 ? 1 : 3);
     if(op)mixer_ctl_set_value(op,0,port);
+    if(be)mixer_ctl_set_value(be,0, bal==1?1:0);
     int rb = l?mixer_ctl_get_value(l,0):-1;
     printf("[vol] set=%d readback=%d port=%d (bal=%d hs=%d) ctls l=%d r=%d mo=%d sm=%d op=%d\n",
            v,rb,port,bal,hs,l?1:0,r?1:0,mo?1:0,sm?1:0,op?1:0);

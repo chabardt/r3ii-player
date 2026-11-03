@@ -4,12 +4,13 @@ set -e
 TC=toolchain/mipsel-linux-musl-cross/bin/mipsel-linux-musl-
 CC=${TC}gcc
 ARCH="-march=mips32r2 -mabi=32 -mhard-float -EL"
-INC="-DLV_CONF_INCLUDE_SIMPLE -I vendor/lvgl -I src/ui -I vendor/tinyalsa/include -I vendor/minimp3 -I vendor/dr_libs"
-CFLAGS="$ARCH -O2 -ffunction-sections -fdata-sections -fno-pie $INC"
+INC="-DLV_CONF_INCLUDE_SIMPLE -I vendor/lvgl -I src/ui -I vendor/tinyalsa/include -I vendor/minimp3 -I vendor/dr_libs -I vendor/minimp4 -I vendor/faad2/include -I vendor/faad2/libfaad"
+CFLAGS="$ARCH -DHAVE_CONFIG_H -O2 -ffunction-sections -fdata-sections -fno-pie $INC"
 mkdir -p build
 
 TA="vendor/tinyalsa/src/pcm.c vendor/tinyalsa/src/pcm_hw.c vendor/tinyalsa/src/pcm_plugin.c vendor/tinyalsa/src/snd_card_plugin.c vendor/tinyalsa/src/mixer.c vendor/tinyalsa/src/mixer_hw.c vendor/tinyalsa/src/mixer_plugin.c vendor/tinyalsa/src/limits.c"
-SRCS="$(find vendor/lvgl/src -name '*.c') $TA src/ui/audio.c src/ui/main.c"
+FAAD="$(find vendor/faad2/libfaad -name '*.c')"
+SRCS="$(find vendor/lvgl/src -name '*.c') $TA $FAAD src/ui/audio.c src/ui/m4a.c src/ui/main.c"
 
 N=$(nproc 2>/dev/null || echo 4); i=0
 for s in $SRCS; do
