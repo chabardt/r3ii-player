@@ -30,6 +30,7 @@ static uint32_t g_last_input;   /* last touch/key (idle -> watch face / Now Play
 #define MUSIC_ROOT "/usr/data/mnt/sd_0/Music"
 #define PODCAST_ROOT "/usr/data/mnt/sd_0/Others"
 #define RESUME_FILE "/usr/data/r3_resume"
+#define VOL_FILE "/usr/data/r3_vol"
 
 /* current top-level section being browsed (so "back" at its root returns Home) */
 static char g_root[1024]=MUSIC_ROOT;
@@ -741,7 +742,8 @@ static void tick_ui(void){
     if(bt_receiver() && now-lr>=120){ lr=now; audio_dac_follow(); }   /* cheap: cached mixer ctls */
     if(audio_bt_failed()){ g_resume_ms=audio_pos_ms(); if(np_play) lv_label_set_text(np_play,LV_SYMBOL_PLAY); }
     if(g_volov && !lv_obj_has_flag(g_volov,LV_OBJ_FLAG_HIDDEN) && now>g_vol_hide)
-        lv_obj_add_flag(g_volov,LV_OBJ_FLAG_HIDDEN);   /* auto-hide the volume overlay */
+        { lv_obj_add_flag(g_volov,LV_OBJ_FLAG_HIDDEN);   /* auto-hide the volume overlay */
+          FILE*vf=fopen(VOL_FILE,"w"); if(vf){ fprintf(vf,"%d\n",audio_get_volume()); fclose(vf); } }   /* remember it */
 }
 
 /* resume: pre-load last track so Now Playing opens ready (press play to resume) */
@@ -788,6 +790,7 @@ int main(int argc,char**argv){
     kf_media=open("/dev/input/event2",O_RDONLY|O_NONBLOCK);
     static lv_indev_drv_t id; lv_indev_drv_init(&id);
     id.type=LV_INDEV_TYPE_POINTER; id.read_cb=ts_read; lv_indev_drv_register(&id);
+    { FILE*vf=fopen(VOL_FILE,"r"); int v; if(vf){ if(fscanf(vf,"%d",&v)==1) audio_set_volume(v); fclose(vf); } }   /* last volume, else default 160 */
     make_vol_overlay();
     show_home();
     load_resume();                 /* if a track was playing at power-off, open it ready */

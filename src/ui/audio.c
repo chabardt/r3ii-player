@@ -25,7 +25,7 @@
 extern char **environ;
 
 static pthread_t th;
-static volatile int a_stop,a_pause,a_playing,a_vol=200,a_active,a_done;  /* a_vol = user-facing loudness 0..255; a_done=track ended naturally */
+static volatile int a_stop,a_pause,a_playing,a_vol=160,a_active,a_done;  /* a_vol = user-facing loudness 0..255; a_done=track ended naturally */
 static volatile int a_btfail;
 static volatile int a_out_gen, a_bt_ready;  /* output switch requests / BT sink usable */
 static volatile int a_on_jack;         /* local playback currently owns the DAC (tinyalsa pcm open) */          /* BT sink died mid-track (speaker off / out of range) */
