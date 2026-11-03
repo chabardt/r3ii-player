@@ -5,12 +5,14 @@
  * bluealsa -p a2dp-source. We (re)start bluealsa with a2dp-sink too, so the same daemon
  * serves both roles. Bonds live in /usr/data/bluetooth/<adapter>/<peer>/info (persistent). */
 #include "bt.h"
+#include "audio.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <dirent.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <stdint.h>
 #include <time.h>
@@ -33,7 +35,8 @@ static int g_jobs; static char g_pair_mac[18], g_forget_mac[18];
 
 static void bump(void){ g_ver++; }
 static void set_status(const char*s){ pthread_mutex_lock(&mu);
-    snprintf(g_status,sizeof g_status,"%s",s); bump(); pthread_mutex_unlock(&mu); }
+    snprintf(g_status,sizeof g_status,"%s",s); bump(); pthread_mutex_unlock(&mu);
+    if(*s){ FILE*f=fopen("/tmp/r3bt.log","a"); if(f){ fprintf(f,"%ld %s\n",(long)time(0),s); fclose(f); } } }
 
 /* run a shell command, capture up to cap bytes of stdout (ANSI/CR stripped) */
 static int sh(const char*cmd,char*out,int cap){
@@ -154,6 +157,25 @@ static void do_init(void){
     do_refresh();
     set_status("");
 }
+/* iOS only lists us as an output (Control Centre, Qobuz...) while the A2DP link is up, and
+ * it doesn't reconnect on its own after bluealsa restarts, so we dial the phones we know
+ * (first one that answers wins). Used when the receiver is enabled, and periodically. */
+static void do_rx_connect(void){
+    bt_dev_t d[BT_MAX]; int n=bt_devices(d,BT_MAX);
+    char m[128]; int linked=0;
+    for(int i=0;i<n && !linked;i++) if(d[i].phone){
+        if(d[i].connected){ linked=1; snprintf(m,sizeof m,"Receiver on - %s connected",d[i].name); break; }
+        snprintf(m,sizeof m,"Receiver on - connecting %s...",d[i].name); set_status(m);
+        if(dbus_connect(d[i].mac)){ linked=1; snprintf(m,sizeof m,"Receiver on - %s connected",d[i].name); }
+    }
+    if(!linked){
+        char al[256],*q; sh("printf 'show\\n' | bluetoothctl 2>/dev/null | grep Alias:",al,sizeof al);
+        q=strstr(al,"Alias: "); if(q) q+=7; else { strcpy(al,"R3"); q=al; } q[strcspn(q,"\n")]=0;
+        snprintf(m,sizeof m,"Receiver on - pick \"%s\" on your phone",q);
+    }
+    set_status(m);
+    do_refresh();
+}
 static void do_rx(void){
     int on; pthread_mutex_lock(&mu); on=g_rx; pthread_mutex_unlock(&mu);
     sh("killall bluealsa-aplay 2>/dev/null",0,0);
@@ -164,17 +186,23 @@ static void do_rx(void){
         bt_dev_t d[BT_MAX]; int n=bt_devices(d,BT_MAX); char cmd[96];
         for(int i=0;i<n;i++) if(d[i].phone){
             snprintf(cmd,sizeof cmd,"bluetoothctl trust %s >/dev/null 2>&1",d[i].mac); sh(cmd,0,0); }
-        char al[256],*q,m[128]; sh("printf 'show\\n' | bluetoothctl 2>/dev/null | grep Alias:",al,sizeof al);
-        q=strstr(al,"Alias: "); if(q) q+=7; else { strcpy(al,"R3"); q=al; } q[strcspn(q,"\n")]=0;
-        snprintf(m,sizeof m,"Receiver on - pick \"%s\" on your phone",q); set_status(m);
+        do_rx_connect();
     } else set_status("");
 }
 static void do_out(void){
     char mac[18]; pthread_mutex_lock(&mu); snprintf(mac,sizeof mac,"%s",g_out); pthread_mutex_unlock(&mu);
     write_alsa_conf(mac);
-    if(!mac[0]){ set_status(""); return; }
+    if(!mac[0]){ audio_reroute(0); set_status("Output: headphone jack"); return; }
     char m[96]; snprintf(m,sizeof m,"Connecting %s...",name_of(mac)); set_status(m);
     int ok=dbus_connect(mac);
+    if(ok){   /* wait for bluealsa to expose the speaker's PCM before aplay opens it */
+        char mp[24],want[64],pcms[2048]; mac_path(mac,mp,sizeof mp);
+        snprintf(want,sizeof want,"dev_%s/a2dpsrc",mp); ok=0;
+        for(int i=0;i<30 && !ok;i++){ sh("bluealsa-cli list-pcms 2>/dev/null",pcms,sizeof pcms);
+            if(strstr(pcms,want)) ok=1; else usleep(200000); }
+    }
+    /* switch the running track over (or stay where we are if the speaker isn't there) */
+    if(ok) audio_reroute(1);
     do_refresh();
     snprintf(m,sizeof m,ok?"Output: %s":"%s unreachable (switched off?)",name_of(mac)); set_status(m);
 }
@@ -241,7 +269,7 @@ static void do_forget(const char*mac){
 }
 
 static void* worker(void*arg){ (void)arg;
-    uint64_t last_ref=0;
+    uint64_t last_ref=0, last_rx=0;
     for(;;){
         pthread_mutex_lock(&mu);
         if(!g_jobs){ struct timespec ts; clock_gettime(CLOCK_REALTIME,&ts); ts.tv_sec+=4;
@@ -259,6 +287,12 @@ static void* worker(void*arg){ (void)arg;
         /* periodic: track connection changes (speaker switched on/off, phone connected) */
         uint64_t now=(uint64_t)time(0);
         if((j&J_REFRESH) || now-last_ref>=4){ last_ref=now; do_refresh(); }
+        /* receiver on but no phone linked (restart, out of range): dial again now and then,
+         * only while idle so paging never stutters a stream */
+        if(g_rx && now-last_rx>=60 && !audio_is_playing()){ last_rx=now;
+            bt_dev_t d[BT_MAX]; int n=bt_devices(d,BT_MAX), any=0;
+            for(int i=0;i<n;i++) if(d[i].phone && d[i].connected) any=1;
+            if(!any) do_rx_connect(); }
         g_busy=0;
     }
     return 0;

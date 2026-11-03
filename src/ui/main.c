@@ -146,6 +146,7 @@ static void pretty(const char*in,char*out,int cap){ /* strip leading "NN. " and 
 
 /* ---- playlist (siblings in the directory of the chosen song) ---- */
 static char **g_pl=0; static int g_pln=0, g_pli=-1;
+static long g_resume_ms=-1;   /* where Play continues after a stop (boot resume, speaker lost) */
 static char g_pldir[1024]="";
 static char g_pltitle[256]="";
 static void pl_free(void){ if(g_pl){ for(int i=0;i<g_pln;i++)free(g_pl[i]); free(g_pl);} g_pl=0; g_pln=0; g_pli=-1; }
@@ -163,12 +164,14 @@ static void pl_build(const char*dir,const char*selname){
     g_pl=tmp; g_pln=n; g_pli=0;
     if(selname) for(int i=0;i<n;i++) if(!strcmp(tmp[i],selname)){ g_pli=i; break; }
 }
-static void pl_play(int i){
-    if(i<0||i>=g_pln)return; g_pli=i;
+static void pl_play_at(int i,long ms);
+static void pl_play(int i){ pl_play_at(i,0); }
+static void pl_resume(void){ pl_play_at(g_pli, g_resume_ms>0?g_resume_ms:0); }
+static void pl_play_at(int i,long ms){
+    if(i<0||i>=g_pln)return; g_pli=i; g_resume_ms=-1;
     char full[1600]; snprintf(full,sizeof full,"%s/%s",g_pldir,g_pl[i]);
     pretty(g_pl[i],g_pltitle,sizeof g_pltitle);
-    if(bt_receiver() && !bt_output()[0]) bt_set_receiver(0);   /* both need the DAC */
-    audio_play(full);
+    audio_play_at(full,ms);
     if(np_title) lv_label_set_text(np_title,g_pltitle);
     if(np_play)  lv_label_set_text(np_play,LV_SYMBOL_PAUSE);
     np_set_cover();
@@ -203,8 +206,8 @@ static void np_set_cover(void){
 /* ---- Now Playing ---- */
 static void np_back_cb(lv_event_t*e){ (void)e; show_browser(g_pldir[0]?g_pldir:MUSIC_ROOT); }
 static void np_playpause_cb(lv_event_t*e){ (void)e;
-    if(!audio_is_playing() && g_pln>0){ pl_play(g_pli); return; }   /* resume-ready: start it */
-    audio_toggle_pause();
+    if(!audio_is_playing() && g_pln>0){ pl_resume(); return; }   /* resume-ready: continue where it stopped */
+    audio_toggle_pause(); save_resume();
     if(np_play) lv_label_set_text(np_play, audio_is_paused()?LV_SYMBOL_PLAY:LV_SYMBOL_PAUSE); }
 static void np_next_cb(lv_event_t*e){ (void)e; pl_next(); }
 static void np_prev_cb(lv_event_t*e){ (void)e; pl_prev(); }
@@ -480,7 +483,7 @@ static void settings_fill(void){
 
     lv_obj_update_layout(set_list);
     lv_obj_scroll_to_y(set_list,sy,LV_ANIM_OFF);
-    if(set_status){ char st[96]; bt_status(st,sizeof st); lv_label_set_text(set_status,st); }
+    if(set_status){ char st[96]; bt_status(st,sizeof st); fold(st); lv_label_set_text(set_status,st); }
 }
 static void show_settings(void){
     null_live();
@@ -675,7 +678,7 @@ static void make_vol_overlay(void){   /* top-layer bar shown only while volume i
     lv_obj_set_style_bg_color(g_volov,lv_color_hex(C_BAR),0); lv_obj_set_style_radius(g_volov,0,0);
     lv_obj_set_style_border_color(g_volov,lv_color_hex(C_ACCENT),0);
     lv_obj_set_style_border_width(g_volov,2,0); lv_obj_set_style_border_side(g_volov,LV_BORDER_SIDE_BOTTOM,0);
-    lv_obj_clear_flag(g_volov,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(g_volov,LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_CLICKABLE);   /* taps fall through to the header */
     lv_obj_t*ic=lv_label_create(g_volov); lv_label_set_text(ic,LV_SYMBOL_VOLUME_MAX);
     lv_obj_set_style_text_color(ic,lv_color_hex(C_ACCENT),0); lv_obj_align(ic,LV_ALIGN_LEFT_MID,10,0);
     g_volbar=lv_bar_create(g_volov); lv_obj_set_size(g_volbar,390,14); lv_obj_align(g_volbar,LV_ALIGN_RIGHT_MID,-14,0);
@@ -708,8 +711,8 @@ static void keys_poll(void){
         else if(e.code==114 && e.value){ bump_vol(-12); }   /* vol down */
         else if(e.code==163 && e.value==1){ pl_next(); }    /* next */
         else if(e.code==164 && e.value==1){                 /* play/pause */
-            if(!audio_is_playing() && g_pln>0) pl_play(g_pli);
-            else { audio_toggle_pause();
+            if(!audio_is_playing() && g_pln>0) pl_resume();
+            else { audio_toggle_pause(); save_resume();
                    if(np_play) lv_label_set_text(np_play,audio_is_paused()?LV_SYMBOL_PLAY:LV_SYMBOL_PAUSE); }
         }
     }
@@ -722,6 +725,8 @@ static void heartbeat(void){ static uint32_t lh=0; uint32_t n=r3_tick_ms();
 static void fmt_ms(long ms,char*o,int c){ long s=ms/1000; snprintf(o,c,"%ld:%02ld",s/60,s%60); }
 static void tick_ui(void){
     static uint32_t lc=0,lp=0; uint32_t now=r3_tick_ms();
+    static uint32_t ls=0;   /* keep the resume point fresh: survives restarts / flat battery, not just power-off */
+    if(audio_is_playing() && !audio_is_paused() && now-ls>=30000){ ls=now; save_resume(); }
     if(now-lc>=1000){ lc=now; if(clock_lbl){ time_t t=time(0); char b[8];
         strftime(b,sizeof b,"%H:%M",localtime(&t)); lv_label_set_text(clock_lbl,b);} }
     if(now-lp>=300 && (np_pos||np_prog)){ lp=now;
@@ -734,7 +739,7 @@ static void tick_ui(void){
     if(set_list && bt_version()!=set_ver) settings_fill();
     static uint32_t lr=0;
     if(bt_receiver() && now-lr>=120){ lr=now; audio_dac_follow(); }   /* cheap: cached mixer ctls */
-    if(audio_bt_failed() && np_play) lv_label_set_text(np_play,LV_SYMBOL_PLAY);
+    if(audio_bt_failed()){ g_resume_ms=audio_pos_ms(); if(np_play) lv_label_set_text(np_play,LV_SYMBOL_PLAY); }
     if(g_volov && !lv_obj_has_flag(g_volov,LV_OBJ_FLAG_HIDDEN) && now>g_vol_hide)
         lv_obj_add_flag(g_volov,LV_OBJ_FLAG_HIDDEN);   /* auto-hide the volume overlay */
 }
@@ -750,7 +755,10 @@ static void load_resume(void){
     /* browse-back from Now Playing must stop at the section the track lives in */
     if(!strncmp(dir,PODCAST_ROOT,strlen(PODCAST_ROOT))){ strcpy(g_root,PODCAST_ROOT); strcpy(g_root_label,"Podcasts"); }
     else { strcpy(g_root,MUSIC_ROOT); strcpy(g_root_label,"Music"); }
+    char pos[32]={0}; long ms=0; FILE*f2=fopen(RESUME_FILE,"r");
+    if(f2){ char tmp[1024]; if(fgets(tmp,sizeof tmp,f2)&&fgets(tmp,sizeof tmp,f2)&&fgets(pos,sizeof pos,f2)) ms=atol(pos); fclose(f2); }
     pl_build(dir,name);
+    g_resume_ms=ms;
     pretty(name,g_pltitle,sizeof g_pltitle);
     show_player(g_pltitle,dir);   /* not playing yet */
 }

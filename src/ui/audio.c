@@ -27,6 +27,7 @@ extern char **environ;
 static pthread_t th;
 static volatile int a_stop,a_pause,a_playing,a_vol=200,a_active,a_done;  /* a_vol = user-facing loudness 0..255; a_done=track ended naturally */
 static volatile int a_btfail;
+static volatile int a_out_gen, a_bt_ready;  /* output switch requests / BT sink usable */
 static volatile int a_on_jack;         /* local playback currently owns the DAC (tinyalsa pcm open) */          /* BT sink died mid-track (speaker off / out of range) */
 static volatile long a_seek_ms=-1;   /* >=0 => pending seek request */
 static char a_path[1024];
@@ -116,6 +117,26 @@ static void softvol(short*b,long n,int v){
     for(long i=0;i<n;i++) b[i]=(short)(((int)b[i]*g)>>15);
 }
 
+/* jack (tinyalsa) sink */
+static struct pcm* jack_open(int hz,int ch){
+    struct pcm_config cfg; memset(&cfg,0,sizeof cfg);
+    cfg.channels=ch; cfg.rate=hz; cfg.period_size=2048; cfg.period_count=8; cfg.format=PCM_FORMAT_S16_LE; /* ~bigger buffer vs UI contention */
+    struct pcm*pcm=pcm_open(0,0,PCM_OUT,&cfg);
+    if(!pcm||!pcm_is_ready(pcm)){ if(pcm)pcm_close(pcm); return 0; }
+    fprintf(stderr,"[audio] pcm open ok, streaming\n"); fflush(stderr);
+    mixer_setup(); mx_fixed();            /* open mixer once + set routing for this track */
+    a_on_jack=1; return pcm;
+}
+static void jack_close(struct pcm*p){ if(p){ pcm_close(p); a_on_jack=0; } }
+/* open whichever output is selected AND usable; 1 = BT, 0 = jack (*pcm), -1 = nothing */
+static int sink_open(int hz,int ch,struct pcm**pcm){
+    int want = bt_output()[0]!=0 && a_bt_ready;
+    if(bt_fd>=0 && (!want || bt_hz!=hz || bt_ch!=ch)) bt_close();
+    if(want && bt_fd<0){ bt_fd=bt_open(hz,ch); bt_hz=hz; bt_ch=ch; }
+    if(want && bt_fd>=0) return 1;                       /* spawn failure -> jack */
+    *pcm=jack_open(hz,ch); return *pcm?0:-1;
+}
+
 static const char* ext(const char*p){ const char*d=strrchr(p,'.'); return d?d+1:""; }
 
 enum { D_NONE, D_MP3, D_FLAC, D_WAV, D_M4A };
@@ -139,23 +160,12 @@ static void* play_thread(void*arg){
     fprintf(stderr,"[audio] type=%d hz=%d ch=%d\n",type,hz,ch); fflush(stderr);
     if(type==D_NONE || !hz || !ch){ a_playing=0; a_active=0; return 0; }
 
-    struct pcm*pcm=0;
-    int usebt = bt_output()[0]!=0;
-    if(bt_fd>=0 && (!usebt || bt_hz!=hz || bt_ch!=ch)) bt_close();
-    if(usebt && bt_fd<0){ bt_fd=bt_open(hz,ch); bt_hz=hz; bt_ch=ch; }
-    if(usebt && bt_fd<0) usebt=0;                          /* spawn failure -> jack */
-    if(!usebt){
-    struct pcm_config cfg; memset(&cfg,0,sizeof cfg);
-    cfg.channels=ch; cfg.rate=hz; cfg.period_size=2048; cfg.period_count=8; cfg.format=PCM_FORMAT_S16_LE; /* ~bigger buffer vs UI contention */
-    pcm=pcm_open(0,0,PCM_OUT,&cfg);
-    if(!pcm||!pcm_is_ready(pcm)){ if(pcm)pcm_close(pcm);
+    struct pcm*pcm=0; int gen=a_out_gen;
+    int usebt=sink_open(hz,ch,&pcm);
+    if(usebt<0){
         if(type==D_MP3)mp3dec_ex_close(&mp3); else if(type==D_FLAC)drflac_close(flac);
         else if(type==D_WAV)drwav_uninit(&wav); else if(type==D_M4A)m4a_close(m4a);
         a_playing=0; a_active=0; return 0; }
-    fprintf(stderr,"[audio] pcm open ok, streaming\n"); fflush(stderr);
-    mixer_setup(); mx_fixed();            /* open mixer once + set routing for this track */
-    a_on_jack=1;
-    }
     static short buf[8192];               /* interleaved s16 */
     int cur=0, applied=-1;                /* cur = ramped loudness; starts at 0 => fade-in, no start pop */
     const int STEP=10;                    /* loudness units per buffer (~85ms) => smooth, no dropout */
@@ -163,6 +173,15 @@ static void* play_thread(void*arg){
     while(!a_stop){
         while(a_pause && !a_stop) usleep(40000);
         if(a_stop) break;
+        if(gen!=a_out_gen){            /* output changed mid-track: swap sinks, keep position */
+            gen=a_out_gen;
+            if(pcm){ jack_close(pcm); pcm=0; }
+            if(usebt) bt_close();
+            usebt=sink_open(hz,ch,&pcm);
+            fprintf(stderr,"[audio] reroute -> %s\n",usebt>0?"bt":usebt==0?"jack":"none");
+            if(usebt<0){ a_btfail=1; break; }
+            cur=0; applied=-1;         /* short fade-in on the new output */
+        }
         if(a_seek_ms>=0){ long long tf=(long long)a_seek_ms*hz/1000; if(tf<0)tf=0;
             if(type==D_MP3)      mp3dec_ex_seek(&mp3,(uint64_t)tf*ch);
             else if(type==D_FLAC)drflac_seek_to_pcm_frame(flac,(drflac_uint64)tf);
@@ -192,7 +211,7 @@ static void* play_thread(void*arg){
         totframes+=frames; a_pos_ms=(long)(totframes*1000/hz);
         if((totframes % (hz*2))<frames) fprintf(stderr,"[audio] playing %lds (%lld frames)\n",a_pos_ms/1000,totframes); /* ~every 2s */
     }
-    if(pcm){ pcm_close(pcm); a_on_jack=0; }
+    jack_close(pcm);
     if(bt_fd>=0 && (a_stop||a_btfail)) bt_close();   /* natural EOF keeps the pipe for the next track */
     if(type==D_MP3)mp3dec_ex_close(&mp3); else if(type==D_FLAC)drflac_close(flac);
     else if(type==D_WAV)drwav_uninit(&wav); else if(type==D_M4A)m4a_close(m4a);
@@ -200,10 +219,11 @@ static void* play_thread(void*arg){
     a_playing=0; a_active=0; return 0;
 }
 
-void audio_play(const char*path){
+void audio_play(const char*path){ audio_play_at(path,0); }
+void audio_play_at(const char*path,long ms){
     audio_stop();
     strncpy(a_path,path,sizeof a_path-1); a_path[sizeof a_path-1]=0;
-    a_stop=0; a_pause=0; a_playing=1; a_active=1; a_pos_ms=0; a_dur_ms=0; a_done=0; a_seek_ms=-1; a_btfail=0;
+    a_stop=0; a_pause=0; a_playing=1; a_active=1; a_pos_ms=0; a_dur_ms=0; a_done=0; a_seek_ms=ms>0?ms:-1; a_btfail=0;
     pthread_attr_t at; pthread_attr_init(&at);
     pthread_attr_setstacksize(&at, 2*1024*1024);  /* musl default ~128KB is too small for the decoders */
     if(pthread_create(&th,&at,play_thread,0)!=0){ a_playing=0; a_active=0; }
@@ -230,3 +250,4 @@ void audio_dac_follow(void){
     if(!routed){ mx_fixed(); routed=1; }
     apply_hwvol(a_vol);
 }
+void audio_reroute(int bt_ready){ a_bt_ready=bt_ready; a_out_gen++; }
