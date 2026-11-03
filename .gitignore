@@ -13,3 +13,5 @@
 vendor/**/*.o
 src/**/*.o
 /build/
+/dump/
+/dist/upt/*.upt
