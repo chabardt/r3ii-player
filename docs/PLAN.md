@@ -201,7 +201,7 @@ persistent dev shell.**
   - [x] Paired list from BlueZ storage, live state via `hcitool con`; scan/pair/forget.
   - [x] Receiver (phone → R3 → jack): bluealsa restarted with `a2dp-sink`, `bluealsa-aplay -D hw:0,0`;
         R3 advertises Audio Sink, iPhone connects. Audible playback not yet confirmed by ear.
-  - [ ] Speaker out (`aplay -D r3bt` via bluealsa plugin): built, untested — all speakers were off.
+  - [x] Speaker out (`aplay -D r3bt` via bluealsa plugin): verified by ear on Shokz OpenRun Pro 2 (SBC 48 kHz). Software volume on BT not yet checked.
   - [ ] Sounds / Display / Date-time pages.
 - [ ] M6 Games, M7 polish.
 
