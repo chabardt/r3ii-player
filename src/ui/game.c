@@ -4,8 +4,9 @@
  * a fixed set, each with its own colour. Full rows clear; a row made of a single colour
  * scores double. Speed rises every 10 rows.
  *
- * Touch on the board: tap = rotate, drag sideways = move (one cell per 32 px),
- * swipe down = drop. Keys: prev/next = move, play = rotate. Best score in /usr/data. */
+ * Touch on the board: tap = rotate, drag sideways = move (one cell per 32 px).
+ * Keys: next = drop, prev = turn, play = pause.
+ * Top-5 high scores (with dates) in /usr/data/r3_blockfall, shown at game over. */
 #include "game.h"
 #include "r3_tick.h"
 #include <stdio.h>
@@ -27,9 +28,11 @@ typedef struct { int n; int x[5],y[5]; int col; } piece_t;
 
 static unsigned char board[ROWS][COLS];   /* 0 = empty, else palette index+1 */
 static piece_t cur, nxt; static int px,py;
-static int score,best,rows_done,level,over,paused;
+static int score,best,rows_done,level,over,paused,piece_no;
 static uint32_t last_fall;
-static lv_obj_t *g_scr, *g_board, *g_next, *g_score, *g_info, *g_over;
+static lv_obj_t *g_scr, *g_board, *g_next, *g_score, *g_info, *g_over, *g_over_lbl, *g_pause;
+#define NHS 5
+static int hs[NHS], nhs; static char hsd[NHS][12];   /* high-score table, best first */
 static lv_timer_t *g_tmr;
 static void (*g_exit)(void);
 
@@ -61,16 +64,43 @@ static void rotate(void){
 }
 
 /* ---- game flow ---- */
-static void save_best(void){ FILE*f=fopen(BEST_FILE,"w"); if(f){ fprintf(f,"%d\n",best); fclose(f); } }
+static void hs_load(void){
+    nhs=0; FILE*f=fopen(BEST_FILE,"r"); if(!f) return; char l[64];
+    while(nhs<NHS && fgets(l,sizeof l,f)){ int v; char d[12]="-";
+        int k=sscanf(l,"%d %11s",&v,d); if(k<1) continue;      /* old file: a lone best score */
+        hs[nhs]=v; snprintf(hsd[nhs],12,"%s",d); nhs++; }
+    fclose(f); best = nhs?hs[0]:0;
+}
+static void hs_save(void){ FILE*f=fopen(BEST_FILE,"w"); if(!f) return;
+    for(int i=0;i<nhs;i++) fprintf(f,"%d %s\n",hs[i],hsd[i]); fclose(f); }
+/* game over: enter the score in the table, show the table with this run highlighted */
+static void game_end(void){
+    over=1; int rank=-1;
+    if(score>0){
+        for(rank=0;rank<nhs && hs[rank]>=score;rank++);
+        if(rank<NHS){
+            for(int i=(nhs<NHS?nhs:NHS-1);i>rank;i--){ hs[i]=hs[i-1]; memcpy(hsd[i],hsd[i-1],12); }
+            hs[rank]=score; time_t t=time(0); struct tm tm; localtime_r(&t,&tm);
+            strftime(hsd[rank],12,"%d/%m/%y",&tm); if(nhs<NHS) nhs++; hs_save();
+        } else rank=-1;
+    }
+    best = nhs?hs[0]:0;
+    char b[512]; int n=snprintf(b,sizeof b,"GAME OVER\n%s%d\n\nHIGH SCORES\n",rank==0?"NEW BEST  ":"",score);
+    for(int i=0;i<nhs;i++)
+        n+=snprintf(b+n,sizeof b-n,i==rank?"#E8731C %d.  %6d   %s#\n":"%d.  %6d   %s\n",i+1,hs[i],hsd[i]);
+    if(!nhs) n+=snprintf(b+n,sizeof b-n,"-\n");
+    snprintf(b+n,sizeof b-n,"\ntap to play again");
+    lv_label_set_text(g_over_lbl,b);
+    lv_obj_clear_flag(g_over,LV_OBJ_FLAG_HIDDEN);
+}
 static void update_labels(void){
     char b[96];
     snprintf(b,sizeof b,"%d",score); lv_label_set_text(g_score,b);
     snprintf(b,sizeof b,"ROWS %d\nLEVEL %d\nBEST %d",rows_done,level,best); lv_label_set_text(g_info,b);
 }
 static void spawn(void){
-    cur=nxt; gen(&nxt); px=(COLS-width(&cur))/2; py=-1;
-    if(!fits(&cur,px,py+1)){ over=1; if(score>best){ best=score; save_best(); }
-        lv_obj_clear_flag(g_over,LV_OBJ_FLAG_HIDDEN); }
+    cur=nxt; gen(&nxt); px=(COLS-width(&cur))/2; py=-1; piece_no++;
+    if(!fits(&cur,px,py+1)) game_end();
     lv_obj_invalidate(g_next);
 }
 static void clear_rows(void){
@@ -90,7 +120,7 @@ static void lock(void){
     for(int i=0;i<cur.n;i++){ int y=py+cur.y[i], x=px+cur.x[i];
         if(y<0){ over=1; continue; } board[y][x]=(unsigned char)(cur.col+1); }
     clear_rows();
-    if(over){ if(score>best){ best=score; save_best(); } lv_obj_clear_flag(g_over,LV_OBJ_FLAG_HIDDEN); }
+    if(over) game_end();
     else spawn();
     update_labels();
 }
@@ -98,7 +128,7 @@ static void step_down(void){ if(fits(&cur,px,py+1)) py++; else lock(); }
 static void hard_drop(void){ int d=0; while(fits(&cur,px,py+1)){ py++; d++; } score+=d; lock(); }
 static void move(int dx){ if(fits(&cur,px+dx,py)) px+=dx; }
 static void reset(void){
-    memset(board,0,sizeof board); score=0; rows_done=0; level=1; over=0; paused=0;
+    memset(board,0,sizeof board); score=0; rows_done=0; level=1; over=0; paused=0; if(g_pause) lv_label_set_text(g_pause,"");
     gen(&nxt); spawn(); last_fall=r3_tick_ms();
     lv_obj_add_flag(g_over,LV_OBJ_FLAG_HIDDEN); update_labels();
 }
@@ -133,23 +163,28 @@ static void next_draw_cb(lv_event_t*e){
 }
 
 /* ---- input ---- */
-static int drag_x, drag_y, drag_moved, dropped;
+static int drag_x, drag_y, drag_moved;
 static void board_input_cb(lv_event_t*e){
     lv_event_code_t code=lv_event_get_code(e);
     if(over){ if(code==LV_EVENT_CLICKED) reset(); return; }
-    if(code==LV_EVENT_PRESSED){ drag_x=drag_y=0; drag_moved=0; dropped=0; return; }
+    if(code==LV_EVENT_PRESSED){ drag_x=drag_y=0; drag_moved=0; return; }
     if(code==LV_EVENT_PRESSING){ lv_point_t v; lv_indev_get_vect(lv_indev_get_act(),&v);
         drag_x+=v.x; drag_y+=v.y;
         while(drag_x>=CELL){ move(+1); drag_x-=CELL; drag_moved=1; }
         while(drag_x<=-CELL){ move(-1); drag_x+=CELL; drag_moved=1; }
-        if(!dropped && drag_y>90 && abs(drag_y)>2*abs(drag_x)){ hard_drop(); dropped=1; drag_moved=1; }
         lv_obj_invalidate(g_board); return; }
-    if(code==LV_EVENT_RELEASED){ if(!drag_moved && !dropped){ rotate(); } lv_obj_invalidate(g_board); }
+    if(code==LV_EVENT_RELEASED){
+        if(!drag_moved && !paused) rotate();   /* every tap turns at once (fast spins) */
+        lv_obj_invalidate(g_board); }
 }
+/* keys: next = drop, prev = turn, play = pause/resume (or new game after game over) */
 int game_key(int code){
     if(!g_scr) return 0;
-    if(over){ if(code==164) reset(); return 1; }
-    if(code==165) move(-1); else if(code==163) move(+1); else if(code==164) rotate(); else return 0;
+    if(over){ if(code==164||code==163) reset(); return 1; }
+    if(code==164){ paused=!paused; lv_label_set_text(g_pause, paused?"PAUSED":"");
+        if(!paused) last_fall=r3_tick_ms(); return 1; }
+    if(paused) return 1;
+    if(code==163) hard_drop(); else if(code==165) rotate(); else return 0;
     lv_obj_invalidate(g_board); return 1;
 }
 int game_running(void){ return g_scr && !over; }
@@ -164,7 +199,7 @@ static void scr_del_cb(lv_event_t*e){ (void)e;
 
 lv_obj_t* game_create(void (*on_exit)(void)){
     g_exit=on_exit; srand((unsigned)time(0)^r3_tick_ms());
-    FILE*f=fopen(BEST_FILE,"r"); best=0; if(f){ if(fscanf(f,"%d",&best)!=1) best=0; fclose(f); }
+    hs_load();
     lv_obj_t*scr=lv_obj_create(NULL); g_scr=scr;
     lv_obj_set_style_bg_color(scr,lv_color_hex(0x0A0A0A),0); lv_obj_clear_flag(scr,LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(scr,scr_del_cb,LV_EVENT_DELETE,NULL);
@@ -204,17 +239,23 @@ lv_obj_t* game_create(void (*on_exit)(void)){
     g_info=lv_label_create(scr); lv_obj_set_style_text_color(g_info,lv_color_hex(0x8A6A4A),0);
     lv_obj_set_style_text_line_space(g_info,6,0); lv_obj_set_pos(g_info,sx,BY+sw+120);
     lv_obj_t*help=lv_label_create(scr);
-    lv_label_set_text(help,"tap: turn\ndrag: move\nswipe down:\n  drop\n\nkeys:\nprev/next\nplay: turn");
+    lv_label_set_text(help,"tap: turn\ndrag: move\n\nkeys:\nnext: drop\nprev: turn\nplay: pause");
     lv_obj_set_style_text_color(help,lv_color_hex(0x5A4632),0); lv_obj_set_style_text_font(help,&lv_font_montserrat_12,0);
     lv_obj_set_pos(help,sx,BY+ROWS*CELL-150);
+    g_pause=lv_label_create(scr); lv_label_set_text(g_pause,"");
+    lv_obj_set_style_text_font(g_pause,&lv_font_montserrat_28,0);
+    lv_obj_set_style_text_color(g_pause,lv_color_hex(0xE8731C),0);
+    lv_obj_align(g_pause,LV_ALIGN_TOP_LEFT,BX+COLS*CELL/2-58,BY+ROWS*CELL/2-20);
     /* game over */
-    g_over=lv_obj_create(scr); lv_obj_set_size(g_over,COLS*CELL-40,150); lv_obj_set_pos(g_over,BX+20,BY+200);
+    g_over=lv_obj_create(scr); lv_obj_set_size(g_over,COLS*CELL-24,330); lv_obj_set_pos(g_over,BX+12,BY+110);
     lv_obj_set_style_bg_color(g_over,lv_color_hex(0x000000),0); lv_obj_set_style_bg_opa(g_over,LV_OPA_80,0);
     lv_obj_set_style_border_color(g_over,lv_color_hex(0xE8731C),0); lv_obj_set_style_border_width(g_over,2,0);
     lv_obj_set_style_radius(g_over,0,0); lv_obj_clear_flag(g_over,LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_t*ol=lv_label_create(g_over); lv_label_set_text(ol,"GAME OVER\n\ntap to play again");
-    lv_obj_set_style_text_align(ol,LV_TEXT_ALIGN_CENTER,0);
-    lv_obj_set_style_text_color(ol,lv_color_hex(0xF4E4D0),0); lv_obj_center(ol);
+    g_over_lbl=lv_label_create(g_over); lv_label_set_text(g_over_lbl,"");
+    lv_label_set_recolor(g_over_lbl,true);
+    lv_obj_set_style_text_align(g_over_lbl,LV_TEXT_ALIGN_CENTER,0);
+    lv_obj_set_style_text_line_space(g_over_lbl,4,0);
+    lv_obj_set_style_text_color(g_over_lbl,lv_color_hex(0xF4E4D0),0); lv_obj_center(g_over_lbl);
     reset();
     g_tmr=lv_timer_create(tick_cb,20,NULL);
     return scr;
