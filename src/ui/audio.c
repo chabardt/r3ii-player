@@ -16,7 +16,7 @@
 #include <unistd.h>
 
 static pthread_t th;
-static volatile int a_stop,a_pause,a_playing,a_vol=110,a_active;
+static volatile int a_stop,a_pause,a_playing,a_vol=200,a_active;
 static char a_path[1024];
 static volatile long a_pos_ms,a_dur_ms;
 
@@ -81,6 +81,8 @@ static void* play_thread(void*arg){
         if(type==D_MP3){ size_t n=mp3dec_ex_read(&mp3,buf,FR*ch); if(!n)break; frames=n/ch; }
         else if(type==D_FLAC){ frames=drflac_read_pcm_frames_s16(flac,FR,buf); if(!frames)break; }
         else { frames=drwav_read_pcm_frames_s16(&wav,FR,buf); if(!frames)break; }
+        int v=a_vol;                         /* software volume (hw control is inert) */
+        if(v<255){ long n=frames*ch; for(long i=0;i<n;i++) buf[i]=(short)((int)buf[i]*v/255); }
         int werr=pcm_write(pcm,buf,frames*ch*sizeof(short));
         if(werr){ fprintf(stderr,"[audio] xrun @%ldms err=%d, recovering\n",a_pos_ms,werr);
             pcm_prepare(pcm);
