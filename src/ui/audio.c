@@ -20,12 +20,14 @@
 #include <signal.h>
 #include <errno.h>
 #include <sys/wait.h>
+#include <math.h>
 #include "bt.h"
 extern char **environ;
 
 static pthread_t th;
 static volatile int a_stop,a_pause,a_playing,a_vol=200,a_active,a_done;  /* a_vol = user-facing loudness 0..255; a_done=track ended naturally */
-static volatile int a_btfail;          /* BT sink died mid-track (speaker off / out of range) */
+static volatile int a_btfail;
+static volatile int a_on_jack;         /* local playback currently owns the DAC (tinyalsa pcm open) */          /* BT sink died mid-track (speaker off / out of range) */
 static volatile long a_seek_ms=-1;   /* >=0 => pending seek request */
 static char a_path[1024];
 static volatile long a_pos_ms,a_dur_ms;
@@ -76,7 +78,7 @@ static pid_t bt_pid=-1;
 static int bt_open(int hz,int ch){
     int fds[2]; if(pipe(fds)) return -1;
     char r[16],c[8]; snprintf(r,sizeof r,"%d",hz); snprintf(c,sizeof c,"%d",ch);
-    char*argv[]={"aplay","-q","-D","r3bt","-t","raw","-f","S16_LE","-r",r,"-c",c,"--buffer-time=500000",0};
+    char*argv[]={"aplay","-q","-D","r3bt","-t","raw","-f","S16_LE","-r",r,"-c",c,"--buffer-time=200000",0};
     char envp_alsa[]="ALSA_CONFIG_PATH=" BT_ALSA_CONF;
     char*envp[]={envp_alsa,"PATH=/usr/bin:/bin:/usr/sbin:/sbin",0};
     posix_spawn_file_actions_t fa; posix_spawn_file_actions_init(&fa);
@@ -103,10 +105,14 @@ static void bt_close(void){
         waitpid(bt_pid,0,0);   /* with SIGCHLD=SIG_IGN this just blocks until it is gone */ }
     bt_pid=-1;
 }
-/* perceptual-ish software gain for BT: (v/255)^2 in Q15 */
+/* software gain for BT, log taper: 0.25 dB per unit below 255 (0 dB at max, ~-64 dB at 1,
+ * mute at 0) => a volume-key press (12 units) is a clearly audible 3 dB, like the jack.
+ * (The old (v/255)^2 curve moved only ~1.2 dB per press: "volume does nothing".) */
+static int g_q15[256];
 static void softvol(short*b,long n,int v){
-    int g=(v*v)>>1;   /* 0..32512 ~ Q15 */
-    if(g>=32512) return;
+    if(!g_q15[255]) for(int i=1;i<256;i++) g_q15[i]=(int)(32768.0*pow(10.0,-(255-i)*0.25/20.0));
+    if(v>=255) return;
+    int g = v<=0 ? 0 : g_q15[v];
     for(long i=0;i<n;i++) b[i]=(short)(((int)b[i]*g)>>15);
 }
 
@@ -148,6 +154,7 @@ static void* play_thread(void*arg){
         a_playing=0; a_active=0; return 0; }
     fprintf(stderr,"[audio] pcm open ok, streaming\n"); fflush(stderr);
     mixer_setup(); mx_fixed();            /* open mixer once + set routing for this track */
+    a_on_jack=1;
     }
     static short buf[8192];               /* interleaved s16 */
     int cur=0, applied=-1;                /* cur = ramped loudness; starts at 0 => fade-in, no start pop */
@@ -173,7 +180,7 @@ static void* play_thread(void*arg){
         { int tgt=a_vol;
           if(cur<tgt){ cur+=STEP; if(cur>tgt)cur=tgt; }
           else if(cur>tgt){ cur-=STEP; if(cur<tgt)cur=tgt; }
-          if(usebt) softvol(buf,frames*ch,cur);
+          if(usebt){ softvol(buf,frames*ch,cur); }
           else if(cur!=applied){ apply_hwvol(cur); applied=cur; } }
         if(usebt){ if(bt_write(bt_fd,buf,frames*ch*sizeof(short))){
                 fprintf(stderr,"[audio] BT sink gone (speaker off?), stop\n"); a_btfail=1; break; }
@@ -185,7 +192,7 @@ static void* play_thread(void*arg){
         totframes+=frames; a_pos_ms=(long)(totframes*1000/hz);
         if((totframes % (hz*2))<frames) fprintf(stderr,"[audio] playing %lds (%lld frames)\n",a_pos_ms/1000,totframes); /* ~every 2s */
     }
-    if(pcm) pcm_close(pcm);
+    if(pcm){ pcm_close(pcm); a_on_jack=0; }
     if(bt_fd>=0 && (a_stop||a_btfail)) bt_close();   /* natural EOF keeps the pipe for the next track */
     if(type==D_MP3)mp3dec_ex_close(&mp3); else if(type==D_FLAC)drflac_close(flac);
     else if(type==D_WAV)drwav_uninit(&wav); else if(type==D_M4A)m4a_close(m4a);
@@ -216,7 +223,9 @@ int  audio_bt_failed(void){ if(a_btfail){ a_btfail=0; return 1; } return 0; }
 /* Receiver mode (bluealsa-aplay owns the PCM): keep the DAC routed + at our volume.
  * Called periodically from the UI loop; volume only sticks while the codec is clocked. */
 void audio_dac_follow(void){
-    if(a_active) return;
+    /* only the jack-playback thread may skip this: a track going to a BT speaker
+     * (playing or paused) doesn't touch the DAC, so the receiver still needs it */
+    if(a_on_jack) return;
     static int routed=0; mixer_setup();
     if(!routed){ mx_fixed(); routed=1; }
     apply_hwvol(a_vol);

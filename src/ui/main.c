@@ -733,7 +733,7 @@ static void tick_ui(void){
     }
     if(set_list && bt_version()!=set_ver) settings_fill();
     static uint32_t lr=0;
-    if(bt_receiver() && now-lr>=500){ lr=now; audio_dac_follow(); }
+    if(bt_receiver() && now-lr>=120){ lr=now; audio_dac_follow(); }   /* cheap: cached mixer ctls */
     if(audio_bt_failed() && np_play) lv_label_set_text(np_play,LV_SYMBOL_PLAY);
     if(g_volov && !lv_obj_has_flag(g_volov,LV_OBJ_FLAG_HIDDEN) && now>g_vol_hide)
         lv_obj_add_flag(g_volov,LV_OBJ_FLAG_HIDDEN);   /* auto-hide the volume overlay */

@@ -142,9 +142,12 @@ static void do_init(void){
     set_status("Starting Bluetooth...");
     sh("bt-adapter --set Powered On >/dev/null 2>&1",0,0);
     char ps[4096]; sh("ps",ps,sizeof ps);
-    if(!strstr(ps,"a2dp-sink")){   /* stock runs source-only; add the sink role */
+    /* stock runs source-only with --a2dp-volume ("native": volume is only reported over
+     * AVRCP, never applied). We need the sink role too, and bluealsa's soft-volume so the
+     * phone's slider (receiver) and a speaker's own buttons actually change the level. */
+    if(!strstr(ps,"a2dp-sink") || strstr(ps,"a2dp-volume")){
         sh("killall bluealsa 2>/dev/null; sleep 1; setsid sh -c 'bluealsa -p a2dp-source -p a2dp-sink "
-           "--a2dp-volume </dev/null >/tmp/bluealsa.log 2>&1 &'; sleep 1",0,0); }
+           "</dev/null >/tmp/bluealsa.log 2>&1 &'; sleep 1",0,0); }
     if(!strstr(ps,"bt-agent"))
         sh("setsid sh -c 'bt-agent -c NoInputNoOutput </dev/null >/dev/null 2>&1 &'",0,0);
     write_alsa_conf(g_out);
