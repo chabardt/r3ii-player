@@ -16,6 +16,7 @@
 #include <sys/mman.h>
 #include <linux/fb.h>
 #include <linux/input.h>
+#include <signal.h>
 
 #define MUSIC_ROOT "/usr/data/mnt/sd_0/Music"
 
@@ -158,6 +159,8 @@ static void entry_cb(lv_event_t*e){
 }
 static void br_back_cb(lv_event_t*e){ char*parent=lv_event_get_user_data(e);
     if(!parent||!parent[0]||!strcmp(parent,"/")) show_home(); else show_browser(parent); }
+/* free malloc'd path user_data when a widget is deleted (prevents OOM on 57MB device) */
+static void free_cb(lv_event_t*e){ void*p=lv_event_get_user_data(e); if(p)free(p); }
 
 static void show_browser(const char*path){
     DBG("show_browser START %s\n",path);
@@ -178,6 +181,7 @@ static void show_browser(const char*path){
     else { strncpy(parent,cur,1023); parent[1023]=0;
         char*sl=strrchr(parent,'/'); if(sl)*sl=0; }
     lv_obj_add_event_cb(bk,br_back_cb,LV_EVENT_CLICKED,parent);
+    lv_obj_add_event_cb(bk,free_cb,LV_EVENT_DELETE,parent);
     lv_obj_t*bkl=lv_label_create(bk); lv_label_set_text(bkl,LV_SYMBOL_LEFT);
     lv_obj_set_style_text_color(bkl,lv_color_hex(C_INK),0); lv_obj_center(bkl);
     lv_obj_t*ttl=lv_label_create(hdr); const char*base=strrchr(cur,'/');
@@ -216,6 +220,7 @@ static void show_browser(const char*path){
             lv_obj_set_style_border_width(b,1,0); lv_obj_set_style_radius(b,0,0);
             char*full=malloc(1024); snprintf(full,1024,"%s/%s",cur,es[i].name);
             lv_obj_add_event_cb(b,entry_cb,LV_EVENT_CLICKED,full);
+            lv_obj_add_event_cb(b,free_cb,LV_EVENT_DELETE,full);
         }
         DBG("show_browser built %d entries\n",ne);
         free(es);
@@ -269,6 +274,8 @@ static void show_home(void){
     load_screen(scr);
 }
 
+static void heartbeat(void){ static uint32_t lh=0; uint32_t n=r3_tick_ms();
+    if(n-lh>=2000){ lh=n; printf("hb %lu\n",(unsigned long)n); } } /* keep adb task alive */
 static void fmt_ms(long ms,char*o,int c){ long s=ms/1000; snprintf(o,c,"%ld:%02ld",s/60,s%60); }
 static void tick_ui(void){
     static uint32_t lc=0,lp=0; uint32_t now=r3_tick_ms();
@@ -281,6 +288,7 @@ static void tick_ui(void){
 
 int main(void){
     setvbuf(stdout,NULL,_IONBF,0);
+    signal(SIGHUP,SIG_IGN); signal(SIGPIPE,SIG_IGN);
     dbgf=fopen("/usr/data/r3dbg.log","w");
     fb_init(); lv_init();
     static lv_disp_draw_buf_t db; static lv_color_t buf[480*120];
@@ -293,8 +301,8 @@ int main(void){
     show_home();
     printf("r3player UI up\n");
     for(;;){ lv_timer_handler();
-        if(g_to_del){ lv_indev_reset(NULL,NULL);   /* drop touch refs into the old screen */
-                      lv_obj_del(g_to_del); g_to_del=NULL; }
-        tick_ui(); usleep(5000); }
+        if(g_to_del){ DBG("del old screen\n"); lv_indev_reset(NULL,NULL);
+                      lv_obj_del(g_to_del); g_to_del=NULL; DBG("del done\n"); }
+        tick_ui(); heartbeat(); usleep(5000); }
     return 0;
 }
