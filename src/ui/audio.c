@@ -28,7 +28,8 @@ static pthread_t th;
 static volatile int a_stop,a_pause,a_playing,a_vol=160,a_active,a_done;  /* a_vol = user-facing loudness 0..255; a_done=track ended naturally */
 static volatile int a_btfail;
 static volatile int a_out_gen, a_bt_ready;  /* output switch requests / BT sink usable */
-static volatile int a_on_jack;         /* local playback currently owns the DAC (tinyalsa pcm open) */          /* BT sink died mid-track (speaker off / out of range) */
+static volatile int a_on_jack;
+static int a_filter=-1, a_nos=-1;     /* DAC digital filter (0..4) / NOS, -1 = leave as is */         /* local playback currently owns the DAC (tinyalsa pcm open) */          /* BT sink died mid-track (speaker off / out of range) */
 static volatile long a_seek_ms=-1;   /* >=0 => pending seek request */
 static char a_path[1024];
 static volatile long a_pos_ms,a_dur_ms;
@@ -64,6 +65,10 @@ static void mx_fixed(void){
     int port = bal==1 ? 3 : (hs==1 ? 1 : 3);
     if(op)mixer_ctl_set_value(op,0,port);
     if(be)mixer_ctl_set_value(be,0, bal==1?1:0);   /* enable balanced (4.4mm) output path */
+    struct mixer_ctl*df=mixer_get_ctl_by_name(g_mix,"Digital Filter");
+    struct mixer_ctl*no=mixer_get_ctl_by_name(g_mix,"NOS_EN");
+    if(df && a_filter>=0) mixer_ctl_set_value(df,0,a_filter);
+    if(no && a_nos>=0)    mixer_ctl_set_value(no,0,a_nos);
     fprintf(stderr,"[audio] route port=%d bal=%d hs=%d\n",port,bal,hs);
 }
 /* fast per-buffer write. The DAC "Playback Volume" is ATTENUATION not gain: hw 0 = 0dB
@@ -266,3 +271,11 @@ void audio_dac_follow(void){
     apply_hwvol(a_vol);
 }
 void audio_reroute(int bt_ready){ a_bt_ready=bt_ready; a_out_gen++; }
+/* DAC digital filter / NOS: stored, applied now and re-applied with routing per track */
+void audio_set_dac_filter(int filter,int nos){
+    a_filter=filter; a_nos=nos; mixer_setup(); if(!g_mix) return;
+    struct mixer_ctl*df=mixer_get_ctl_by_name(g_mix,"Digital Filter");
+    struct mixer_ctl*no=mixer_get_ctl_by_name(g_mix,"NOS_EN");
+    if(df) mixer_ctl_set_value(df,0,filter);
+    if(no) mixer_ctl_set_value(no,0,nos);
+}
