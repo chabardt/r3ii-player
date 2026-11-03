@@ -302,6 +302,13 @@ int main(int argc,char**argv){
     /* mount the SD card ourselves (we replaced hiby_player, which used to do it) */
     mkdir("/usr/data/mnt",0755); mkdir("/usr/data/mnt/sd_0",0755);
     mount("/dev/mmcblk0p1","/usr/data/mnt/sd_0","vfat",0,"codepage=936,iocharset=utf8");
+    /* initialize the CS43198 DAC: only the stock player knows how; its codec init persists
+       after it's killed. Run it briefly (single-threaded here, so fork/system is safe). */
+    if(access("/usr/data/r3_no_dacinit",F_OK)!=0){
+        system("/usr/bin/hiby_player >/dev/null 2>&1 &");
+        sleep(7);
+        system("killall -9 hiby_player 2>/dev/null");
+    }
     fb_init(); lv_init();
     static lv_disp_draw_buf_t db; static lv_color_t buf[480*120];
     lv_disp_draw_buf_init(&db,buf,NULL,480*120);

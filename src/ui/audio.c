@@ -30,6 +30,7 @@ static void set_vol(int v){
     struct mixer_ctl*mo=mixer_get_ctl_by_name(m,"Mute Output");
     struct mixer_ctl*sm=mixer_get_ctl_by_name(m,"Soft Mute");
     struct mixer_ctl*op=mixer_get_ctl_by_name(m,"Output Port Switch");
+    struct mixer_ctl*be=mixer_get_ctl_by_name(m,"Balance Lineout En");
     if(l)mixer_ctl_set_value(l,0,v);
     if(r)mixer_ctl_set_value(r,0,v);
     if(mo)mixer_ctl_set_value(mo,0,0);
@@ -38,6 +39,7 @@ static void set_vol(int v){
     int hs =readint("/sys/class/switch/headset/state");
     int port = bal==1 ? 3 : (hs==1 ? 1 : 3);
     if(op)mixer_ctl_set_value(op,0,port);
+    if(be)mixer_ctl_set_value(be,0, bal==1?1:0);   /* enable balanced (4.4mm) output path */
     int rb = l?mixer_ctl_get_value(l,0):-1;
     fprintf(stderr,"[audio] vol set=%d readback=%d port=%d (bal=%d hs=%d) ctls=%d%d%d%d%d\n",
             v,rb,port,bal,hs,l?1:0,r?1:0,mo?1:0,sm?1:0,op?1:0);
@@ -72,7 +74,7 @@ static void* play_thread(void*arg){
         a_playing=0; a_active=0; return 0; }
     fprintf(stderr,"[audio] pcm open ok, streaming\n"); fflush(stderr);
     set_vol(a_vol);   /* once, pre-stream: matches the audiotest that produced sound (plays at DAC default) */
-    static short buf[8192];           /* interleaved s16 */
+    static short buf[8192]; int nw=0;  /* interleaved s16 */
     const int FR=4096/ch<1?1:4096/ch; /* frames per read (<=4096 samples) */
     while(!a_stop){
         while(a_pause && !a_stop) usleep(40000);
@@ -83,6 +85,7 @@ static void* play_thread(void*arg){
         else { frames=drwav_read_pcm_frames_s16(&wav,FR,buf); if(!frames)break; }
         int v=a_vol;                         /* software volume (hw control is inert) */
         if(v<255){ long n=frames*ch; for(long i=0;i<n;i++) buf[i]=(short)((int)buf[i]*v/255); }
+        if(nw==2){ set_vol(a_vol); } nw++;   /* re-apply routing/unmute once the DAC is clocking */
         int werr=pcm_write(pcm,buf,frames*ch*sizeof(short));
         if(werr){ fprintf(stderr,"[audio] xrun @%ldms err=%d, recovering\n",a_pos_ms,werr);
             pcm_prepare(pcm);
