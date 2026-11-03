@@ -5,6 +5,7 @@
 #include "r3_tick.h"
 #include "audio.h"
 #include "bt.h"
+#include "cover.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -85,8 +86,9 @@ static void ts_read(lv_indev_drv_t*drv,lv_indev_data_t*d){ (void)drv;
 
 /* live-updated widgets — NULL when the screen that owns them is gone */
 static lv_obj_t *clock_lbl, *np_pos, *np_play, *np_title, *np_prog;
+static lv_obj_t *np_cover;    /* the cover container on Now Playing (NULL elsewhere) */
 static lv_obj_t *set_list, *set_status;   /* Settings screen (NULL when not shown) */
-static void null_live(void){ clock_lbl=np_pos=np_play=np_title=np_prog=NULL; set_list=set_status=NULL; null_clock(); }
+static void null_live(void){ clock_lbl=np_pos=np_play=np_title=np_prog=NULL; set_list=set_status=NULL; np_cover=NULL; null_clock(); }
 /* persistent volume overlay (lives on the top layer, survives screen changes) */
 static lv_obj_t *g_volov, *g_volbar; static uint32_t g_vol_hide;
 static uint32_t g_prog_hold;   /* don't auto-update the seek bar until this time (after a user seek) */
@@ -103,6 +105,7 @@ static void show_home(void);
 static void show_browser(const char*path);
 static void show_player(const char*title,const char*dir);
 static void show_settings(void);
+static void np_set_cover(void);
 
 /* ---- helpers ---- */
 /* The built-in Montserrat fonts are ASCII-only: fold UTF-8 Latin accents to ASCII in
@@ -168,6 +171,7 @@ static void pl_play(int i){
     audio_play(full);
     if(np_title) lv_label_set_text(np_title,g_pltitle);
     if(np_play)  lv_label_set_text(np_play,LV_SYMBOL_PAUSE);
+    np_set_cover();
 }
 static void pl_next(void){ if(g_pli+1<g_pln) pl_play(g_pli+1); }
 static void pl_prev(void){ if(audio_pos_ms()>3000) pl_play(g_pli);   /* >3s: restart track */
@@ -181,49 +185,19 @@ static void save_resume(void){
     fclose(f);
 }
 
-/* ---- album art ---- */
-#define COVER_TMP "/usr/data/.cover.jpg"
-static int find_cover(const char*dir,char*out,int cap){
-    const char*names[]={"cover.jpg","Cover.jpg","folder.jpg","Folder.jpg","front.jpg","Front.jpg","cover.jpeg",0};
-    struct stat st; char p[1600];
-    for(int i=0;names[i];i++){ snprintf(p,sizeof p,"%s/%s",dir,names[i]);
-        if(stat(p,&st)==0){ strncpy(out,p,cap-1); out[cap-1]=0; return 1; } }
-    DIR*dp=opendir(dir); if(dp){ struct dirent*de;
-        while((de=readdir(dp))){ const char*e=strrchr(de->d_name,'.');
-            if(e&&(!strcasecmp(e,".jpg")||!strcasecmp(e,".jpeg"))){
-                snprintf(out,cap,"%s/%s",dir,de->d_name); closedir(dp); return 1; } }
-        closedir(dp); }
-    return 0;
-}
-/* copy the JPEG found in buf (SOI..EOI) to outpath */
-static int write_jpeg_from(const unsigned char*buf,long n,const char*outpath){
-    long s=-1; for(long i=0;i+2<n;i++) if(buf[i]==0xFF&&buf[i+1]==0xD8&&buf[i+2]==0xFF){ s=i; break; }
-    if(s<0) return 0;
-    long e=-1; for(long i=n-2;i>s;i--) if(buf[i]==0xFF&&buf[i+1]==0xD9){ e=i+2; break; }
-    if(e<0) e=n;
-    FILE*o=fopen(outpath,"wb"); if(!o)return 0; fwrite(buf+s,1,e-s,o); fclose(o); return 1;
-}
-/* extract an embedded JPEG cover (ID3v2 APIC / FLAC PICTURE) to outpath */
-static int extract_cover(const char*path,const char*outpath){
-    FILE*f=fopen(path,"rb"); if(!f)return 0;
-    unsigned char hd[10]; if(fread(hd,1,10,f)!=10){ fclose(f); return 0; }
-    if(hd[0]=='I'&&hd[1]=='D'&&hd[2]=='3'){                 /* MP3 ID3v2: scan the tag body */
-        long sz=((long)(hd[6]&0x7f)<<21)|((long)(hd[7]&0x7f)<<14)|((long)(hd[8]&0x7f)<<7)|(hd[9]&0x7f);
-        if(sz<=0||sz>8*1024*1024){ fclose(f); return 0; }
-        unsigned char*buf=malloc(sz); if(!buf){fclose(f);return 0;}
-        long got=fread(buf,1,sz,f); fclose(f);
-        int r=write_jpeg_from(buf,got,outpath); free(buf); return r;
-    }
-    if(hd[0]=='f'&&hd[1]=='L'&&hd[2]=='a'&&hd[3]=='C'){     /* FLAC: scan the metadata region */
-        fseek(f,4,SEEK_SET); unsigned char bh[4]; long off=4; int last=0;
-        while(!last && fread(bh,1,4,f)==4){ last=bh[0]&0x80;
-            long bl=((long)bh[1]<<16)|((long)bh[2]<<8)|bh[3]; off+=4+bl; fseek(f,bl,SEEK_CUR); }
-        long cap=off; if(cap<=0||cap>8*1024*1024){ fclose(f); return 0; }
-        fseek(f,0,SEEK_SET); unsigned char*buf=malloc(cap); if(!buf){fclose(f);return 0;}
-        long got=fread(buf,1,cap,f); fclose(f);
-        int r=write_jpeg_from(buf,got,outpath); free(buf); return r;
-    }
-    fclose(f); return 0;
+/* ---- album art (see cover.c) ---- */
+#define COVER_W 480
+#define COVER_H 360
+static void np_set_cover(void){
+    if(!np_cover) return;
+    lv_obj_clean(np_cover);
+    char trk[1700]; const char*tp=0;
+    if(g_pln>0 && g_pli>=0){ snprintf(trk,sizeof trk,"%s/%s",g_pldir,g_pl[g_pli]); tp=trk; }
+    const lv_img_dsc_t*img = g_pldir[0] ? cover_load(g_pldir,tp,COVER_W,COVER_H) : 0;
+    if(img){ lv_obj_t*o=lv_img_create(np_cover); lv_img_set_src(o,img); lv_obj_center(o); }
+    else { lv_obj_t*cl=lv_label_create(np_cover); lv_label_set_text(cl,LV_SYMBOL_AUDIO);
+        lv_obj_set_style_text_color(cl,lv_color_hex(C_ACCENT),0);
+        lv_obj_set_style_text_font(cl,&lv_font_montserrat_28,0); lv_obj_center(cl); }
 }
 
 /* ---- Now Playing ---- */
@@ -236,8 +210,8 @@ static void np_next_cb(lv_event_t*e){ (void)e; pl_next(); }
 static void np_prev_cb(lv_event_t*e){ (void)e; pl_prev(); }
 static void np_prog_cb(lv_event_t*e){ (void)e; long dur=audio_dur_ms();   /* user released the seek bar */
     long v = np_prog?lv_slider_get_value(np_prog):-1;
-    DBG("prog_cb ev=%d val=%ld dur=%ld -> seek=%ld\n",lv_event_get_code(e),v,dur,dur>0?v*dur/1000:-1);
-    if(dur>0 && np_prog){ audio_seek(v*dur/1000);
+    DBG("prog_cb ev=%d val=%ld dur=%ld -> seek=%ld\n",lv_event_get_code(e),v,dur,dur>0?(long)((long long)v*dur/1000):-1);
+    if(dur>0 && np_prog){ audio_seek((long)((long long)v*dur/1000));
         g_prog_hold=r3_tick_ms()+1200; } }   /* let the seek take before auto-updates resume */
 
 static lv_obj_t* mk_tbtn(lv_obj_t*p,int w,int h,int x,int y,uint32_t bg,const char*sym,lv_event_cb_t cb){
@@ -258,30 +232,12 @@ static void show_player(const char*title,const char*dir){
     lv_obj_set_style_bg_color(scr,lv_color_hex(C_BG),0);
     lv_obj_clear_flag(scr,LV_OBJ_FLAG_SCROLLABLE);
     /* cover placeholder (full width) */
-    lv_obj_t*cov=lv_obj_create(scr); lv_obj_set_size(cov,480,360); lv_obj_set_pos(cov,0,60);
+    lv_obj_t*cov=lv_obj_create(scr); lv_obj_set_size(cov,COVER_W,COVER_H); lv_obj_set_pos(cov,0,60);
     lv_obj_set_style_radius(cov,0,0); lv_obj_set_style_border_width(cov,0,0);
     lv_obj_set_style_bg_color(cov,lv_color_hex(C_PANEL),0);
     lv_obj_clear_flag(cov,LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(cov,0,0);
-    /* album art spanning full width (vertical overflow cropped by the container).
-     * Prefer a separate cover file; else pull the embedded JPEG from the track tags. */
-    char cover[1700]; int have=0; cover[0]='S'; cover[1]=':';
-    if(g_pldir[0] && find_cover(g_pldir,cover+2,sizeof cover-2)) have=1;
-    else if(g_pln>0 && g_pli>=0){
-        char trk[1700]; snprintf(trk,sizeof trk,"%s/%s",g_pldir,g_pl[g_pli]);
-        if(extract_cover(trk,COVER_TMP)){ strcpy(cover,"S:" COVER_TMP); have=1; }
-    }
-    if(have){
-        /* The JPEG decoder is a line-reader (no random access), so LVGL can't zoom it.
-         * Draw at native size, centered; the container clips the overflow. Covers are
-         * ~500px ≈ the 480px screen width, so this reads as full-width. */
-        lv_obj_t*img=lv_img_create(cov); lv_img_set_src(img,cover);
-        lv_obj_center(img);
-    } else {
-        lv_obj_t*cl=lv_label_create(cov); lv_label_set_text(cl,LV_SYMBOL_AUDIO);
-        lv_obj_set_style_text_color(cl,lv_color_hex(C_ACCENT),0);
-        lv_obj_set_style_text_font(cl,&lv_font_montserrat_28,0); lv_obj_center(cl);
-    }
+    np_cover=cov; np_set_cover();
     /* back chip over the cover */
     lv_obj_t*bk=lv_btn_create(scr); lv_obj_set_size(bk,48,40); lv_obj_set_pos(bk,8,8);
     lv_obj_set_style_bg_color(bk,lv_color_hex(C_BAR),0); lv_obj_set_style_radius(bk,0,0);
@@ -773,7 +729,7 @@ static void tick_ui(void){
         if(np_pos){ char p[16],d[16]; fmt_ms(pos,p,sizeof p); fmt_ms(dur,d,sizeof d);
             char line[40]; snprintf(line,sizeof line,"%s / %s",p,d); lv_label_set_text(np_pos,line); }
         if(np_prog && dur>0 && !lv_obj_has_state(np_prog,LV_STATE_PRESSED) && now>g_prog_hold)
-            lv_slider_set_value(np_prog,pos*1000/dur,LV_ANIM_OFF);
+            lv_slider_set_value(np_prog,(int32_t)((long long)pos*1000/dur),LV_ANIM_OFF);
     }
     if(set_list && bt_version()!=set_ver) settings_fill();
     static uint32_t lr=0;
@@ -791,6 +747,9 @@ static void load_resume(void){
     if(!fgets(name,sizeof name,f)){ fclose(f); return; } name[strcspn(name,"\n")]=0;
     fclose(f);
     if(!dir[0]||!name[0]) return;
+    /* browse-back from Now Playing must stop at the section the track lives in */
+    if(!strncmp(dir,PODCAST_ROOT,strlen(PODCAST_ROOT))){ strcpy(g_root,PODCAST_ROOT); strcpy(g_root_label,"Podcasts"); }
+    else { strcpy(g_root,MUSIC_ROOT); strcpy(g_root_label,"Music"); }
     pl_build(dir,name);
     pretty(name,g_pltitle,sizeof g_pltitle);
     show_player(g_pltitle,dir);   /* not playing yet */

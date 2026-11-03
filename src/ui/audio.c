@@ -122,7 +122,7 @@ static void* play_thread(void*arg){
     else if(!strcasecmp(e,"wav"))type=D_WAV;
     else if(!strcasecmp(e,"m4a")||!strcasecmp(e,"aac")||!strcasecmp(e,"mp4"))type=D_M4A;
 
-    mp3dec_ex_t mp3; drflac*flac=0; drwav wav; m4a_t*m4a=0; int hz=0,ch=0; long totframes=0;
+    mp3dec_ex_t mp3; drflac*flac=0; drwav wav; m4a_t*m4a=0; int hz=0,ch=0; long long totframes=0;   /* 64-bit: long is 32-bit on MIPS O32 (frames*1000 overflowed past ~44 s) */
     if(type==D_MP3){ if(mp3dec_ex_open(&mp3,a_path,MP3D_SEEK_TO_SAMPLE))type=D_NONE;
         else { hz=mp3.info.hz; ch=mp3.info.channels; if(ch)a_dur_ms=(long)((mp3.samples/ch)*1000/ (hz?hz:1)); } }
     else if(type==D_FLAC){ flac=drflac_open_file(a_path,0); if(!flac)type=D_NONE;
@@ -156,12 +156,12 @@ static void* play_thread(void*arg){
     while(!a_stop){
         while(a_pause && !a_stop) usleep(40000);
         if(a_stop) break;
-        if(a_seek_ms>=0){ long tf=a_seek_ms*hz/1000; if(tf<0)tf=0;
+        if(a_seek_ms>=0){ long long tf=(long long)a_seek_ms*hz/1000; if(tf<0)tf=0;
             if(type==D_MP3)      mp3dec_ex_seek(&mp3,(uint64_t)tf*ch);
             else if(type==D_FLAC)drflac_seek_to_pcm_frame(flac,(drflac_uint64)tf);
             else if(type==D_WAV) drwav_seek_to_pcm_frame(&wav,(drwav_uint64)tf);
-            else if(type==D_M4A){ m4a_seek(m4a,a_seek_ms); tf=a_seek_ms*hz/1000; }
-            totframes=tf; a_pos_ms=totframes*1000/hz; a_seek_ms=-1; }
+            else if(type==D_M4A){ m4a_seek(m4a,a_seek_ms); tf=(long long)a_seek_ms*hz/1000; }
+            totframes=tf; a_pos_ms=(long)(totframes*1000/hz); a_seek_ms=-1; }
         long frames=0;
         if(type==D_MP3){ size_t n=mp3dec_ex_read(&mp3,buf,FR*ch); if(!n)break; frames=n/ch; }
         else if(type==D_FLAC){ frames=drflac_read_pcm_frames_s16(flac,FR,buf); if(!frames)break; }
@@ -177,13 +177,13 @@ static void* play_thread(void*arg){
           else if(cur!=applied){ apply_hwvol(cur); applied=cur; } }
         if(usebt){ if(bt_write(bt_fd,buf,frames*ch*sizeof(short))){
                 fprintf(stderr,"[audio] BT sink gone (speaker off?), stop\n"); a_btfail=1; break; }
-            totframes+=frames; a_pos_ms=totframes*1000/hz; continue; }
+            totframes+=frames; a_pos_ms=(long)(totframes*1000/hz); continue; }
         int werr=pcm_write(pcm,buf,frames*ch*sizeof(short));
         if(werr){ fprintf(stderr,"[audio] xrun @%ldms err=%d, recovering\n",a_pos_ms,werr);
             pcm_prepare(pcm);
             if(pcm_write(pcm,buf,frames*ch*sizeof(short))){ fprintf(stderr,"[audio] write FAIL, stop\n"); break; } }
-        totframes+=frames; a_pos_ms=totframes*1000/hz;
-        if((totframes % (hz*2))<frames) fprintf(stderr,"[audio] playing %lds (%ld frames)\n",a_pos_ms/1000,totframes); /* ~every 2s */
+        totframes+=frames; a_pos_ms=(long)(totframes*1000/hz);
+        if((totframes % (hz*2))<frames) fprintf(stderr,"[audio] playing %lds (%lld frames)\n",a_pos_ms/1000,totframes); /* ~every 2s */
     }
     if(pcm) pcm_close(pcm);
     if(bt_fd>=0 && (a_stop||a_btfail)) bt_close();   /* natural EOF keeps the pipe for the next track */
