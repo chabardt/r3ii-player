@@ -176,6 +176,24 @@ static void do_rx_connect(void){
     set_status(m);
     do_refresh();
 }
+#define APLAY_START "setsid sh -c 'bluealsa-aplay -D hw:0,0 --profile-a2dp </dev/null >/tmp/bluealsa-aplay.log 2>&1 &'"
+/* Called from the audio thread when local jack playback finds the DAC held by the phone
+ * stream: pause the phone's player over AVRCP (Qobuz etc. stop instead of playing into
+ * the void) and release the DAC. The worker restarts bluealsa-aplay once we let go. */
+void bt_preempt_receiver(void){
+    bt_dev_t d[BT_MAX]; int n=bt_devices(d,BT_MAX); char cmd[256],mp[24];
+    for(int i=0;i<n;i++) if(d[i].phone && d[i].connected){ mac_path(d[i].mac,mp,sizeof mp);
+        snprintf(cmd,sizeof cmd,"dbus-send --system --print-reply --reply-timeout=2000 --dest=org.bluez "
+                 "/org/bluez/hci0/dev_%s org.bluez.MediaControl1.Pause >/dev/null 2>&1",mp); sh(cmd,0,0); }
+    sh("killall bluealsa-aplay 2>/dev/null",0,0);
+    set_status("Phone paused - R3 has the jack");
+}
+/* receiver on, R3 not holding the DAC, bluealsa-aplay gone (preempted) => bring it back */
+static void rx_keepalive(void){
+    if(!g_rx || audio_on_jack()) return;
+    char ps[4096]; sh("ps",ps,sizeof ps);
+    if(!strstr(ps,"bluealsa-aplay")) sh(APLAY_START,0,0);
+}
 static void do_rx(void){
     int on; pthread_mutex_lock(&mu); on=g_rx; pthread_mutex_unlock(&mu);
     sh("killall bluealsa-aplay 2>/dev/null",0,0);
@@ -286,7 +304,7 @@ static void* worker(void*arg){ (void)arg;
         if(j&J_PAIR)   do_pair(pm);
         /* periodic: track connection changes (speaker switched on/off, phone connected) */
         uint64_t now=(uint64_t)time(0);
-        if((j&J_REFRESH) || now-last_ref>=4){ last_ref=now; do_refresh(); }
+        if((j&J_REFRESH) || now-last_ref>=4){ last_ref=now; do_refresh(); rx_keepalive(); }
         /* receiver on but no phone linked (restart, out of range): dial again now and then,
          * only while idle so paging never stutters a stream */
         if(g_rx && now-last_rx>=60 && !audio_is_playing()){ last_rx=now;

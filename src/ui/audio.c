@@ -122,6 +122,16 @@ static struct pcm* jack_open(int hz,int ch){
     struct pcm_config cfg; memset(&cfg,0,sizeof cfg);
     cfg.channels=ch; cfg.rate=hz; cfg.period_size=2048; cfg.period_count=8; cfg.format=PCM_FORMAT_S16_LE; /* ~bigger buffer vs UI contention */
     struct pcm*pcm=pcm_open(0,0,PCM_OUT,&cfg);
+    if((!pcm||!pcm_is_ready(pcm)) && bt_receiver()){
+        /* the phone (receiver mode) holds the DAC: local playback wins — pause the phone
+         * over AVRCP, drop bluealsa-aplay, retry. bt.c restarts the receiver when we let go. */
+        if(pcm){ pcm_close(pcm); pcm=0; }
+        fprintf(stderr,"[audio] DAC busy (phone stream): preempting receiver\n");
+        bt_preempt_receiver();
+        for(int i=0;i<10 && !pcm;i++){ usleep(100000);
+            pcm=pcm_open(0,0,PCM_OUT,&cfg);
+            if(pcm && !pcm_is_ready(pcm)){ pcm_close(pcm); pcm=0; } }
+    }
     if(!pcm||!pcm_is_ready(pcm)){ if(pcm)pcm_close(pcm); return 0; }
     fprintf(stderr,"[audio] pcm open ok, streaming\n"); fflush(stderr);
     mixer_setup(); mx_fixed();            /* open mixer once + set routing for this track */
@@ -171,7 +181,11 @@ static void* play_thread(void*arg){
     const int STEP=10;                    /* loudness units per buffer (~85ms) => smooth, no dropout */
     const int FR=4096/ch<1?1:4096/ch;     /* frames per read (<=4096 samples) */
     while(!a_stop){
-        while(a_pause && !a_stop) usleep(40000);
+        { int pw=0;   /* paused: after 2 s give the DAC back so the phone can play (receiver) */
+          while(a_pause && !a_stop){ usleep(40000);
+              if(++pw==50 && pcm && bt_receiver()){ jack_close(pcm); pcm=0; } }
+          if(!a_stop && !usebt && !pcm){ usebt=sink_open(hz,ch,&pcm);
+              if(usebt<0){ a_btfail=1; break; } cur=0; applied=-1; } }
         if(a_stop) break;
         if(gen!=a_out_gen){            /* output changed mid-track: swap sinks, keep position */
             gen=a_out_gen;
@@ -240,6 +254,7 @@ int  audio_get_volume(void){ return a_vol; }
 long audio_pos_ms(void){ return a_pos_ms; }
 long audio_dur_ms(void){ return a_dur_ms; }
 int  audio_bt_failed(void){ if(a_btfail){ a_btfail=0; return 1; } return 0; }
+int  audio_on_jack(void){ return a_on_jack; }
 /* Receiver mode (bluealsa-aplay owns the PCM): keep the DAC routed + at our volume.
  * Called periodically from the UI loop; volume only sticks while the codec is clocked. */
 void audio_dac_follow(void){

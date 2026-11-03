@@ -33,6 +33,7 @@ void bt_scan(void);
 void bt_pair(const char*mac);           /* pair + trust + connect (just-works agent) */
 void bt_forget(const char*mac);
 void bt_refresh(void);
+void bt_preempt_receiver(void);         /* local jack playback wins: pause phone, free the DAC */
 
 #define BT_ALSA_CONF "/tmp/r3bt_alsa.conf"   /* defines pcm.r3bt for the selected output */
 #endif
