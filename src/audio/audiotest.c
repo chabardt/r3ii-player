@@ -58,10 +58,12 @@ int main(int argc,char**argv){
         if(type==1){ size_t n=mp3dec_ex_read(&mp3,buf,FR*ch); if(!n)break; fr=n/ch; }
         else if(type==2){ fr=drflac_read_pcm_frames_s16(flac,FR,buf); if(!fr)break; }
         else { fr=drwav_read_pcm_frames_s16(&wav,FR,buf); if(!fr)break; }
-        if(pcm_write(pcm,buf,fr*ch*sizeof(short))){ printf("pcm_write err\n"); break; }
+        if(pcm_write(pcm,buf,fr*ch*sizeof(short))){ printf("[xrun] @%lds recover\n",tot/hz); pcm_prepare(pcm);
+            if(pcm_write(pcm,buf,fr*ch*sizeof(short))){ printf("write FAIL\n"); break; } }
         tot+=fr;
-        if(nw==2||nw==20) set_vol(vol); /* set AFTER DAC is clocking (volume won't stick when idle) */
+        if(nw==2||nw==20) set_vol(vol);
         nw++;
+        if((tot % (hz*2))<fr) printf("[play] %lds (%ld frames)\n",tot/hz,tot);
     }
     printf("[done] frames=%ld\n",tot);
     pcm_close(pcm);

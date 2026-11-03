@@ -41,7 +41,7 @@ static void fb_init(void){
 static void disp_flush(lv_disp_drv_t*drv,const lv_area_t*a,lv_color_t*cp){
     int w=(a->x2-a->x1+1)*2;
     for(int y=a->y1;y<=a->y2;y++){ long off=(long)y*FBSTRIDE+(long)a->x1*2;
-        memcpy(fbmem+off,cp,w); if(FBPAGE2)memcpy(fbmem+FBPAGE2+off,cp,w);
+        memcpy(fbmem+off,cp,w); /* page 0 only (we pan to it); dual-page write risked mmap-edge SIGBUS */
         cp+=(a->x2-a->x1+1); }
     lv_disp_flush_ready(drv);
 }
@@ -95,6 +95,7 @@ static void np_playpause_cb(lv_event_t*e){ (void)e; audio_toggle_pause();
 static void np_vol_cb(lv_event_t*e){ lv_obj_t*s=lv_event_get_target(e); audio_set_volume(lv_slider_get_value(s)); }
 
 static void show_player(const char*title,const char*dir){
+    clock_lbl=NULL;   /* home screen (and its clock label) is about to be deleted */
     lv_obj_t*scr=lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr,lv_color_hex(C_SCR),0);
     lv_obj_clear_flag(scr,LV_OBJ_FLAG_SCROLLABLE);
@@ -108,7 +109,7 @@ static void show_player(const char*title,const char*dir){
     lv_obj_set_style_text_font(cl,&lv_font_montserrat_28,0); lv_obj_center(cl);
     /* title */
     lv_obj_t*t=lv_label_create(scr); lv_label_set_text(t,title);
-    lv_label_set_long_mode(t,LV_LABEL_LONG_SCROLL_CIRCULAR); lv_obj_set_width(t,440);
+    lv_label_set_long_mode(t,LV_LABEL_LONG_DOT); lv_obj_set_width(t,440);
     lv_obj_set_style_text_align(t,LV_TEXT_ALIGN_CENTER,0);
     lv_obj_set_style_text_color(t,lv_color_hex(C_INK),0);
     lv_obj_set_style_text_font(t,&lv_font_montserrat_20,0);
@@ -165,7 +166,7 @@ static void free_cb(lv_event_t*e){ void*p=lv_event_get_user_data(e); if(p)free(p
 static void show_browser(const char*path){
     DBG("show_browser START %s\n",path);
     char cur[1024]; strncpy(cur,path,sizeof cur-1); cur[sizeof cur-1]=0; /* own copy: path may alias a reused buffer */
-    np_pos=np_play=NULL;
+    np_pos=np_play=NULL; clock_lbl=NULL;
     lv_obj_t*scr=lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr,lv_color_hex(C_SCR),0);
     lv_obj_clear_flag(scr,LV_OBJ_FLAG_SCROLLABLE);
@@ -249,7 +250,7 @@ static void make_tile(lv_obj_t*g,const char*txt,uint32_t accent,int col,int row)
     lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0); lv_obj_center(l);
 }
 static void show_home(void){
-    np_pos=np_play=NULL;
+    np_pos=np_play=NULL; clock_lbl=NULL;
     lv_obj_t*scr=lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr,lv_color_hex(C_SCR),0); lv_obj_clear_flag(scr,LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t*bar=lv_obj_create(scr); lv_obj_set_size(bar,480,50); lv_obj_set_pos(bar,0,0);
@@ -306,10 +307,15 @@ int main(int argc,char**argv){
     static lv_indev_drv_t id; lv_indev_drv_init(&id);
     id.type=LV_INDEV_TYPE_POINTER; id.read_cb=ts_read; lv_indev_drv_register(&id);
     show_home();
+    if(argc>2 && (!strcmp(argv[1],"-t")||!strcmp(argv[1],"-a")||!strcmp(argv[1],"-u"))){
+        const char*b=strrchr(argv[2],'/');
+        if(strcmp(argv[1],"-u")) audio_play(argv[2]);              /* -u: no audio */
+        if(strcmp(argv[1],"-a")) show_player(b?b+1:argv[2],"/usr/data/mnt/sd_0/Music"); /* -a: no player screen */
+    }
     printf("r3player UI up\n");
     for(;;){ lv_timer_handler();
         if(g_to_del){ DBG("del old screen\n");
                       lv_obj_del(g_to_del); g_to_del=NULL; DBG("del done\n"); }
-        tick_ui(); heartbeat(); usleep(5000); }
+        tick_ui(); heartbeat(); usleep(15000); }
     return 0;
 }

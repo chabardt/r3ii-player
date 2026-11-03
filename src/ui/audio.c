@@ -9,6 +9,7 @@
 #include "tinyalsa/pcm.h"
 #include "tinyalsa/mixer.h"
 #include <pthread.h>
+#include <sched.h>
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
@@ -64,14 +65,13 @@ static void* play_thread(void*arg){
     if(type==D_NONE || !hz || !ch){ a_playing=0; a_active=0; return 0; }
 
     struct pcm_config cfg; memset(&cfg,0,sizeof cfg);
-    cfg.channels=ch; cfg.rate=hz; cfg.period_size=1024; cfg.period_count=4; cfg.format=PCM_FORMAT_S16_LE;
+    cfg.channels=ch; cfg.rate=hz; cfg.period_size=2048; cfg.period_count=8; cfg.format=PCM_FORMAT_S16_LE; /* ~bigger buffer vs UI contention */
     struct pcm*pcm=pcm_open(0,0,PCM_OUT,&cfg);
     if(!pcm||!pcm_is_ready(pcm)){ if(pcm)pcm_close(pcm);
         if(type==D_MP3)mp3dec_ex_close(&mp3); else if(type==D_FLAC)drflac_close(flac); else drwav_uninit(&wav);
         a_playing=0; a_active=0; return 0; }
     fprintf(stderr,"[audio] pcm open ok, streaming\n"); fflush(stderr);
-    int lastvol=a_vol, nw=0;   /* volume set a few writes in (won't stick before DAC clocks) */
-
+    set_vol(a_vol);   /* once, pre-stream: matches the audiotest that produced sound (plays at DAC default) */
     static short buf[8192];           /* interleaved s16 */
     const int FR=4096/ch<1?1:4096/ch; /* frames per read (<=4096 samples) */
     while(!a_stop){
@@ -81,11 +81,12 @@ static void* play_thread(void*arg){
         if(type==D_MP3){ size_t n=mp3dec_ex_read(&mp3,buf,FR*ch); if(!n)break; frames=n/ch; }
         else if(type==D_FLAC){ frames=drflac_read_pcm_frames_s16(flac,FR,buf); if(!frames)break; }
         else { frames=drwav_read_pcm_frames_s16(&wav,FR,buf); if(!frames)break; }
-        if(a_vol!=lastvol){ set_vol(a_vol); lastvol=a_vol; }
-        if(pcm_write(pcm,buf,frames*ch*sizeof(short))) break;
-        if(nw==2||nw==20){ set_vol(a_vol); lastvol=a_vol; } /* apply initial vol once DAC is clocking */
-        nw++;
+        int werr=pcm_write(pcm,buf,frames*ch*sizeof(short));
+        if(werr){ fprintf(stderr,"[audio] xrun @%ldms err=%d, recovering\n",a_pos_ms,werr);
+            pcm_prepare(pcm);
+            if(pcm_write(pcm,buf,frames*ch*sizeof(short))){ fprintf(stderr,"[audio] write FAIL, stop\n"); break; } }
         totframes+=frames; a_pos_ms=totframes*1000/hz;
+        if((totframes % (hz*2))<frames) fprintf(stderr,"[audio] playing %lds (%ld frames)\n",a_pos_ms/1000,totframes); /* ~every 2s */
     }
     pcm_close(pcm);
     if(type==D_MP3)mp3dec_ex_close(&mp3); else if(type==D_FLAC)drflac_close(flac); else drwav_uninit(&wav);
@@ -96,7 +97,10 @@ void audio_play(const char*path){
     audio_stop();
     strncpy(a_path,path,sizeof a_path-1); a_path[sizeof a_path-1]=0;
     a_stop=0; a_pause=0; a_playing=1; a_active=1; a_pos_ms=0; a_dur_ms=0;
-    if(pthread_create(&th,0,play_thread,0)!=0){ a_playing=0; a_active=0; }
+    pthread_attr_t at; pthread_attr_init(&at);
+    pthread_attr_setstacksize(&at, 2*1024*1024);  /* musl default ~128KB is too small for the decoders */
+    if(pthread_create(&th,&at,play_thread,0)!=0){ a_playing=0; a_active=0; }
+    pthread_attr_destroy(&at);
 }
 void audio_stop(void){ if(a_active){ a_stop=1; pthread_join(th,0); } a_playing=0; a_active=0; }
 void audio_toggle_pause(void){ a_pause=!a_pause; }
