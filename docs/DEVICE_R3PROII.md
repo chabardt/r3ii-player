@@ -50,13 +50,16 @@ analysis for anything hardware-specific.
   cmdline scan — avoid matching your own shell), run our binary, restart
   `hiby_player.sh` after.
 
-## OPEN QUESTION (blocks standalone UI)
-- When `hiby_player` is **killed**, `getevent` on event1 produced **no touch events**
-  (fb still drew fine). With the player **running**, touch works. So the touch
-  controller may be initialized/kept-alive by `hiby_player` (I2C/power/thread), or the
-  input/display pipeline suspends when it exits. Must resolve before our standalone UI
-  can take touch — investigate what `hiby_player`/init does to bring up goodix
-  (I2C init, GPIO reset/irq, regulator), and replicate it in our app.
+## Standalone bring-up — RESOLVED
+A standalone app (player killed) must do two things at startup:
+1. **`ioctl(fb, FBIOBLANK, FB_BLANK_UNBLANK)`** — killing `hiby_player` blanks the
+   panel and the gt9xx driver suspends with it; unblanking wakes panel + touch.
+   (`gt9xx_touch` is a loaded module, always present; it's the fb-blank that gates it.)
+2. **Handle double buffering:** `yres_virtual = 2*yres`. The panel may show the page
+   we're not drawing. Pan to our page with `FBIOPAN_DISPLAY` (xoffset/yoffset=0) and/or
+   draw to both pages. Confirmed: with unblank + pan, drawing is visible and **touch
+   works fully with the player killed** (verified full-screen pixel-accurate taps).
+- Backlight: `/sys/class/backlight/backlight_pwm0/brightness` (0..?, was 5).
 
 ## Deployment (persistent)
 - Rootfs is squashfs → persistent install needs a **squashfs repack + `.upt` flash**

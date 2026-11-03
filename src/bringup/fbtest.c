@@ -18,8 +18,11 @@ static inline unsigned short rgb565(int r,int g,int b){
 }
 
 int main(int argc,char**argv){
+    setvbuf(stdout,NULL,_IONBF,0); /* unbuffered: logs appear live even to a file */
     int fb=open("/dev/fb0",O_RDWR);
     if(fb<0){perror("open /dev/fb0");return 1;}
+    /* wake the panel: killing hiby_player blanks fb and suspends gt9xx touch */
+    ioctl(fb,FBIOBLANK,FB_BLANK_UNBLANK);
     struct fb_var_screeninfo v; struct fb_fix_screeninfo f;
     if(ioctl(fb,FBIOGET_VSCREENINFO,&v)||ioctl(fb,FBIOGET_FSCREENINFO,&f)){perror("ioctl");return 1;}
     int W=v.xres,H=v.yres,stride=f.line_length;
@@ -28,12 +31,16 @@ int main(int argc,char**argv){
     fflush(stdout);
     unsigned char*m=mmap(0,f.smem_len,PROT_READ|PROT_WRITE,MAP_SHARED,fb,0);
     if(m==MAP_FAILED){perror("mmap");return 1;}
+    /* framebuffer is double-buffered (yres_virtual=2*yres); the panel may be showing
+       the other page. We draw to page 0 (offset 0) and pan the display to it. */
+    v.xoffset=0; v.yoffset=0;
+    if(ioctl(fb,FBIOPAN_DISPLAY,&v)) perror("FBIOPAN_DISPLAY");
 
     /* retro palette vertical bars */
     unsigned short pal[6]={rgb565(242,233,216),rgb565(47,143,143),rgb565(224,122,63),
                            rgb565(156,59,78),rgb565(230,182,76),rgb565(36,31,28)};
-    for(int y=0;y<H;y++){unsigned short*row=(unsigned short*)(m+(long)y*stride);
-        for(int x=0;x<W;x++) row[x]=pal[(x*6)/W];}
+    for(int y=0;y<(int)v.yres_virtual;y++){unsigned short*row=(unsigned short*)(m+(long)y*stride);
+        for(int x=0;x<W;x++) row[x]=pal[(x*6)/W];} /* fill BOTH pages */
     /* center block so we can confirm orientation/geometry */
     for(int y=H/2-50;y<H/2+50;y++)for(int x=W/2-90;x<W/2+90;x++)
         ((unsigned short*)(m+(long)y*stride))[x]=rgb565(224,122,63);
