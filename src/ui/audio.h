@@ -17,4 +17,5 @@ int  audio_on_jack(void);           /* local playback currently holds the DAC */
 void audio_dac_follow(void);        /* receiver mode: keep DAC routing/volume applied */
 void audio_play_at(const char*path,long ms);   /* start at a position (resume) */
 void audio_reroute(int bt_ready);   /* output selection changed: switch sinks mid-track */
+void audio_set_dac_filter(int filter,int nos);   /* 0..4, NOS 0/1 */
 #endif
