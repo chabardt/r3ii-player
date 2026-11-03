@@ -286,7 +286,14 @@ static void tick_ui(void){
         lv_label_set_text(np_pos,line); }
 }
 
-int main(void){
+int main(int argc,char**argv){
+    if(argc>1 && !strcmp(argv[1],"-d")){   /* daemonize: detach from the adb session so it persists */
+        if(fork()>0)_exit(0); setsid();
+        if(fork()>0)_exit(0);
+        int fd=open("/usr/data/r3out.log",O_WRONLY|O_CREAT|O_TRUNC,0644);
+        if(fd>=0){ dup2(fd,1); dup2(fd,2); if(fd>2)close(fd); }
+        int nf=open("/dev/null",O_RDONLY); if(nf>=0){ dup2(nf,0); if(nf>0)close(nf); }
+    }
     setvbuf(stdout,NULL,_IONBF,0);
     signal(SIGHUP,SIG_IGN); signal(SIGPIPE,SIG_IGN);
     dbgf=fopen("/usr/data/r3dbg.log","w");
@@ -301,7 +308,7 @@ int main(void){
     show_home();
     printf("r3player UI up\n");
     for(;;){ lv_timer_handler();
-        if(g_to_del){ DBG("del old screen\n"); lv_indev_reset(NULL,NULL);
+        if(g_to_del){ DBG("del old screen\n");
                       lv_obj_del(g_to_del); g_to_del=NULL; DBG("del done\n"); }
         tick_ui(); heartbeat(); usleep(5000); }
     return 0;

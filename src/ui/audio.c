@@ -19,12 +19,27 @@ static volatile int a_stop,a_pause,a_playing,a_vol=110,a_active;
 static char a_path[1024];
 static volatile long a_pos_ms,a_dur_ms;
 
+static int readint(const char*p){ FILE*f=fopen(p,"r"); if(!f)return -1; int v=-1; if(fscanf(f,"%d",&v)!=1)v=-1; fclose(f); return v; }
+/* in-process tinyalsa mixer (NO fork — system()/fork from the audio thread deadlocks) */
 static void set_vol(int v){
-    struct mixer*m=mixer_open(0); if(!m)return;
-    struct mixer_ctl*l=mixer_get_ctl_by_name(m,"Left Playback Volume");
-    struct mixer_ctl*r=mixer_get_ctl_by_name(m,"Right Playback Volume");
+    struct mixer*m=mixer_open(0);
+    if(!m){ fprintf(stderr,"[audio] mixer_open FAIL\n"); return; }
+    struct mixer_ctl*l =mixer_get_ctl_by_name(m,"Left Playback Volume");
+    struct mixer_ctl*r =mixer_get_ctl_by_name(m,"Right Playback Volume");
+    struct mixer_ctl*mo=mixer_get_ctl_by_name(m,"Mute Output");
+    struct mixer_ctl*sm=mixer_get_ctl_by_name(m,"Soft Mute");
+    struct mixer_ctl*op=mixer_get_ctl_by_name(m,"Output Port Switch");
     if(l)mixer_ctl_set_value(l,0,v);
     if(r)mixer_ctl_set_value(r,0,v);
+    if(mo)mixer_ctl_set_value(mo,0,0);
+    if(sm)mixer_ctl_set_value(sm,0,0);
+    int bal=readint("/sys/class/switch/balance/state");
+    int hs =readint("/sys/class/switch/headset/state");
+    int port = bal==1 ? 3 : (hs==1 ? 1 : 3);
+    if(op)mixer_ctl_set_value(op,0,port);
+    int rb = l?mixer_ctl_get_value(l,0):-1;
+    fprintf(stderr,"[audio] vol set=%d readback=%d port=%d (bal=%d hs=%d) ctls=%d%d%d%d%d\n",
+            v,rb,port,bal,hs,l?1:0,r?1:0,mo?1:0,sm?1:0,op?1:0);
     mixer_close(m);
 }
 static const char* ext(const char*p){ const char*d=strrchr(p,'.'); return d?d+1:""; }
@@ -55,7 +70,7 @@ static void* play_thread(void*arg){
         if(type==D_MP3)mp3dec_ex_close(&mp3); else if(type==D_FLAC)drflac_close(flac); else drwav_uninit(&wav);
         a_playing=0; a_active=0; return 0; }
     fprintf(stderr,"[audio] pcm open ok, streaming\n"); fflush(stderr);
-    set_vol(a_vol); int lastvol=a_vol;
+    int lastvol=a_vol, nw=0;   /* volume set a few writes in (won't stick before DAC clocks) */
 
     static short buf[8192];           /* interleaved s16 */
     const int FR=4096/ch<1?1:4096/ch; /* frames per read (<=4096 samples) */
@@ -68,6 +83,8 @@ static void* play_thread(void*arg){
         else { frames=drwav_read_pcm_frames_s16(&wav,FR,buf); if(!frames)break; }
         if(a_vol!=lastvol){ set_vol(a_vol); lastvol=a_vol; }
         if(pcm_write(pcm,buf,frames*ch*sizeof(short))) break;
+        if(nw==2||nw==20){ set_vol(a_vol); lastvol=a_vol; } /* apply initial vol once DAC is clocking */
+        nw++;
         totframes+=frames; a_pos_ms=totframes*1000/hz;
     }
     pcm_close(pcm);
