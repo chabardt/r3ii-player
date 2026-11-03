@@ -197,11 +197,11 @@ persistent dev shell.**
 - [x] M1–M4: bring-up, player (mp3/flac/wav/m4a), browsers, transport, theme, resume.
 - [x] Persistent install via `.upt`; r3player updated by `adb push` + kill (see PERSIST.md).
 - [x] Idle watch face (analog + date) after 30 s idle; idle while playing → Now Playing.
-- [~] M5 Settings → Bluetooth (`src/ui/bt.c`):
+- [x] M5 Settings → Bluetooth (`src/ui/bt.c`):
   - [x] Paired list from BlueZ storage, live state via `hcitool con`; scan/pair/forget.
   - [x] Receiver (phone → R3 → jack): bluealsa restarted with `a2dp-sink`, `bluealsa-aplay -D hw:0,0`;
-        R3 advertises Audio Sink, iPhone connects. Audible playback not yet confirmed by ear.
-  - [x] Speaker out (`aplay -D r3bt` via bluealsa plugin): verified by ear on Shokz OpenRun Pro 2 (SBC 48 kHz). Software volume on BT not yet checked.
+        iPhone auto-dialled; verified by ear incl. volume keys. Local jack playback pauses the phone (AVRCP).
+  - [x] Speaker out (`aplay -D r3bt` via bluealsa plugin): verified by ear on Shokz OpenRun Pro 2 (SBC 48 kHz), incl. software volume; live output switching.
   - [x] Settings menu: Display (brightness, screen-off timeout), Sounds (DAC filter, NOS), Date & time.
 - [x] Home: battery %, no greeting; power double-press -> Home.
 - [~] M6 Games: **Blockfall** (src/ui/game.c), an original falling-block puzzle (random 3-5 cell
