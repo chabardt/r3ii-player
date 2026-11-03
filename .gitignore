@@ -8,3 +8,8 @@
 /device-probe/*.raw
 /toolchain/tc.tgz
 /toolchain/mipsel-linux-musl-cross/
+
+# build artifacts
+vendor/**/*.o
+src/**/*.o
+/build/
