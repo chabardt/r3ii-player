@@ -25,6 +25,8 @@
 #include <signal.h>
 #include <sys/mount.h>
 #include <sys/time.h>
+#include <sys/wait.h>
+#include <spawn.h>
 
 static void null_clock(void);
 static uint32_t g_last_input;   /* last touch/key (idle -> watch face / Now Playing) */
@@ -113,6 +115,7 @@ static void show_browser(const char*path);
 static void show_player(const char*title,const char*dir);
 static void show_settings(void);
 static void show_setup(void);
+static void show_games(void);
 static void np_set_cover(void);
 
 /* ---- helpers ---- */
@@ -846,7 +849,7 @@ static void tile_cb(lv_event_t*e){ const char*name=lv_event_get_user_data(e);
     if(!strcmp(name,"Music")){ strcpy(g_root,MUSIC_ROOT); strcpy(g_root_label,"Music"); show_browser(MUSIC_ROOT); }
     else if(!strcmp(name,"Podcasts")){ strcpy(g_root,PODCAST_ROOT); strcpy(g_root_label,"Podcasts"); show_browser(PODCAST_ROOT); }
     else if(!strcmp(name,"Settings")) show_setup();
-    else if(!strcmp(name,"Games")){ null_live(); lv_obj_t*gs=game_create(show_home); g_scr=SCR_GAME; load_screen(gs); }
+    else if(!strcmp(name,"Games")) show_games();
     else DBG("tile (todo): %s\n",name); }
 static void make_tile(lv_obj_t*g,const char*txt,uint32_t accent,int col,int row){
     lv_obj_t*b=lv_btn_create(g);
@@ -945,6 +948,80 @@ static void keys_poll(void){
     if(pwr_tap && !pwr_held && r3_tick_ms()-pwr_tap_t>=350){ pwr_tap=0; power_short(); }
     /* long-press power -> off (fires while still held) */
     if(pwr_held && r3_tick_ms()-pwr_down>=1200){ pwr_held=0; do_poweroff(); }
+}
+
+
+/* ---- Games menu: Blockfall + Doom games found on the SD card ----
+ * Doom runs as its own process (/usr/data/r3doom, doomgeneric) on the player's own WADs in
+ * /usr/data/mnt/sd_0/Games/Doom. We hand it the screen and input, wait for it to exit
+ * (music keeps playing: the audio thread isn't blocked), then drop queued input + redraw. */
+#define DOOM_BIN "/usr/data/r3doom"
+#define DOOM_DIR "/usr/data/mnt/sd_0/Games/Doom"
+static const struct { const char*name,*iwad,*pwad,*sub; } DOOMS[]={
+    {"Doom",                    "doom.wad",    0,                 "The Ultimate Doom"},
+    {"Sigil",                   "doom.wad",    "sigil.wad",       "Doom + Sigil episode"},
+    {"Doom II",                 "doom2.wad",   0,                 "Hell on Earth"},
+    {"No Rest for the Living",  "doom2.wad",   "nerve.wad",       "Doom II expansion"},
+    {"Master Levels",           "doom2.wad",   "masterlevels.wad","Doom II"},
+    {"TNT: Evilution",          "tnt.wad",     0,                 "Final Doom"},
+    {"The Plutonia Experiment", "plutonia.wad",0,                 "Final Doom"},
+};
+#define NDOOM (int)(sizeof DOOMS/sizeof DOOMS[0])
+static int file_ok(const char*dir,const char*f){ char p[512]; struct stat st;
+    snprintf(p,sizeof p,"%s/%s",dir,f); return stat(p,&st)==0 && st.st_size>0; }
+static void games_back_cb(lv_event_t*e){ (void)e; show_home(); }
+static void show_games(void);
+static void drain_input(void){ struct input_event e;
+    while(read(tsfd,&e,sizeof e)==sizeof e){} t_down=0;
+    if(kf_pwr>=0) while(read(kf_pwr,&e,sizeof e)==sizeof e){}
+    if(kf_media>=0) while(read(kf_media,&e,sizeof e)==sizeof e){}
+    pwr_held=0; pwr_tap=0; }
+static void run_doom(int i){
+    char iwad[512],pwad[512]; snprintf(iwad,sizeof iwad,"%s/%s",DOOM_DIR,DOOMS[i].iwad);
+    if(DOOMS[i].pwad) snprintf(pwad,sizeof pwad,"%s/%s",DOOM_DIR,DOOMS[i].pwad);
+    char*argv[10]; int n=0;
+    argv[n++]="r3doom"; argv[n++]="-iwad"; argv[n++]=iwad;
+    if(DOOMS[i].pwad){ argv[n++]="-file"; argv[n++]=pwad; }
+    argv[n++]="-mb"; argv[n++]="12"; argv[n]=0;
+    mkdir("/usr/data/doom",0755);
+    char*envp[]={"HOME=/usr/data/doom","PATH=/usr/bin:/bin",0};
+    posix_spawn_file_actions_t fa; posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa,1,"/usr/data/doom/r3doom.log",O_WRONLY|O_CREAT|O_TRUNC,0644);
+    posix_spawn_file_actions_adddup2(&fa,1,2);
+    pid_t pid; int rc;
+    if(chdir("/usr/data/doom")!=0){}
+    rc=posix_spawn(&pid,DOOM_BIN,&fa,0,argv,envp);
+    posix_spawn_file_actions_destroy(&fa);
+    if(chdir("/")!=0){}
+    if(rc!=0){ DBG("doom spawn failed %d\n",rc); return; }
+    DBG("doom started pid %d (%s)\n",(int)pid,DOOMS[i].name);
+    waitpid(pid,0,0);                 /* SIGCHLD=SIG_IGN: returns once it has exited */
+    drain_input(); bl_set(p_bright); g_last_input=r3_tick_ms();
+    show_games();                     /* fresh screen => full redraw over Doom's pixels */
+}
+static void games_go_cb(lv_event_t*e){ long i=(long)lv_event_get_user_data(e);
+    if(i<0){ null_live(); lv_obj_t*gs=game_create(show_home); g_scr=SCR_GAME; load_screen(gs); }
+    else run_doom((int)i); }
+static void show_games(void){
+    lv_obj_t*scr,*l=page_new("Games",games_back_cb,&scr);
+    lv_obj_t*pad=lv_obj_create(l); lv_obj_set_size(pad,10,8);
+    lv_obj_set_style_bg_opa(pad,LV_OPA_TRANSP,0); lv_obj_set_style_border_width(pad,0,0);
+    lv_obj_t*r=set_row(l,LV_SYMBOL_SHUFFLE,"Blockfall","falling-block puzzle",0);
+    lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-1L);
+    struct stat st; int have_bin = stat(DOOM_BIN,&st)==0, any=0;
+    for(long i=0;i<NDOOM;i++){
+        if(!file_ok(DOOM_DIR,DOOMS[i].iwad) || (DOOMS[i].pwad && !file_ok(DOOM_DIR,DOOMS[i].pwad))) continue;
+        if(!any){ set_section(l,"DOOM"); any=1; }
+        r=set_row(l,LV_SYMBOL_PLAY,DOOMS[i].name,DOOMS[i].sub,0);
+        if(have_bin) lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)i);
+    }
+    if(!any){ lv_obj_t*n=lv_label_create(l);
+        lv_label_set_text(n,"Doom: copy your doom.wad / doom2.wad\n(tnt, plutonia, sigil, nerve...) to\nGames/Doom on the SD card.");
+        lv_obj_set_style_text_color(n,lv_color_hex(C_DIM),0); lv_obj_set_style_pad_all(n,12,0); }
+    else { lv_obj_t*n=lv_label_create(l);
+        lv_label_set_text(n,"In game: power = menu, hold power = quit,\nplay = use, volume = weapons, next = map.");
+        lv_obj_set_style_text_color(n,lv_color_hex(C_DIM),0); lv_obj_set_style_pad_all(n,12,0); }
+    g_scr=SCR_SETTINGS; load_screen(scr);
 }
 
 static void heartbeat(void){ static uint32_t lh=0; uint32_t n=r3_tick_ms();
