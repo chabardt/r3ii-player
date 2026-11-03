@@ -17,6 +17,7 @@
 #include <linux/fb.h>
 #include <linux/input.h>
 #include <signal.h>
+#include <sys/mount.h>
 
 #define MUSIC_ROOT "/usr/data/mnt/sd_0/Music"
 
@@ -298,6 +299,9 @@ int main(int argc,char**argv){
     setvbuf(stdout,NULL,_IONBF,0);
     signal(SIGHUP,SIG_IGN); signal(SIGPIPE,SIG_IGN);
     dbgf=fopen("/usr/data/r3dbg.log","w");
+    /* mount the SD card ourselves (we replaced hiby_player, which used to do it) */
+    mkdir("/usr/data/mnt",0755); mkdir("/usr/data/mnt/sd_0",0755);
+    mount("/dev/mmcblk0p1","/usr/data/mnt/sd_0","vfat",0,"codepage=936,iocharset=utf8");
     fb_init(); lv_init();
     static lv_disp_draw_buf_t db; static lv_color_t buf[480*120];
     lv_disp_draw_buf_init(&db,buf,NULL,480*120);
