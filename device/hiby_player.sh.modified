@@ -1,0 +1,13 @@
+#!/bin/sh
+# r3ii-player launcher: our UI from writable /usr/data, fallback to stock. Keep ADB up for updates.
+killall    hiby_player 2>/dev/null
+killall -9 hiby_player 2>/dev/null
+/etc/init.d/T90adb start >/dev/null 2>&1 &    # ADB on (our UI has no About-tap); gated by /usr/data/disableadb
+while true; do
+    if [ -x /usr/data/r3player ]; then
+        /usr/data/r3player
+    else
+        /usr/bin/hiby_player
+    fi
+    sleep 1
+done
