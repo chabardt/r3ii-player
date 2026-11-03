@@ -202,8 +202,11 @@ persistent dev shell.**
   - [x] Receiver (phone → R3 → jack): bluealsa restarted with `a2dp-sink`, `bluealsa-aplay -D hw:0,0`;
         R3 advertises Audio Sink, iPhone connects. Audible playback not yet confirmed by ear.
   - [x] Speaker out (`aplay -D r3bt` via bluealsa plugin): verified by ear on Shokz OpenRun Pro 2 (SBC 48 kHz). Software volume on BT not yet checked.
-  - [ ] Sounds / Display / Date-time pages.
-- [ ] M6 Games, M7 polish.
+  - [x] Settings menu: Display (brightness, screen-off timeout), Sounds (DAC filter, NOS), Date & time.
+- [x] Home: battery %, no greeting; power double-press -> Home.
+- [~] M6 Games: **Blockfall** (src/ui/game.c), an original falling-block puzzle (random 3-5 cell
+      pieces, single-colour rows score double). Not a clone of any existing game. Doom (BYO WAD): todo.
+- [ ] M7 polish.
 
 ### Bluetooth notes
 - Stock: bluetoothd, `bt-agent -c NoInputNoOutput`, `bluealsa -p a2dp-source`. Bonds persist in

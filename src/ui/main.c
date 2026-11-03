@@ -6,6 +6,7 @@
 #include "audio.h"
 #include "bt.h"
 #include "cover.h"
+#include "game.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -100,7 +101,7 @@ static lv_obj_t *g_volov, *g_volbar; static uint32_t g_vol_hide;
 static uint32_t g_prog_hold;   /* don't auto-update the seek bar until this time (after a user seek) */
 
 /* ---- screen state (for the physical power button) ---- */
-enum { SCR_HOME, SCR_BROWSER, SCR_PLAYER, SCR_SETTINGS, SCR_CLOCK };
+enum { SCR_HOME, SCR_BROWSER, SCR_PLAYER, SCR_SETTINGS, SCR_CLOCK, SCR_GAME };
 static int g_scr=SCR_HOME;
 
 /* switch screens now, but defer deleting the old one to the main loop (never mid-event) */
@@ -622,6 +623,7 @@ static void idle_poll(void){
     uint32_t now=r3_tick_ms();
     int playing = audio_is_playing() && !audio_is_paused();
     if(g_scr==SCR_CLOCK){ if(playing) show_player(g_pltitle,g_pldir); else clock_update(); return; }
+    if(g_scr==SCR_GAME && game_running()) return;   /* don't yank the player out of a game */
     if(now-g_last_input < IDLE_MS) return;
     if(playing){ if(g_scr!=SCR_PLAYER) show_player(g_pltitle,g_pldir); }
     else if(!bt_busy()) show_clock();
@@ -844,6 +846,7 @@ static void tile_cb(lv_event_t*e){ const char*name=lv_event_get_user_data(e);
     if(!strcmp(name,"Music")){ strcpy(g_root,MUSIC_ROOT); strcpy(g_root_label,"Music"); show_browser(MUSIC_ROOT); }
     else if(!strcmp(name,"Podcasts")){ strcpy(g_root,PODCAST_ROOT); strcpy(g_root_label,"Podcasts"); show_browser(PODCAST_ROOT); }
     else if(!strcmp(name,"Settings")) show_setup();
+    else if(!strcmp(name,"Games")){ null_live(); lv_obj_t*gs=game_create(show_home); g_scr=SCR_GAME; load_screen(gs); }
     else DBG("tile (todo): %s\n",name); }
 static void make_tile(lv_obj_t*g,const char*txt,uint32_t accent,int col,int row){
     lv_obj_t*b=lv_btn_create(g);
@@ -878,7 +881,7 @@ static void show_home(void){
     lv_obj_set_style_pad_row(g,20,0); lv_obj_set_style_pad_column(g,20,0);
     lv_obj_set_grid_dsc_array(g,cols,rows); lv_obj_clear_flag(g,LV_OBJ_FLAG_SCROLLABLE);
     make_tile(g,"Music",C_ACCENT,0,0); make_tile(g,"Podcasts",C_ACCENT2,1,0);
-    make_tile(g,"Games",C_DIM,0,1); make_tile(g,"Settings",C_ACCENT2,1,1);
+    make_tile(g,"Games",C_ACCENT,0,1); make_tile(g,"Settings",C_ACCENT2,1,1);
     g_scr=SCR_HOME;
     load_screen(scr);
 }
@@ -923,13 +926,14 @@ static void keys_poll(void){
                     if(g_scr_off){ screen_wake(); pwr_tap=0; }           /* first press only wakes */
                     else if(pwr_tap){ pwr_tap=0; show_home(); }         /* double press -> Home */
                     else { pwr_tap=1; pwr_tap_t=r3_tick_ms(); } } }
-        } else if(e.code==165 && e.value==1){ pl_prev(); }  /* previous */
+        } else if(e.code==165 && e.value==1){ if(!(g_scr==SCR_GAME && game_key(165))) pl_prev(); }  /* previous */
     }
     if(kf_media>=0) while(read(kf_media,&e,sizeof e)==sizeof e){
         if(e.type!=EV_KEY) continue;
         g_last_input=r3_tick_ms();
         if(e.code==115 && e.value){ bump_vol(+12); }        /* vol up (incl. autorepeat) */
         else if(e.code==114 && e.value){ bump_vol(-12); }   /* vol down */
+        else if(g_scr==SCR_GAME && e.value==1 && (e.code==163||e.code==164) && game_key(e.code)){}   /* game controls */
         else if(e.code==163 && e.value==1){ pl_next(); }    /* next */
         else if(e.code==164 && e.value==1){                 /* play/pause */
             if(!audio_is_playing() && g_pln>0) pl_resume();
