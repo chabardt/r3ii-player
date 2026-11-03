@@ -12,4 +12,6 @@ int  audio_get_volume(void);
 long audio_pos_ms(void);
 long audio_dur_ms(void);
 void audio_seek(long ms);           /* jump to position (ms) */
+int  audio_bt_failed(void);         /* 1 once if the BT speaker vanished mid-track */
+void audio_dac_follow(void);        /* receiver mode: keep DAC routing/volume applied */
 #endif

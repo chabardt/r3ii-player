@@ -12,12 +12,20 @@
 #include <pthread.h>
 #include <sched.h>
 #include <string.h>
+#include <fcntl.h>
 #include <strings.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <spawn.h>
+#include <signal.h>
+#include <errno.h>
+#include <sys/wait.h>
+#include "bt.h"
+extern char **environ;
 
 static pthread_t th;
 static volatile int a_stop,a_pause,a_playing,a_vol=200,a_active,a_done;  /* a_vol = user-facing loudness 0..255; a_done=track ended naturally */
+static volatile int a_btfail;          /* BT sink died mid-track (speaker off / out of range) */
 static volatile long a_seek_ms=-1;   /* >=0 => pending seek request */
 static char a_path[1024];
 static volatile long a_pos_ms,a_dur_ms;
@@ -62,6 +70,46 @@ static void apply_hwvol(int userv){
     if(g_l)mixer_ctl_set_value(g_l,0,hwv);
     if(g_r)mixer_ctl_set_value(g_r,0,hwv);
 }
+/* ---- Bluetooth output: decoded PCM -> `aplay -D r3bt` (bluealsa ALSA plugin) ----
+ * posix_spawn (vfork-style on musl) instead of fork/system: no atfork locks, safe here. */
+static pid_t bt_pid=-1;
+static int bt_open(int hz,int ch){
+    int fds[2]; if(pipe(fds)) return -1;
+    char r[16],c[8]; snprintf(r,sizeof r,"%d",hz); snprintf(c,sizeof c,"%d",ch);
+    char*argv[]={"aplay","-q","-D","r3bt","-t","raw","-f","S16_LE","-r",r,"-c",c,"--buffer-time=500000",0};
+    char envp_alsa[]="ALSA_CONFIG_PATH=" BT_ALSA_CONF;
+    char*envp[]={envp_alsa,"PATH=/usr/bin:/bin:/usr/sbin:/sbin",0};
+    posix_spawn_file_actions_t fa; posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_adddup2(&fa,fds[0],0);
+    posix_spawn_file_actions_addclose(&fa,fds[1]);
+    posix_spawn_file_actions_addopen(&fa,1,"/tmp/r3bt_aplay.log",O_WRONLY|O_CREAT|O_TRUNC,0644);
+    posix_spawn_file_actions_adddup2(&fa,1,2);
+    int e=posix_spawn(&bt_pid,"/usr/bin/aplay",&fa,0,argv,envp);
+    posix_spawn_file_actions_destroy(&fa); close(fds[0]);
+    if(e){ close(fds[1]); bt_pid=-1; fprintf(stderr,"[audio] spawn aplay failed %d\n",e); return -1; }
+    fprintf(stderr,"[audio] BT out -> %s (aplay pid %d)\n",bt_output(),(int)bt_pid);
+    return fds[1];
+}
+static int bt_write(int fd,const short*b,size_t bytes){
+    const char*p=(const char*)b;
+    while(bytes){ ssize_t w=write(fd,p,bytes); if(w<0){ if(errno==EINTR)continue; return -1; }
+        p+=w; bytes-=(size_t)w; }
+    return 0;
+}
+static int bt_fd=-1, bt_hz, bt_ch;   /* one aplay kept alive across same-format tracks (gapless) */
+static void bt_close(void){
+    if(bt_fd>=0) close(bt_fd); bt_fd=-1;
+    if(bt_pid>0){ kill(bt_pid,SIGTERM);
+        waitpid(bt_pid,0,0);   /* with SIGCHLD=SIG_IGN this just blocks until it is gone */ }
+    bt_pid=-1;
+}
+/* perceptual-ish software gain for BT: (v/255)^2 in Q15 */
+static void softvol(short*b,long n,int v){
+    int g=(v*v)>>1;   /* 0..32512 ~ Q15 */
+    if(g>=32512) return;
+    for(long i=0;i<n;i++) b[i]=(short)(((int)b[i]*g)>>15);
+}
+
 static const char* ext(const char*p){ const char*d=strrchr(p,'.'); return d?d+1:""; }
 
 enum { D_NONE, D_MP3, D_FLAC, D_WAV, D_M4A };
@@ -85,15 +133,22 @@ static void* play_thread(void*arg){
     fprintf(stderr,"[audio] type=%d hz=%d ch=%d\n",type,hz,ch); fflush(stderr);
     if(type==D_NONE || !hz || !ch){ a_playing=0; a_active=0; return 0; }
 
+    struct pcm*pcm=0;
+    int usebt = bt_output()[0]!=0;
+    if(bt_fd>=0 && (!usebt || bt_hz!=hz || bt_ch!=ch)) bt_close();
+    if(usebt && bt_fd<0){ bt_fd=bt_open(hz,ch); bt_hz=hz; bt_ch=ch; }
+    if(usebt && bt_fd<0) usebt=0;                          /* spawn failure -> jack */
+    if(!usebt){
     struct pcm_config cfg; memset(&cfg,0,sizeof cfg);
     cfg.channels=ch; cfg.rate=hz; cfg.period_size=2048; cfg.period_count=8; cfg.format=PCM_FORMAT_S16_LE; /* ~bigger buffer vs UI contention */
-    struct pcm*pcm=pcm_open(0,0,PCM_OUT,&cfg);
+    pcm=pcm_open(0,0,PCM_OUT,&cfg);
     if(!pcm||!pcm_is_ready(pcm)){ if(pcm)pcm_close(pcm);
         if(type==D_MP3)mp3dec_ex_close(&mp3); else if(type==D_FLAC)drflac_close(flac);
         else if(type==D_WAV)drwav_uninit(&wav); else if(type==D_M4A)m4a_close(m4a);
         a_playing=0; a_active=0; return 0; }
     fprintf(stderr,"[audio] pcm open ok, streaming\n"); fflush(stderr);
     mixer_setup(); mx_fixed();            /* open mixer once + set routing for this track */
+    }
     static short buf[8192];               /* interleaved s16 */
     int cur=0, applied=-1;                /* cur = ramped loudness; starts at 0 => fade-in, no start pop */
     const int STEP=10;                    /* loudness units per buffer (~85ms) => smooth, no dropout */
@@ -118,7 +173,11 @@ static void* play_thread(void*arg){
         { int tgt=a_vol;
           if(cur<tgt){ cur+=STEP; if(cur>tgt)cur=tgt; }
           else if(cur>tgt){ cur-=STEP; if(cur<tgt)cur=tgt; }
-          if(cur!=applied){ apply_hwvol(cur); applied=cur; } }
+          if(usebt) softvol(buf,frames*ch,cur);
+          else if(cur!=applied){ apply_hwvol(cur); applied=cur; } }
+        if(usebt){ if(bt_write(bt_fd,buf,frames*ch*sizeof(short))){
+                fprintf(stderr,"[audio] BT sink gone (speaker off?), stop\n"); a_btfail=1; break; }
+            totframes+=frames; a_pos_ms=totframes*1000/hz; continue; }
         int werr=pcm_write(pcm,buf,frames*ch*sizeof(short));
         if(werr){ fprintf(stderr,"[audio] xrun @%ldms err=%d, recovering\n",a_pos_ms,werr);
             pcm_prepare(pcm);
@@ -126,17 +185,18 @@ static void* play_thread(void*arg){
         totframes+=frames; a_pos_ms=totframes*1000/hz;
         if((totframes % (hz*2))<frames) fprintf(stderr,"[audio] playing %lds (%ld frames)\n",a_pos_ms/1000,totframes); /* ~every 2s */
     }
-    pcm_close(pcm);
+    if(pcm) pcm_close(pcm);
+    if(bt_fd>=0 && (a_stop||a_btfail)) bt_close();   /* natural EOF keeps the pipe for the next track */
     if(type==D_MP3)mp3dec_ex_close(&mp3); else if(type==D_FLAC)drflac_close(flac);
     else if(type==D_WAV)drwav_uninit(&wav); else if(type==D_M4A)m4a_close(m4a);
-    if(!a_stop) a_done=1;   /* reached EOF on its own -> UI auto-advances */
+    if(!a_stop && !a_btfail) a_done=1;   /* reached EOF on its own -> UI auto-advances */
     a_playing=0; a_active=0; return 0;
 }
 
 void audio_play(const char*path){
     audio_stop();
     strncpy(a_path,path,sizeof a_path-1); a_path[sizeof a_path-1]=0;
-    a_stop=0; a_pause=0; a_playing=1; a_active=1; a_pos_ms=0; a_dur_ms=0; a_done=0; a_seek_ms=-1;
+    a_stop=0; a_pause=0; a_playing=1; a_active=1; a_pos_ms=0; a_dur_ms=0; a_done=0; a_seek_ms=-1; a_btfail=0;
     pthread_attr_t at; pthread_attr_init(&at);
     pthread_attr_setstacksize(&at, 2*1024*1024);  /* musl default ~128KB is too small for the decoders */
     if(pthread_create(&th,&at,play_thread,0)!=0){ a_playing=0; a_active=0; }
@@ -152,3 +212,12 @@ void audio_set_volume(int v){ a_vol = v<0?0:(v>255?255:v); }
 int  audio_get_volume(void){ return a_vol; }
 long audio_pos_ms(void){ return a_pos_ms; }
 long audio_dur_ms(void){ return a_dur_ms; }
+int  audio_bt_failed(void){ if(a_btfail){ a_btfail=0; return 1; } return 0; }
+/* Receiver mode (bluealsa-aplay owns the PCM): keep the DAC routed + at our volume.
+ * Called periodically from the UI loop; volume only sticks while the codec is clocked. */
+void audio_dac_follow(void){
+    if(a_active) return;
+    static int routed=0; mixer_setup();
+    if(!routed){ mx_fixed(); routed=1; }
+    apply_hwvol(a_vol);
+}
