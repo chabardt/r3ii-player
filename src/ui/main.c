@@ -1115,7 +1115,13 @@ static void gb_scan(void){
     for(int d=0;d<2;d++){ DIR*dp=opendir(GB_DIRS[d]); if(!dp) continue; struct dirent*e;
         while((e=readdir(dp)) && gb_nroms<64){ const char*x=strrchr(e->d_name,'.');
             if(e->d_name[0]=='.' || !x || strcasecmp(x,".gb")) continue;
-            snprintf(gb_roms[gb_nroms++],320,"%s/%s",GB_DIRS[d],e->d_name); }
+            /* same game in both places: one entry — the copy with a save, else the SD one */
+            int dup=-1; for(int k=0;k<gb_nroms;k++){ const char*b=strrchr(gb_roms[k],'/'); if(b&&!strcmp(b+1,e->d_name)) dup=k; }
+            char path[320]; snprintf(path,sizeof path,"%s/%s",GB_DIRS[d],e->d_name);
+            if(dup>=0){ char sav[330]; snprintf(sav,sizeof sav,"%s",path); char*dt=strrchr(sav,'.'); if(dt) strcpy(dt,".sav");
+                struct stat st; if(stat(sav,&st)==0) snprintf(gb_roms[dup],320,"%s",path);
+                continue; }
+            snprintf(gb_roms[gb_nroms++],320,"%s",path); }
         closedir(dp); }
     for(int i=0;i<gb_nroms;i++) for(int j=i+1;j<gb_nroms;j++){ const char*a=strrchr(gb_roms[i],'/'),*b=strrchr(gb_roms[j],'/');
         if(strcasecmp(a,b)>0){ char t[320]; memcpy(t,gb_roms[i],320); memcpy(gb_roms[i],gb_roms[j],320); memcpy(gb_roms[j],t,320); } }
