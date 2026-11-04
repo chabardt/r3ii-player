@@ -156,42 +156,43 @@ void V_DrawPatch(int x, int y, patch_t *patch)
             return;
     }
 
-#ifdef RANGECHECK
-    if (x < 0
-     || x + SHORT(patch->width) > SCREENWIDTH
-     || y < 0
-     || y + SHORT(patch->height) > SCREENHEIGHT)
-    {
-        I_Error("Bad V_DrawPatch x=%i y=%i patch.width=%i patch.height=%i topoffset=%i leftoffset=%i", x, y, patch->width, patch->height, patch->topoffset, patch->leftoffset);
-    }
-#endif
-
-    V_MarkRect(x, y, SHORT(patch->width), SHORT(patch->height));
-
-    col = 0;
-    desttop = dest_screen + y * SCREENWIDTH + x;
-
+    /* r3ii: the 2024 (KEX) IWADs ship widescreen title/menu/intermission pictures
+     * (560 px wide). Centre anything wider than the screen, then clip columns and rows
+     * instead of I_Error / writing outside the buffer (which crashed on launch). */
     w = SHORT(patch->width);
+    if (w > SCREENWIDTH && x <= 0)
+        x -= (w - SCREENWIDTH) / 2;
 
-    for ( ; col<w ; x++, col++, desttop++)
     {
+        int x0 = x < 0 ? 0 : x, x1 = x + w > SCREENWIDTH ? SCREENWIDTH : x + w;
+        int y0 = y < 0 ? 0 : y, y1 = y + SHORT(patch->height) > SCREENHEIGHT ? SCREENHEIGHT : y + SHORT(patch->height);
+        if (x1 <= x0 || y1 <= y0)
+            return;
+        V_MarkRect(x0, y0, x1 - x0, y1 - y0);
+    }
+
+    for (col = 0; col < w; x++, col++)
+    {
+        if (x < 0 || x >= SCREENWIDTH)
+            continue;
         column = (column_t *)((byte *)patch + LONG(patch->columnofs[col]));
 
         // step through the posts in a column
         while (column->topdelta != 0xff)
         {
+            int py = y + column->topdelta;
             source = (byte *)column + 3;
-            dest = desttop + column->topdelta*SCREENWIDTH;
             count = column->length;
-
-            while (count--)
+            while (count-- > 0)
             {
-                *dest = *source++;
-                dest += SCREENWIDTH;
+                if (py >= 0 && py < SCREENHEIGHT)
+                    dest_screen[py * SCREENWIDTH + x] = *source;
+                source++; py++;
             }
             column = (column_t *)((byte *)column + column->length + 4);
         }
     }
+    (void)desttop; (void)dest;
 }
 
 //
@@ -226,7 +227,7 @@ void V_DrawPatchFlipped(int x, int y, patch_t *patch)
      || y < 0
      || y + SHORT(patch->height) > SCREENHEIGHT)
     {
-        I_Error("Bad V_DrawPatchFlipped");
+        return;   /* r3ii: skip oversized (widescreen) pictures instead of quitting */
     }
 #endif
 
