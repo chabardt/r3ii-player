@@ -36,6 +36,7 @@ void pet_tick(void){                     /* called every ~30 s from the main loo
 int pet_needs_you(void){ pet_load(); return pet_attention(&P)!=0 && P.stage!=PS_GONE; }
 const char* pet_summary(void){ static char b[64]; pet_load();
     if(P.stage==PS_GONE){ snprintf(b,sizeof b,"went back to the stars"); return b; }
+    if(P.stage==PS_EGG){ snprintf(b,sizeof b,"an egg, about to hatch"); return b; }
     int a=pet_attention(&P);
     snprintf(b,sizeof b,"%s, %s%s",pet_form_name(&P), P.asleep?"asleep":"awake",
         a&PA_SICK?" - sick!":a&PA_HUNGRY?" - hungry!":a&PA_POOP?" - needs cleaning":a&PA_SAD?" - bored":a?" - calling":"");
@@ -231,7 +232,7 @@ lv_obj_t* pet_create(void (*on_exit)(void)){
     lv_obj_set_style_bg_color(scr,lv_color_hex(0x0A0A0A),0); lv_obj_clear_flag(scr,LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(scr,del_cb,LV_EVENT_DELETE,NULL);
     lv_obj_t*bk=lv_btn_create(scr); lv_obj_set_size(bk,46,40); lv_obj_set_pos(bk,8,7);
-    lv_obj_set_style_bg_color(bk,lv_color_hex(0x1A1510),0); lv_obj_set_style_radius(bk,0,0);
+    lv_obj_set_style_bg_color(bk,lv_color_hex(0x1A1510),0); lv_obj_set_style_radius(bk,14,0);
     lv_obj_set_style_border_width(bk,2,0); lv_obj_set_style_border_color(bk,lv_color_hex(0xE8731C),0);
     lv_obj_add_event_cb(bk,back_cb,LV_EVENT_CLICKED,NULL);
     lv_obj_t*bl=lv_label_create(bk); lv_label_set_text(bl,LV_SYMBOL_LEFT); lv_obj_set_style_text_color(bl,lv_color_hex(0xE8731C),0); lv_obj_center(bl);
@@ -246,7 +247,7 @@ lv_obj_t* pet_create(void (*on_exit)(void)){
     static const char*NAMES[8]={"Meal","Snack","Play","Clean","Medicine","Lights","Scold","Status"};
     for(long i=0;i<8;i++){ lv_obj_t*b=lv_btn_create(scr); lv_obj_set_size(b,114,108);
         lv_obj_set_pos(b,6+(i%4)*118,SY+SH+8+(i/4)*114);
-        lv_obj_set_style_radius(b,10,0); lv_obj_set_style_shadow_width(b,0,0);
+        lv_obj_set_style_radius(b,18,0); lv_obj_set_style_shadow_width(b,0,0);
         lv_obj_set_style_bg_color(b,lv_color_hex(0x1A1510),0); lv_obj_set_style_bg_color(b,lv_color_hex(0xE8731C),LV_STATE_PRESSED);
         lv_obj_set_style_border_color(b,lv_color_hex(0x5A4632),0); lv_obj_set_style_border_width(b,2,0);
         lv_obj_add_event_cb(b,act_cb,LV_EVENT_CLICKED,(void*)i);
@@ -276,3 +277,4 @@ lv_obj_t* pet_create(void (*on_exit)(void)){
     s_tmr=lv_timer_create(tick_cb,60,NULL);
     return scr;
 }
+int pet_shown(void){ return s_scr!=0; }

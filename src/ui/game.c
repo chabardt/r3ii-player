@@ -224,7 +224,7 @@ lv_obj_t* game_create(void (*on_exit)(void),int resume){
     lv_obj_add_event_cb(scr,scr_del_cb,LV_EVENT_DELETE,NULL);
     /* header */
     lv_obj_t*bk=lv_btn_create(scr); lv_obj_set_size(bk,46,40); lv_obj_set_pos(bk,8,8);
-    lv_obj_set_style_bg_color(bk,lv_color_hex(0x1A1510),0); lv_obj_set_style_radius(bk,0,0);
+    lv_obj_set_style_bg_color(bk,lv_color_hex(0x1A1510),0); lv_obj_set_style_radius(bk,14,0);
     lv_obj_set_style_border_width(bk,2,0); lv_obj_set_style_border_color(bk,lv_color_hex(0xE8731C),0);
     lv_obj_add_event_cb(bk,back_cb,LV_EVENT_CLICKED,NULL);
     lv_obj_t*bl=lv_label_create(bk); lv_label_set_text(bl,LV_SYMBOL_LEFT);
@@ -269,7 +269,7 @@ lv_obj_t* game_create(void (*on_exit)(void),int resume){
     g_over=lv_obj_create(scr); lv_obj_set_size(g_over,COLS*CELL-24,330); lv_obj_set_pos(g_over,BX+12,BY+110);
     lv_obj_set_style_bg_color(g_over,lv_color_hex(0x000000),0); lv_obj_set_style_bg_opa(g_over,LV_OPA_80,0);
     lv_obj_set_style_border_color(g_over,lv_color_hex(0xE8731C),0); lv_obj_set_style_border_width(g_over,2,0);
-    lv_obj_set_style_radius(g_over,0,0); lv_obj_clear_flag(g_over,LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_radius(g_over,18,0); lv_obj_clear_flag(g_over,LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_CLICKABLE);
     g_over_lbl=lv_label_create(g_over); lv_label_set_text(g_over_lbl,"");
     lv_label_set_recolor(g_over_lbl,true);
     lv_obj_set_style_text_align(g_over_lbl,LV_TEXT_ALIGN_CENTER,0);

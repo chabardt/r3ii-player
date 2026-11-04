@@ -116,7 +116,15 @@ static void do_refresh(void){
             closedir(pd); }
         closedir(ad); }
     char con[2048]; sh("hcitool con 2>/dev/null",con,sizeof con);
-    for(int i=0;i<n;i++) tmp[i].connected = strstr(con,tmp[i].mac)!=NULL;
+    for(int i=0;i<n;i++){ tmp[i].connected = strstr(con,tmp[i].mac)!=NULL; tmp[i].battery=-1;
+        if(tmp[i].connected && !tmp[i].phone){   /* battery reported over the HFP link, if any */
+            char mp[24],cmd[256],out[1024]; snprintf(mp,sizeof mp,"%s",tmp[i].mac);
+            for(char*c=mp;*c;c++) if(*c==':')*c='_';
+            snprintf(cmd,sizeof cmd,"dbus-send --system --print-reply --reply-timeout=1500 --dest=org.bluealsa "
+                     "/org/bluealsa/hci0/dev_%s/rfcomm org.freedesktop.DBus.Properties.Get "
+                     "string:org.bluealsa.RFCOMM1 string:Battery 2>/dev/null",mp);
+            sh(cmd,out,sizeof out);
+            char*b=strstr(out,"byte "); if(b){ int v=atoi(b+5); if(v>=0&&v<=100) tmp[i].battery=v; } } }
     /* stable order: speakers first, then by name */
     for(int i=0;i<n;i++) for(int j=i+1;j<n;j++){
         int sw = tmp[j].phone<tmp[i].phone ||
@@ -147,9 +155,11 @@ static void do_init(void){
     char ps[4096]; sh("ps",ps,sizeof ps);
     /* stock runs source-only with --a2dp-volume ("native": volume is only reported over
      * AVRCP, never applied). We need the sink role too, and bluealsa's soft-volume so the
-     * phone's slider (receiver) and a speaker's own buttons actually change the level. */
-    if(!strstr(ps,"a2dp-sink") || strstr(ps,"a2dp-volume")){
-        sh("killall bluealsa 2>/dev/null; sleep 1; setsid sh -c 'bluealsa -p a2dp-source -p a2dp-sink "
+     * phone's slider (receiver) and a speaker's own buttons actually change the level.
+     * hfp-ag: headphones report their battery over the hands-free link (Apple AT
+     * extension), which bluealsa exposes as RFCOMM1.Battery. No calls are routed. */
+    if(!strstr(ps,"a2dp-sink") || strstr(ps,"a2dp-volume") || !strstr(ps,"hfp-ag")){
+        sh("killall bluealsa 2>/dev/null; sleep 1; setsid sh -c 'bluealsa -p a2dp-source -p a2dp-sink -p hfp-ag "
            "</dev/null >/tmp/bluealsa.log 2>&1 &'; sleep 1",0,0); }
     if(!strstr(ps,"bt-agent"))
         sh("setsid sh -c 'bt-agent -c NoInputNoOutput </dev/null >/dev/null 2>&1 &'",0,0);
@@ -343,3 +353,8 @@ void bt_pair(const char*mac){ if(!valid_mac(mac))return; pthread_mutex_lock(&mu)
 void bt_forget(const char*mac){ if(!valid_mac(mac))return; pthread_mutex_lock(&mu);
     snprintf(g_forget_mac,sizeof g_forget_mac,"%s",mac); pthread_mutex_unlock(&mu); post(J_FORGET); }
 void bt_refresh(void){ post(J_REFRESH); }
+int bt_audio_battery(char*name,int cap){   /* the selected output first, else any connected speaker */
+    int best=-1; pthread_mutex_lock(&mu);
+    for(int i=0;i<g_ndev;i++){ bt_dev_t*d=&g_dev[i]; if(!d->connected||d->phone||d->battery<0) continue;
+        if(best<0 || !strcmp(d->mac,g_out)){ best=d->battery; if(name) snprintf(name,cap,"%s",d->name); } }
+    pthread_mutex_unlock(&mu); return best; }
