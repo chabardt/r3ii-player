@@ -8,6 +8,7 @@
 #include "cover.h"
 #include "game.h"
 #include "brick.h"
+#include "pet.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -96,9 +97,10 @@ static void ts_read(lv_indev_drv_t*drv,lv_indev_data_t*d){ (void)drv;
 /* live-updated widgets — NULL when the screen that owns them is gone */
 static lv_obj_t *clock_lbl, *np_pos, *np_play, *np_title, *np_prog;
 static lv_obj_t *batt_lbl;    /* battery % on Home */
+static lv_obj_t *pet_bell;    /* Moko is calling (Home bar) */
 static lv_obj_t *np_cover;    /* the cover container on Now Playing (NULL elsewhere) */
 static lv_obj_t *set_list, *set_status;   /* Settings screen (NULL when not shown) */
-static void null_live(void){ clock_lbl=np_pos=np_play=np_title=np_prog=NULL; set_list=set_status=NULL; np_cover=NULL; batt_lbl=NULL; null_clock(); }
+static void null_live(void){ clock_lbl=np_pos=np_play=np_title=np_prog=NULL; set_list=set_status=NULL; np_cover=NULL; batt_lbl=NULL; pet_bell=NULL; null_clock(); }
 /* persistent volume overlay (lives on the top layer, survives screen changes) */
 static lv_obj_t *g_volov, *g_volbar; static uint32_t g_vol_hide;
 static uint32_t g_prog_hold;   /* don't auto-update the seek bar until this time (after a user seek) */
@@ -875,6 +877,9 @@ static void show_home(void){
     lv_obj_set_style_text_color(nm,lv_color_hex(C_ACCENT),0); lv_obj_align(nm,LV_ALIGN_LEFT_MID,4,0);
     clock_lbl=lv_label_create(bar); lv_label_set_text(clock_lbl,"--:--");
     lv_obj_set_style_text_color(clock_lbl,lv_color_hex(C_FG),0); lv_obj_align(clock_lbl,LV_ALIGN_RIGHT_MID,-4,0);
+    pet_bell=lv_label_create(bar); lv_label_set_text(pet_bell,LV_SYMBOL_BELL);
+    lv_obj_set_style_text_color(pet_bell,lv_color_hex(C_ACCENT),0); lv_obj_align(pet_bell,LV_ALIGN_LEFT_MID,60,0);
+    if(!pet_needs_you()) lv_obj_add_flag(pet_bell,LV_OBJ_FLAG_HIDDEN);
     batt_lbl=lv_label_create(bar); lv_label_set_text(batt_lbl,"");
     lv_obj_set_style_text_color(batt_lbl,lv_color_hex(C_DIM),0); lv_obj_align(batt_lbl,LV_ALIGN_RIGHT_MID,-80,0);
     static lv_coord_t cols[]={LV_GRID_FR(1),LV_GRID_FR(1),LV_GRID_TEMPLATE_LAST};
@@ -1035,6 +1040,7 @@ static void ask_resume(long id,const char*name,int score){
     choice_btn(p,b,1,1); choice_btn(p,"New game",0,0); }
 static void games_go_cb(lv_event_t*e){ long i=(long)lv_event_get_user_data(e); int sc=0;
     if(i==-1){ if(game_has_save(&sc)) ask_resume(i,"BLOCKFALL",sc); else start_builtin(i,0); }
+    else if(i==-3){ null_live(); lv_obj_t*ps=pet_create(show_games); g_scr=SCR_GAME; load_screen(ps); }
     else if(i==-2){ if(brick_has_save(&sc)) ask_resume(i,"BRICKSTORM",sc); else start_builtin(i,0); }
     else run_doom((int)i); }
 static void show_games(void){
@@ -1044,6 +1050,8 @@ static void show_games(void){
     int sc;
     lv_obj_t*r=set_row(l,LV_SYMBOL_SHUFFLE,"Blockfall",game_has_save(&sc)?"falling blocks - game in progress":"falling-block puzzle",0);
     lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-1L);
+    r=set_row(l,LV_SYMBOL_EYE_OPEN,"Moko",pet_summary(),pet_needs_you());
+    lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-3L);
     r=set_row(l,LV_SYMBOL_STOP,"Brickstorm",brick_has_save(&sc)?"bricks & balls - game in progress":"break the bricks, catch the balls",0);
     lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-2L);
     struct stat st; int have_bin = stat(DOOM_BIN,&st)==0, any=0;
@@ -1079,6 +1087,9 @@ static void tick_ui(void){
             lv_slider_set_value(np_prog,(int32_t)((long long)pos*1000/dur),LV_ANIM_OFF);
     }
     if(set_list && bt_version()!=set_ver) settings_fill();
+    static uint32_t lpet=0;
+    if(now-lpet>=30000 || !lpet){ lpet=now|1; pet_tick();
+        if(pet_bell){ if(pet_needs_you()) lv_obj_clear_flag(pet_bell,LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(pet_bell,LV_OBJ_FLAG_HIDDEN); } }
     static uint32_t lbat=0;
     if(batt_lbl && (now-lbat>=10000 || !lbat)){ lbat=now|1;
         int cap=-1; char st[24]="";
