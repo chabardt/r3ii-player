@@ -20,7 +20,8 @@
 
 #define MAXP 4
 #define BIT(arr,b) ((arr[(b)/8]>>((b)%8))&1)
-typedef struct { int fd, num, joycon; char name[64]; int ax_min,ax_max,ay_min,ay_max; } pad_t;
+typedef struct { int fd, num, joycon; char name[64]; int ax_min,ax_max,ay_min,ay_max;
+                 int hidfd, batt, chg; uint32_t batt_t; } pad_t;   /* batt 0..100, -1 unknown */
 static pad_t P[MAXP]; static int np;
 static int held[PA_N]; static uint32_t held_since[PA_N], next_rep[PA_N];
 static int q[32], qr, qw;
@@ -77,15 +78,23 @@ static float norm(int v,int mn,int mx){ if(mx<=mn) return 0; float f=(2.0f*(v-mn
 /* A Joy-Con sweeps its four lights until the host assigns it a player number. Send
  * subcommand 0x30 (set player lights) = player 1 through its hidraw node, like a Switch:
  * output report 0x01: [0x01, counter, 8 bytes neutral rumble, subcmd, arg], 49 bytes. */
-static void joycon_player_light(int evnum){
+/* Joy-Con hidraw: kept open to send subcommands and read their replies. Every subcommand
+ * reply (input report 0x21) carries the battery in the high nibble of byte 2:
+ * 8 full, 6 medium, 4 low, 2 critical, 0 empty, +1 = charging. We re-send "player 1
+ * light" (0x30) every 30 s, which also keeps the light right. */
+static int jc_open_hidraw(int evnum){
     char p[128]; snprintf(p,sizeof p,"/sys/class/input/event%d/device/device/hidraw",evnum);
-    DIR*d=opendir(p); if(!d) return; struct dirent*e; char dev[64]="";
+    DIR*d=opendir(p); if(!d) return -1; struct dirent*e; char dev[64]="";
     while((e=readdir(d))) if(!strncmp(e->d_name,"hidraw",6)){ snprintf(dev,sizeof dev,"/dev/%s",e->d_name); break; }
-    closedir(d); if(!dev[0]) return;
-    int fd=open(dev,O_WRONLY|O_NONBLOCK); if(fd<0){ fprintf(stderr,"[pad] %s: %s\n",dev,strerror(errno)); return; }
-    unsigned char r[49]={0x01,0x00, 0x00,0x01,0x40,0x40,0x00,0x01,0x40,0x40, 0x30,0x01};
-    int n=(int)write(fd,r,sizeof r); close(fd);
-    fprintf(stderr,"[pad] player light via %s: %d\n",dev,n);
+    closedir(d); if(!dev[0]) return -1;
+    int fd=open(dev,O_RDWR|O_NONBLOCK); if(fd<0) fprintf(stderr,"[pad] %s: %s\n",dev,strerror(errno));
+    return fd;
+}
+static void jc_subcmd(int fd,unsigned char cmd,unsigned char arg){
+    static unsigned char counter;
+    if(fd<0) return;
+    unsigned char r[49]={0x01,(unsigned char)(counter++&0x0f), 0x00,0x01,0x40,0x40,0x00,0x01,0x40,0x40, cmd,arg};
+    if(write(fd,r,sizeof r)<0){}
 }
 static int is_pad(int fd){
     unsigned char ev[EV_MAX/8+1]={0}, key[KEY_MAX/8+1]={0}, abs_[ABS_MAX/8+1]={0};
@@ -108,7 +117,8 @@ static void scan(void){
         pad_t*p=&P[np]; memset(p,0,sizeof *p); p->fd=fd; p->num=num;
         ioctl(fd,EVIOCGNAME(sizeof p->name-1),p->name);
         p->joycon = strstr(p->name,"Joy-Con")!=NULL;
-        if(p->joycon) joycon_player_light(num);
+        p->hidfd=-1; p->batt=-1;
+        if(p->joycon){ p->hidfd=jc_open_hidraw(num); jc_subcmd(p->hidfd,0x30,0x01); p->batt_t=r3_tick_ms(); }
         struct input_absinfo ai;
         if(ioctl(fd,EVIOCGABS(ABS_X),&ai)==0){ p->ax_min=ai.minimum; p->ax_max=ai.maximum; }
         if(ioctl(fd,EVIOCGABS(ABS_Y),&ai)==0){ p->ay_min=ai.minimum; p->ay_max=ai.maximum; }
@@ -121,6 +131,10 @@ void pad_poll(void){
     uint32_t now=r3_tick_ms();
     if(now-last_scan>2000){ last_scan=now; scan(); }
     for(int i=0;i<np;i++){ struct input_event e; pad_t*p=&P[i]; int n;
+        if(p->hidfd>=0){ unsigned char r[64]; int k;     /* Joy-Con subcommand replies -> battery */
+            while((k=(int)read(p->hidfd,r,sizeof r))>2) if(r[0]==0x21||r[0]==0x30||r[0]==0x31){
+                int lv=r[2]>>4; p->chg=lv&1; p->batt=(lv&0x0e)*100/8; if(p->batt>100) p->batt=100; }
+            if(now-p->batt_t>30000){ p->batt_t=now; jc_subcmd(p->hidfd,0x30,0x01); } }
         while((n=read(p->fd,&e,sizeof e))==sizeof e){
             if(e.type==EV_SYN) continue;
             raw_type=e.type; raw_code=e.code; raw_value=e.value; raw_dev=p->name;
@@ -134,7 +148,7 @@ void pad_poll(void){
                 dirs(); }
         }
         if(n<0 && errno_gone()){ /* disconnected: drop it */
-            close(p->fd); P[i]=P[--np]; i--; memset(held,0,sizeof held); stick_x=stick_y=0; hat_x=hat_y=0; }
+            close(p->fd); if(p->hidfd>=0) close(p->hidfd); P[i]=P[--np]; i--; memset(held,0,sizeof held); stick_x=stick_y=0; hat_x=hat_y=0; }
     }
     /* auto-repeat for held directions (menus, falling blocks) */
     for(int a=PA_UP;a<=PA_RIGHT;a++) if(held[a] && now>=next_rep[a]){ push(a); next_rep[a]=now+110; }
@@ -145,3 +159,4 @@ float pad_stick_x(void){ float x=stick_x; if(hat_x) x=(float)hat_x; return x; }
 int pad_count(void){ return np; }
 const char* pad_name(int i){ return i>=0&&i<np?P[i].name:""; }
 void pad_last_raw(int*t,int*c,int*v,const char**d){ *t=raw_type; *c=raw_code; *v=raw_value; *d=raw_dev; }
+int pad_battery(int i,int*charging){ if(i<0||i>=np) return -1; if(charging) *charging=P[i].chg; return P[i].batt; }

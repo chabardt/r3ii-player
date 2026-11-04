@@ -12,10 +12,17 @@
  *   +-----------+-----------+
  * Keys: power = menu (Esc), long power = quit, play = Use, vol+/- = next/prev weapon,
  * next = automap. Always-run while the stick is pushed far. */
+/* linux/input.h FIRST: it defines KEY_ENTER=28, KEY_TAB=15... which must not override
+ * Doom's own key codes from doomkeys.h (that broke menu confirm and the automap). */
+#include <linux/input.h>
 #include "doomgeneric.h"
 #include "doomkeys.h"
 #include "d_event.h"
 #include "i_video.h"
+#include "pad.h"
+#include "volbar.h"
+static uint32_t vb_until; static int vb_vol=160;      /* volume bar */
+void r3snd_apply_volume(void);
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,7 +32,6 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <linux/fb.h>
-#include <linux/input.h>
 
 #define SW 480
 #define SH 720
@@ -40,6 +46,7 @@ static uint32_t t0;
 
 static uint32_t now_ms(void){ struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts);
     return (uint32_t)(ts.tv_sec*1000u+ts.tv_nsec/1000000u); }
+uint32_t r3_tick_ms(void){ return now_ms(); }       /* for pad.c */
 
 /* ---------------- key queue -> doomgeneric ---------------- */
 #define KQ 64
@@ -49,7 +56,8 @@ static void key(unsigned char k,int down){ int n=(kq_w+1)%KQ; if(n==kq_r) return
 static void tapkey(unsigned char k){ key(k,1); key(k,0); }
 int DG_GetKey(int*pressed,unsigned char*k){
     if(kq_r==kq_w) return 0;
-    *pressed=kq[kq_r].pressed; *k=kq[kq_r].key; kq_r=(kq_r+1)%KQ; return 1; }
+    *pressed=kq[kq_r].pressed; *k=kq[kq_r].key; kq_r=(kq_r+1)%KQ;
+    return 1; }
 static void mouse_turn(int dx){ event_t ev; memset(&ev,0,sizeof ev);
     ev.type=ev_mouse; ev.data1=0; ev.data2=dx; ev.data3=0; D_PostEvent(&ev); }
 
@@ -142,6 +150,7 @@ static void poll_touch(void){
 }
 
 /* ---------------- physical keys ---------------- */
+static int landscape_mode(void);
 static uint32_t pwr_t; static int pwr_down, weapon=1;
 static void poll_keys(void){
     struct input_event e;
@@ -153,10 +162,10 @@ static void poll_keys(void){
     if(pwr_down && now_ms()-pwr_t>=1200){ fprintf(stderr,"[r3doom] long power: quit\n"); exit(0); }
     while(km_fd>=0 && read(km_fd,&e,sizeof e)==sizeof e){ if(e.type!=EV_KEY || e.value==2) continue;
         if(e.code==164) key(KEY_USE,e.value);                              /* play = use */
-        else if(e.code==163) key(KEY_TAB,e.value);                         /* next = automap */
-        else if(e.value==1 && (e.code==115||e.code==114)){                 /* vol = weapons */
-            weapon += e.code==115?1:-1; if(weapon>7)weapon=1; if(weapon<1)weapon=7;
-            tapkey((unsigned char)('0'+weapon)); }
+        else if(e.code==163 && e.value!=2){ if(e.value) tapkey(']'); }         /* next = next weapon */
+        else if(e.value && (e.code==115||e.code==114)){                     /* volume, like r3player */
+            vb_vol+= e.code==115?12:-12; if(vb_vol<0)vb_vol=0; if(vb_vol>255)vb_vol=255;
+            vb_save(vb_vol); r3snd_apply_volume(); vb_until=now_ms()+2000; }
     }
 }
 
@@ -170,26 +179,82 @@ void DG_Init(){
     ts_fd=open("/dev/input/event1",O_RDONLY|O_NONBLOCK);
     kp_fd=open("/dev/input/event0",O_RDONLY|O_NONBLOCK);
     km_fd=open("/dev/input/event2",O_RDONLY|O_NONBLOCK);
-    knob_x=stick_cx; knob_y=stick_cy;
+    knob_x=stick_cx; knob_y=stick_cy; vb_vol=vb_load();
     draw_deck(knob_x,knob_y,0); deck_dirty=0;
 }
-/* 320x200 palette indices -> 480x300 RGB565, x1.5 nearest */
+/* ---------------- game controller (Joy-Con...): landscape, no touch deck ----------------
+ * Held sideways: stick = forward/back/turn, A fire (+Enter), B use, X next weapon,
+ * Y run on/off, SL/SR strafe, - menu, Capture automap. Run is on by default. */
+extern boolean menuactive, messageNeedsInput; extern int messageToPrint;   /* m_menu.c */
+extern int key_nextweapon, key_prevweapon;                               /* m_controls.c */
+static int landscape, run_on=1, pad_weapon=1;
+static int pst[PA_N];                         /* last state sent per action */
+/* A and B depend on context: in a yes/no prompt (quit, nightmare...) y / n, in menus
+ * Enter / Backspace (= back), in game fire / use. X/Y = next/previous weapon (Doom's own
+ * key_nextweapon/prevweapon, bound in main). Run is always on with a controller. */
+static void ctx_key(int a,int h,unsigned char game_key,unsigned char menu_key,unsigned char yn_key){
+    static unsigned char sent[PA_N];
+    if(h){ sent[a] = (menuactive && messageToPrint && messageNeedsInput) ? yn_key : menuactive ? menu_key : game_key;
+           key(sent[a],1); }
+    else if(sent[a]){ key(sent[a],0); sent[a]=0; }
+}
+static void pad_to_keys(void){
+    static const int K[PA_N]={KEY_UPARROW,KEY_DOWNARROW,KEY_LEFTARROW,KEY_RIGHTARROW,
+        0,0,']','[', KEY_STRAFE_L,KEY_STRAFE_R, KEY_ESCAPE,KEY_ESCAPE,KEY_TAB};
+    for(int a=0;a<PA_N;a++){ int h=pad_held(a); if(h==pst[a]) continue; pst[a]=h;
+        if(a==PA_A){ ctx_key(a,h,KEY_FIRE,KEY_ENTER,'y'); continue; }
+        if(a==PA_B){ ctx_key(a,h,KEY_USE,KEY_BACKSPACE,'n'); continue; }
+        if(K[a]) key((unsigned char)K[a],h); }
+    int a; while(pad_next(&a)){}             /* presses are handled as held states above */
+}
+static void set_landscape(int on){
+    if(on==landscape) return; landscape=on;
+    for(int y=0;y<SH;y++) memset(fb+y*fbstride,0,SW*2);
+    for(int a=0;a<PA_N;a++){ if(pst[a]){ pst[a]=0; } }
+    if(on) key(KEY_RSHIFT,run_on);
+    else { key(KEY_RSHIFT,0); knob_x=stick_cx; knob_y=stick_cy; deck_dirty=1; }
+}
+/* portrait: 320x200 -> 480x300 at the top (x1.5). landscape (R3 turned clockwise, top
+ * to the right): game top along the physical left edge, 320x200 -> 720x450 (x2.25). */
 void DG_DrawFrame(){
-    static uint16_t lut[256]; static short xm[SW], ym[GH]; static int init;
-    if(!init){ for(int x=0;x<SW;x++) xm[x]=(short)(x*2/3); for(int y=0;y<GH;y++) ym[y]=(short)(y*2/3); init=1; }
+    static uint16_t lut[256]; static short xm[SW], ym[GH], lx[SH], ly[SW]; static int init;
+    if(!init){ for(int x=0;x<SW;x++) xm[x]=(short)(x*2/3); for(int y=0;y<GH;y++) ym[y]=(short)(y*2/3);
+        for(int py=0;py<SH;py++) lx[py]=(short)((SH-1-py)*320/SH);              /* game x per physical row */
+        for(int px=0;px<SW;px++){ int g=(px-15)*200/450; ly[px]=(short)(px<15||px>=465?-1:(g>199?199:g)); }
+        init=1; }
+    pad_poll(); set_landscape(pad_count()>0);
     for(int i=0;i<256;i++) lut[i]=rgb(colors[i].r,colors[i].g,colors[i].b);
     const unsigned char*src=(const unsigned char*)DG_ScreenBuffer;
-    for(int y=0;y<GH;y++){ const unsigned char*s=src+ym[y]*320; uint16_t*d=fb+y*fbstride;
+    if(landscape){
+        for(int py=0;py<SH;py++){ const unsigned char*s=src+lx[py]; uint16_t*d=fb+py*fbstride;
+            for(int px=(now_ms()<vb_until?VB_THICK:15);px<465;px++) d[px]=lut[s[ly[px]*320]]; }
+        if(now_ms()<vb_until) vb_draw(fb,fbstride,1,vb_vol);
+        else if(vb_until){ vb_until=0; vb_erase(fb,fbstride,1); }        /* clears the letterbox too */
+        pad_to_keys(); poll_keys();
+        { struct input_event e; while(read(ts_fd,&e,sizeof e)==sizeof e){} }   /* touch off */
+        return; }
+    for(int y=(now_ms()<vb_until?VB_THICK:0);y<GH;y++){ const unsigned char*s=src+ym[y]*320; uint16_t*d=fb+y*fbstride;
         for(int x=0;x<SW;x++) d[x]=lut[s[xm[x]]]; }
     poll_touch(); poll_keys();
     if(deck_dirty){ draw_deck(knob_x,knob_y,fire_held); deck_dirty=0; }
+    if(now_ms()<vb_until) vb_draw(fb,fbstride,0,vb_vol); else if(vb_until){ vb_until=0; }
 }
 void DG_SleepMs(uint32_t ms){ usleep(ms*1000); }
 uint32_t DG_GetTicksMs(){ return now_ms()-t0; }
 void DG_SetWindowTitle(const char*t){ (void)t; }
 
+#include <signal.h>
+#include <ucontext.h>
+static void on_crash(int sig,siginfo_t*si,void*uc_){ ucontext_t*uc=uc_;
+    fprintf(stderr,"[r3doom] CRASH signal %d addr %p pc 0x%lx ra 0x%lx\n",sig,si->si_addr,
+        (unsigned long)uc->uc_mcontext.pc,(unsigned long)uc->uc_mcontext.gregs[31]); _exit(128+sig); }
 int main(int argc,char**argv){
+    setvbuf(stdout,NULL,_IONBF,0);              /* log survives a crash */
+    { struct sigaction sa; memset(&sa,0,sizeof sa); sa.sa_sigaction=on_crash; sa.sa_flags=SA_SIGINFO;
+      sigaction(SIGSEGV,&sa,NULL); sigaction(SIGBUS,&sa,NULL); sigaction(SIGILL,&sa,NULL); sigaction(SIGFPE,&sa,NULL); }
     doomgeneric_Create(argc,argv);
-    for(;;){ doomgeneric_Tick(); poll_touch(); poll_keys(); }
+    key_nextweapon=']'; key_prevweapon='[';    /* unbound by default: controller X / Y */
+    for(;;){ doomgeneric_Tick(); if(!landscape) poll_touch(); poll_keys(); }
     return 0;
 }
+static int landscape_mode(void){ return landscape; }

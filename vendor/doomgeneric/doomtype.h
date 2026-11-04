@@ -52,6 +52,12 @@
 #define PACKEDATTR
 #endif
 
+// r3ii: Chocolate Doom 3.x packed-struct helper (used by i_oplmusic.c)
+#ifndef PACKEDPREFIX
+#define PACKEDPREFIX
+#endif
+#define PACKED_STRUCT(...) PACKEDPREFIX struct __VA_ARGS__ PACKEDATTR
+
 // C99 integer types; with gcc we just use this.  Other compilers 
 // should add conditional statements that define the C99 types.
 

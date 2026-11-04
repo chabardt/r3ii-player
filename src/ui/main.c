@@ -122,6 +122,7 @@ static void show_player(const char*title,const char*dir);
 static void show_settings(void);
 static void show_setup(void);
 static void show_games(void);
+static void show_gb_list(void);
 static void np_set_cover(void);
 
 /* ---- helpers ---- */
@@ -574,7 +575,9 @@ static void settings_fill(void){
     set_section(set_list,"CONTROLLERS");
     for(int i=0;i<nd;i++){ if(!d[i].pad) continue;
         snprintf(set_macs[k],18,"%s",d[i].mac);
-        r=set_row(set_list,LV_SYMBOL_KEYBOARD,d[i].name,d[i].connected?"connected":"press a button on it to reconnect",d[i].connected);
+        { char ps[48]; int chg=0, pb=-1; for(int j=0;j<pad_count();j++) if(!strcmp(pad_name(j),d[i].name)) pb=pad_battery(j,&chg);
+          if(pb>=0) snprintf(ps,sizeof ps,"connected - battery %d%%%s",pb,chg?" (charging)":"");
+          r=set_row(set_list,LV_SYMBOL_KEYBOARD,d[i].name,pb>=0?ps:d[i].connected?"connected":"press a button on it to reconnect",d[i].connected); }
         lv_obj_add_event_cb(r,set_forget_cb,LV_EVENT_LONG_PRESSED,(void*)(long)k);
         k++; }
     r=set_row(set_list,LV_SYMBOL_EYE_OPEN,"Test buttons",pad_count()?pad_name(0):"no controller connected",0);
@@ -1076,6 +1079,7 @@ static int file_ok(const char*dir,const char*f){ char p[512]; struct stat st;
     snprintf(p,sizeof p,"%s/%s",dir,f); return stat(p,&st)==0 && st.st_size>0; }
 static void games_back_cb(lv_event_t*e){ (void)e; show_home(); }
 static void show_games(void);
+static void show_gb_list(void);
 static void drain_input(void){ struct input_event e;
     while(read(tsfd,&e,sizeof e)==sizeof e){} t_down=0;
     if(kf_pwr>=0) while(read(kf_pwr,&e,sizeof e)==sizeof e){}
@@ -1089,6 +1093,8 @@ static void run_doom(int i){
     if(DOOMS[i].pwad){ argv[n++]="-file"; argv[n++]=pwad; }
     argv[n++]="-mb"; argv[n++]="12"; argv[n]=0;
     mkdir("/usr/data/doom",0755);
+    if(audio_is_playing()){ g_resume_ms=audio_pos_ms(); save_resume(); audio_stop();   /* Doom has sound now: free the DAC */
+        if(np_play) lv_label_set_text(np_play,LV_SYMBOL_PLAY); }
     char*envp[]={"HOME=/usr/data/doom","PATH=/usr/bin:/bin",0};
     posix_spawn_file_actions_t fa; posix_spawn_file_actions_init(&fa);
     posix_spawn_file_actions_addopen(&fa,1,"/usr/data/doom/r3doom.log",O_WRONLY|O_CREAT|O_TRUNC,0644);
@@ -1101,8 +1107,67 @@ static void run_doom(int i){
     if(rc!=0){ DBG("doom spawn failed %d\n",rc); return; }
     DBG("doom started pid %d (%s)\n",(int)pid,DOOMS[i].name);
     waitpid(pid,0,0);                 /* SIGCHLD=SIG_IGN: returns once it has exited */
+    { FILE*vf=fopen(VOL_FILE,"r"); int v; if(vf){ if(fscanf(vf,"%d",&v)==1) audio_set_volume(v); fclose(vf); } }   /* volume set in the game */
     drain_input(); bl_set(p_bright); g_last_input=r3_tick_ms();
     show_games();                     /* fresh screen => full redraw over Doom's pixels */
+}
+/* ---- Game Boy: r3gb (Peanut-GB) on the player's own ROMs ---- */
+#define GB_BIN "/usr/data/r3gb"
+static const char*GB_DIRS[]={"/usr/data/mnt/sd_0/Games/GameBoy","/usr/data/Games/GameBoy"};
+static char gb_roms[64][320]; static int gb_nroms;
+static void gb_scan(void){
+    gb_nroms=0;
+    for(int d=0;d<2;d++){ DIR*dp=opendir(GB_DIRS[d]); if(!dp) continue; struct dirent*e;
+        while((e=readdir(dp)) && gb_nroms<64){ const char*x=strrchr(e->d_name,'.');
+            if(e->d_name[0]=='.' || !x || strcasecmp(x,".gb")) continue;
+            /* same game in both places: one entry — the copy with a save, else the SD one */
+            int dup=-1; for(int k=0;k<gb_nroms;k++){ const char*b=strrchr(gb_roms[k],'/'); if(b&&!strcmp(b+1,e->d_name)) dup=k; }
+            char path[320]; snprintf(path,sizeof path,"%s/%s",GB_DIRS[d],e->d_name);
+            if(dup>=0){ char sav[330]; snprintf(sav,sizeof sav,"%s",path); char*dt=strrchr(sav,'.'); if(dt) strcpy(dt,".sav");
+                struct stat st; if(stat(sav,&st)==0) snprintf(gb_roms[dup],320,"%s",path);
+                continue; }
+            snprintf(gb_roms[gb_nroms++],320,"%s",path); }
+        closedir(dp); }
+    for(int i=0;i<gb_nroms;i++) for(int j=i+1;j<gb_nroms;j++){ const char*a=strrchr(gb_roms[i],'/'),*b=strrchr(gb_roms[j],'/');
+        if(strcasecmp(a,b)>0){ char t[320]; memcpy(t,gb_roms[i],320); memcpy(gb_roms[i],gb_roms[j],320); memcpy(gb_roms[j],t,320); } }
+}
+/* "Legend of Zelda, The - Link's Awakening (U) (V1.2) [!].gb" -> "Legend of Zelda, The - Link's Awakening" */
+static void gb_title(const char*path,char*out,int cap){
+    const char*b=strrchr(path,'/'); snprintf(out,cap,"%s",b?b+1:path);
+    char*cut=out; for(char*p=out;*p;p++){ if(*p=='('||*p=='['||*p=='.'){ cut=p; break; } cut=p+1; }
+    *cut=0; while(cut>out && cut[-1]==' ') *--cut=0; fold(out); }
+static void run_gb(int i){
+    if(i<0||i>=gb_nroms) return;
+    if(audio_is_playing()){ g_resume_ms=audio_pos_ms(); save_resume(); audio_stop();   /* free the DAC */
+        if(np_play) lv_label_set_text(np_play,LV_SYMBOL_PLAY); }
+    char*argv[]={"r3gb",gb_roms[i],0}; char*envp[]={"PATH=/usr/bin:/bin",0};
+    posix_spawn_file_actions_t fa; posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa,1,"/tmp/r3gb.log",O_WRONLY|O_CREAT|O_TRUNC,0644);
+    posix_spawn_file_actions_adddup2(&fa,1,2);
+    pid_t pid; int rc=posix_spawn(&pid,GB_BIN,&fa,0,argv,envp);
+    posix_spawn_file_actions_destroy(&fa);
+    if(rc!=0){ DBG("r3gb spawn failed %d\n",rc); return; }
+    waitpid(pid,0,0);
+    { FILE*vf=fopen(VOL_FILE,"r"); int v; if(vf){ if(fscanf(vf,"%d",&v)==1) audio_set_volume(v); fclose(vf); } }   /* volume set in the game */
+    drain_input(); bl_set(p_bright); g_last_input=r3_tick_ms();
+    show_gb_list();
+}
+static void gb_go_cb(lv_event_t*e){ run_gb((int)(long)lv_event_get_user_data(e)); }
+static void gb_back_cb(lv_event_t*e){ (void)e; show_games(); }
+static void show_gb_list(void){
+    lv_obj_t*scr,*l=page_new("Game Boy",gb_back_cb,&scr); gb_scan();
+    lv_obj_t*pad=lv_obj_create(l); lv_obj_set_size(pad,10,8);
+    lv_obj_set_style_bg_opa(pad,LV_OPA_TRANSP,0); lv_obj_set_style_border_width(pad,0,0);
+    for(long i=0;i<gb_nroms;i++){ char t[160],sav[340],sub[40]; gb_title(gb_roms[i],t,sizeof t);
+        snprintf(sav,sizeof sav,"%s",gb_roms[i]); char*d=strrchr(sav,'.'); if(d) strcpy(d,".sav");
+        struct stat st; snprintf(sub,sizeof sub,"%s",stat(sav,&st)==0?"saved game":"");
+        lv_obj_t*r=set_row(l,LV_SYMBOL_PLAY,t,sub[0]?sub:NULL,0);
+        lv_obj_add_event_cb(r,gb_go_cb,LV_EVENT_CLICKED,(void*)i); }
+    lv_obj_t*n=lv_label_create(l);
+    lv_label_set_text(n,gb_nroms?"Hold power to save and quit a game.\nPower: pause. Controllers work too."
+                               :"Copy your .gb ROMs to Games/GameBoy\non the SD card.");
+    lv_obj_set_style_text_color(n,lv_color_hex(C_DIM),0); lv_obj_set_style_pad_all(n,12,0);
+    g_scr=SCR_SETTINGS; load_screen(scr);
 }
 /* built-in games: -1 Blockfall, -2 Brickstorm. A saved unfinished game offers Resume / New. */
 static void start_builtin(long id,int resume){
@@ -1140,6 +1205,7 @@ static void ask_resume(long id,const char*name,int score){
 static void games_go_cb(lv_event_t*e){ long i=(long)lv_event_get_user_data(e); int sc=0;
     if(i==-1){ if(game_has_save(&sc)) ask_resume(i,"BLOCKFALL",sc); else start_builtin(i,0); }
     else if(i==-3){ null_live(); lv_obj_t*ps=pet_create(show_games); g_scr=SCR_GAME; load_screen(ps); }
+    else if(i==-4) show_gb_list();
     else if(i==-2){ if(brick_has_save(&sc)) ask_resume(i,"BRICKSTORM",sc); else start_builtin(i,0); }
     else run_doom((int)i); }
 static void show_games(void){
@@ -1153,6 +1219,10 @@ static void show_games(void){
     lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-3L);
     r=set_row(l,LV_SYMBOL_STOP,"Brickstorm",brick_has_save(&sc)?"bricks & balls - game in progress":"break the bricks, catch the balls",0);
     lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-2L);
+    { struct stat gst; gb_scan(); char sub[48];
+      if(stat(GB_BIN,&gst)==0){ snprintf(sub,sizeof sub,gb_nroms?"%d games":"copy your ROMs to Games/GameBoy",gb_nroms);
+        r=set_row(l,LV_SYMBOL_IMAGE,"Game Boy",sub,0);
+        lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-4L); } }
     struct stat st; int have_bin = stat(DOOM_BIN,&st)==0, any=0;
     for(long i=0;i<NDOOM;i++){
         if(!file_ok(DOOM_DIR,DOOMS[i].iwad) || (DOOMS[i].pwad && !file_ok(DOOM_DIR,DOOMS[i].pwad))) continue;
@@ -1195,7 +1265,17 @@ static void pad_action(int a){
 static void heartbeat(void){ static uint32_t lh=0; uint32_t n=r3_tick_ms();
     if(n-lh>=2000){ lh=n; printf("hb %lu\n",(unsigned long)n); } }
 static void fmt_ms(long ms,char*o,int c){ long s=ms/1000; snprintf(o,c,"%ld:%02ld",s/60,s%60); }
+/* SD card hot-plug: mount when the card appears, lazily unmount when it is pulled */
+static int sd_mounted(void){ FILE*f=fopen("/proc/mounts","r"); if(!f) return 0; char l[256]; int m=0;
+    while(fgets(l,sizeof l,f)) if(strstr(l," /usr/data/mnt/sd_0 ")) m=1; fclose(f); return m; }
+static void sd_hotplug(void){
+    int present = access("/dev/mmcblk0p1",F_OK)==0, mounted=sd_mounted();
+    if(present && !mounted){ mkdir("/usr/data/mnt",0755); mkdir("/usr/data/mnt/sd_0",0755);
+        if(mount("/dev/mmcblk0p1","/usr/data/mnt/sd_0","vfat",0,"codepage=936,iocharset=utf8")==0) DBG("sd mounted\n"); }
+    else if(!present && mounted){ umount2("/usr/data/mnt/sd_0",MNT_DETACH); DBG("sd removed\n"); }
+}
 static void tick_ui(void){
+    { static uint32_t lsd; uint32_t t=r3_tick_ms(); if(t-lsd>=3000){ lsd=t; sd_hotplug(); } }
     static uint32_t lc=0,lp=0; uint32_t now=r3_tick_ms();
     static uint32_t ls=0;   /* keep the resume point fresh: survives restarts / flat battery, not just power-off */
     if(audio_is_playing() && !audio_is_paused() && now-ls>=30000){ ls=now; save_resume(); }
@@ -1220,10 +1300,12 @@ static void tick_ui(void){
         if(cap>=0){ const char*sym= !strncmp(st,"Charging",8)?LV_SYMBOL_CHARGE: cap>80?LV_SYMBOL_BATTERY_FULL:
                 cap>55?LV_SYMBOL_BATTERY_3: cap>30?LV_SYMBOL_BATTERY_2: cap>10?LV_SYMBOL_BATTERY_1:LV_SYMBOL_BATTERY_EMPTY;
             char b[32]; snprintf(b,sizeof b,"%s %d%%",sym,cap); lv_label_set_text(batt_lbl,b);
-            if(btbat_lbl){ int hb=bt_audio_battery(NULL,0);   /* headset battery, when it reports one */
-                if(hb>=0){ snprintf(b,sizeof b,LV_SYMBOL_BLUETOOTH " %d%%",hb); lv_label_set_text(btbat_lbl,b);
-                    lv_obj_set_style_text_color(btbat_lbl,lv_color_hex(hb<=15?C_ACCENT:C_DIM),0); }
-                else lv_label_set_text(btbat_lbl,""); }
+            if(btbat_lbl){ int hb=bt_audio_battery(NULL,0), chg=0, pb=pad_battery(0,&chg); char t[48]="";
+                /* headset (HFP / BLE) and game controller batteries, when they report one */
+                if(hb>=0) snprintf(t,sizeof t,LV_SYMBOL_BLUETOOTH " %d%%",hb);
+                if(pb>=0) snprintf(t+strlen(t),sizeof t-strlen(t),"%s" LV_SYMBOL_KEYBOARD " %d%%%s",t[0]?"  ":"",pb,chg?"+":"");
+                lv_label_set_text(btbat_lbl,t);
+                lv_obj_set_style_text_color(btbat_lbl,lv_color_hex((hb>=0&&hb<=15)||(pb>=0&&pb<=25&&!chg)?C_ACCENT:C_DIM),0); }
             lv_obj_set_style_text_color(batt_lbl,lv_color_hex(cap<=15?C_ACCENT:C_DIM),0); } }
     static uint32_t lr=0;
     if(bt_receiver() && now-lr>=120){ lr=now; audio_dac_follow(); }   /* cheap: cached mixer ctls */
@@ -1264,7 +1346,7 @@ int main(int argc,char**argv){
     signal(SIGHUP,SIG_IGN); signal(SIGPIPE,SIG_IGN); signal(SIGCHLD,SIG_IGN);
     dbgf=fopen("/usr/data/r3dbg.log","w");
     mkdir("/usr/data/mnt",0755); mkdir("/usr/data/mnt/sd_0",0755);
-    mount("/dev/mmcblk0p1","/usr/data/mnt/sd_0","vfat",0,"codepage=936,iocharset=utf8");
+    sd_hotplug();                  /* mount the SD card (and keep watching for insert / removal) */
     /* NOTE: no hiby_player DAC-init — the "it makes sound loud" was a volume red herring;
        the codec needs no stock init, so we boot straight into our UI (fast, no stock flash). */
     fb_init(); lv_init();

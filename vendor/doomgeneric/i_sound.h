@@ -240,6 +240,14 @@ void I_InitTimidityConfig(void);
 #ifdef FEATURE_SOUND
 extern sound_module_t DG_sound_module;
 extern music_module_t DG_music_module;
+
+// r3ii: from Chocolate Doom 3.0.1 (needed by i_oplmusic.c) — DMX version to emulate for OPL
+typedef enum {
+    opl_doom1_1_666,    // Doom 1 v1.666
+    opl_doom2_1_666,    // Doom 2 v1.666, Hexen, Heretic
+    opl_doom_1_9        // Doom v1.9, Strife
+} opl_driver_ver_t;
+void I_SetOPLDriverVer(opl_driver_ver_t ver);
 #endif
 extern sound_module_t sound_pcsound_module;
 extern music_module_t music_opl_module;

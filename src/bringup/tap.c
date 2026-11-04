@@ -13,7 +13,10 @@ static void pos(int x,int y){ ev(EV_ABS,ABS_MT_POSITION_X,x); ev(EV_ABS,ABS_MT_P
 int main(int ac,char**av){
   if(ac>2 && !strcmp(av[1],"-k")){
     fd=open(ac>3?av[3]:"/dev/input/event2",O_WRONLY); if(fd<0) return 1;
-    int c=atoi(av[2]); ev(EV_KEY,c,1); ev(EV_SYN,0,0); usleep(60000); ev(EV_KEY,c,0); ev(EV_SYN,0,0); return 0; }
+    int c=atoi(av[2]); ev(EV_KEY,c,1); ev(EV_SYN,0,0); usleep(ac>4?atoi(av[4])*1000:60000); ev(EV_KEY,c,0); ev(EV_SYN,0,0); return 0; }
+  if(ac>3 && !strcmp(av[1],"-a")){   /* -a CODE VALUE DEV [hold_ms]: axis to VALUE, then back to 0 */
+    fd=open(av[4],O_WRONLY); if(fd<0) return 1; int c=atoi(av[2]);
+    ev(EV_ABS,c,atoi(av[3])); ev(EV_SYN,0,0); usleep(ac>5?atoi(av[5])*1000:150000); ev(EV_ABS,c,0); ev(EV_SYN,0,0); return 0; }
   fd=open("/dev/input/event1",O_WRONLY); if(fd<0||ac<3)return 1;
   int x=atoi(av[1]),y=atoi(av[2]); int hold=ac>3?atoi(av[3]):80;
   pos(x,y); ev(EV_KEY,BTN_TOUCH,1); ev(EV_SYN,0,0);
