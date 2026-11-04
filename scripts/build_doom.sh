@@ -14,13 +14,14 @@ if [ "$1" = host ]; then
 fi
 TC=toolchain/mipsel-linux-musl-cross/bin/mipsel-linux-musl-
 ARCH="-march=mips32r2 -mabi=32 -mhard-float -EL"
-CFLAGS="$ARCH -O2 -fno-pie -ffunction-sections -fdata-sections -w $DEFS -I $DG -I vendor/tinyalsa/include"
+CFLAGS="$ARCH -O2 -fno-pie -ffunction-sections -fdata-sections -w $DEFS -I $DG -I vendor/tinyalsa/include -I src/ui"
 N=$(nproc 2>/dev/null || echo 4); i=0; OBJS=""
 for s in $SRCS; do o=build/dg_$(basename "$s" .c).o; OBJS="$OBJS $o"
   ( ${TC}gcc $CFLAGS -c "$s" -o "$o" ) & i=$((i+1)); [ $((i % N)) -eq 0 ] && wait
 done
 wait
+${TC}gcc $CFLAGS -c src/ui/pad.c -o build/r3doom_pad.o
 ${TC}gcc $CFLAGS -Wall -c src/doom/r3doom.c -o build/r3doom_main.o
-${TC}gcc $ARCH -fno-pie -o build/r3doom $OBJS build/r3doom_main.o -static -no-pie -Wl,--gc-sections -lm
+${TC}gcc $ARCH -fno-pie -o build/r3doom $OBJS build/r3doom_main.o build/r3doom_pad.o -static -no-pie -Wl,--gc-sections -lm
 ${TC}strip build/r3doom
 ls -la build/r3doom && file build/r3doom

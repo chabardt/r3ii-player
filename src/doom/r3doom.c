@@ -16,6 +16,7 @@
 #include "doomkeys.h"
 #include "d_event.h"
 #include "i_video.h"
+#include "pad.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,6 +41,7 @@ static uint32_t t0;
 
 static uint32_t now_ms(void){ struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts);
     return (uint32_t)(ts.tv_sec*1000u+ts.tv_nsec/1000000u); }
+uint32_t r3_tick_ms(void){ return now_ms(); }       /* for pad.c */
 
 /* ---------------- key queue -> doomgeneric ---------------- */
 #define KQ 64
@@ -173,12 +175,45 @@ void DG_Init(){
     knob_x=stick_cx; knob_y=stick_cy;
     draw_deck(knob_x,knob_y,0); deck_dirty=0;
 }
-/* 320x200 palette indices -> 480x300 RGB565, x1.5 nearest */
+/* ---------------- game controller (Joy-Con...): landscape, no touch deck ----------------
+ * Held sideways: stick = forward/back/turn, A fire (+Enter), B use, X next weapon,
+ * Y run on/off, SL/SR strafe, - menu, Capture automap. Run is on by default. */
+static int landscape, run_on=1, pad_weapon=1;
+static int pst[PA_N];                         /* last state sent per action */
+static void pad_to_keys(void){
+    static const int K[PA_N]={KEY_UPARROW,KEY_DOWNARROW,KEY_LEFTARROW,KEY_RIGHTARROW,
+        KEY_FIRE,KEY_USE,0,0, KEY_STRAFE_L,KEY_STRAFE_R, KEY_ESCAPE,KEY_ESCAPE,KEY_TAB};
+    for(int a=0;a<PA_N;a++){ int h=pad_held(a); if(h==pst[a]) continue; pst[a]=h;
+        if(a==PA_A){ key(KEY_FIRE,h); key(KEY_ENTER,h); continue; }
+        if(a==PA_X){ if(h){ pad_weapon=pad_weapon%7+1; tapkey((unsigned char)('0'+pad_weapon)); } continue; }
+        if(a==PA_Y){ if(h){ run_on=!run_on; key(KEY_RSHIFT,run_on); } continue; }
+        if(K[a]) key((unsigned char)K[a],h); }
+    int a; while(pad_next(&a)){}             /* presses are handled as held states above */
+}
+static void set_landscape(int on){
+    if(on==landscape) return; landscape=on;
+    for(int y=0;y<SH;y++) memset(fb+y*fbstride,0,SW*2);
+    for(int a=0;a<PA_N;a++){ if(pst[a]){ pst[a]=0; } }
+    if(on) key(KEY_RSHIFT,run_on);
+    else { key(KEY_RSHIFT,0); knob_x=stick_cx; knob_y=stick_cy; deck_dirty=1; }
+}
+/* portrait: 320x200 -> 480x300 at the top (x1.5). landscape (R3 turned clockwise, top
+ * to the right): game top along the physical left edge, 320x200 -> 720x450 (x2.25). */
 void DG_DrawFrame(){
-    static uint16_t lut[256]; static short xm[SW], ym[GH]; static int init;
-    if(!init){ for(int x=0;x<SW;x++) xm[x]=(short)(x*2/3); for(int y=0;y<GH;y++) ym[y]=(short)(y*2/3); init=1; }
+    static uint16_t lut[256]; static short xm[SW], ym[GH], lx[SH], ly[SW]; static int init;
+    if(!init){ for(int x=0;x<SW;x++) xm[x]=(short)(x*2/3); for(int y=0;y<GH;y++) ym[y]=(short)(y*2/3);
+        for(int py=0;py<SH;py++) lx[py]=(short)((SH-1-py)*320/SH);              /* game x per physical row */
+        for(int px=0;px<SW;px++){ int g=(px-15)*200/450; ly[px]=(short)(px<15||px>=465?-1:(g>199?199:g)); }
+        init=1; }
+    pad_poll(); set_landscape(pad_count()>0);
     for(int i=0;i<256;i++) lut[i]=rgb(colors[i].r,colors[i].g,colors[i].b);
     const unsigned char*src=(const unsigned char*)DG_ScreenBuffer;
+    if(landscape){
+        for(int py=0;py<SH;py++){ const unsigned char*s=src+lx[py]; uint16_t*d=fb+py*fbstride;
+            for(int px=15;px<465;px++) d[px]=lut[s[ly[px]*320]]; }
+        pad_to_keys(); poll_keys();
+        { struct input_event e; while(read(ts_fd,&e,sizeof e)==sizeof e){} }   /* touch off */
+        return; }
     for(int y=0;y<GH;y++){ const unsigned char*s=src+ym[y]*320; uint16_t*d=fb+y*fbstride;
         for(int x=0;x<SW;x++) d[x]=lut[s[xm[x]]]; }
     poll_touch(); poll_keys();
@@ -190,6 +225,6 @@ void DG_SetWindowTitle(const char*t){ (void)t; }
 
 int main(int argc,char**argv){
     doomgeneric_Create(argc,argv);
-    for(;;){ doomgeneric_Tick(); poll_touch(); poll_keys(); }
+    for(;;){ doomgeneric_Tick(); if(!landscape) poll_touch(); poll_keys(); }
     return 0;
 }
