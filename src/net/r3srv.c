@@ -1,0 +1,562 @@
+/* r3srv — music server for the R3's library over Wi-Fi (read-only, LAN).
+ *
+ *   UPnP/DLNA MediaServer: shows up by itself in VLC (Local Network > Universal Plug'n'Play)
+ *     SSDP on 239.255.255.250:1900, /desc.xml, ContentDirectory Browse -> DIDL-Lite.
+ *   HTTP: /            browsable page            /m3u/<folder>  playlist of the folder (recursive)
+ *         /f/<file>    the file, with Range (seeking)
+ * One poll() loop, no threads. Folders are read when browsed (no scan, no database).
+ *
+ *   r3srv [-r ROOT] [-p PORT] [-n NAME] [-m MAXSTREAMS] [-u UUIDFILE] [-s STATUSFILE]
+ */
+#define _GNU_SOURCE
+#include <arpa/inet.h>
+#include <ctype.h>
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <signal.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <sys/sendfile.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+static const char *ROOT = "/usr/data/mnt/sd_0", *NAME = "HiBy R3", *UUIDF = "/usr/data/r3srv_uuid", *STATF = NULL;
+static int PORT = 8200, MAXSTREAMS = 8;
+static char UUID[48];
+static const char *TOPS[] = { "Music", "Others", NULL };   /* what we publish under ROOT */
+
+/* ---------------------------------------------------------------- utils */
+static void die(const char *m) { perror(m); exit(1); }
+static long long now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000LL + t.tv_nsec / 1000000; }
+
+typedef struct { char *p; size_t n, cap; } buf_t;
+static void bput(buf_t *b, const char *s, size_t n) {
+    if (b->n + n + 1 > b->cap) { b->cap = (b->n + n + 1) * 2 + 4096; b->p = realloc(b->p, b->cap); }
+    memcpy(b->p + b->n, s, n); b->n += n; b->p[b->n] = 0;
+}
+static void bprintf(buf_t *b, const char *fmt, ...) {
+    char tmp[2048]; va_list ap; va_start(ap, fmt); int n = vsnprintf(tmp, sizeof tmp, fmt, ap); va_end(ap);
+    if (n < 0) return;
+    if ((size_t)n < sizeof tmp) { bput(b, tmp, n); return; }
+    char *big = malloc(n + 1); va_start(ap, fmt); vsnprintf(big, n + 1, fmt, ap); va_end(ap); bput(b, big, n); free(big);
+}
+static void bxml(buf_t *b, const char *s) {           /* XML-escape */
+    for (; *s; s++) switch (*s) {
+        case '&': bput(b, "&amp;", 5); break; case '<': bput(b, "&lt;", 4); break;
+        case '>': bput(b, "&gt;", 4); break; case '"': bput(b, "&quot;", 6); break;
+        case '\'': bput(b, "&apos;", 6); break; default: bput(b, s, 1); }
+}
+static void burl(buf_t *b, const char *s) {           /* percent-encode a path (keep '/') */
+    for (; *s; s++) { unsigned char c = *s;
+        if (isalnum(c) || strchr("/-_.~", c)) bput(b, (char *)&c, 1);
+        else { char e[4]; snprintf(e, sizeof e, "%%%02X", c); bput(b, e, 3); } }
+}
+static void url_decode(char *s) {
+    char *o = s;
+    for (; *s; s++) {
+        if (*s == '%' && isxdigit((unsigned char)s[1]) && isxdigit((unsigned char)s[2])) {
+            char h[3] = { s[1], s[2], 0 }; *o++ = (char)strtol(h, NULL, 16); s += 2; }
+        else if (*s == '+') *o++ = ' ';
+        else *o++ = *s; }
+    *o = 0;
+}
+/* a relative library path is safe if it has no "..", no leading '/', and starts with a published top dir */
+static int safe_rel(const char *rel) {
+    if (!rel || rel[0] == '/' ) return 0;
+    for (const char *p = rel; *p; ) {
+        const char *s = strchr(p, '/'); size_t n = s ? (size_t)(s - p) : strlen(p);
+        if ((n == 2 && !strncmp(p, "..", 2)) || (n == 1 && p[0] == '.')) return 0;
+        p += n; if (*p == '/') p++; }
+    if (!rel[0]) return 1;
+    for (int i = 0; TOPS[i]; i++) { size_t n = strlen(TOPS[i]);
+        if (!strncmp(rel, TOPS[i], n) && (rel[n] == 0 || rel[n] == '/')) return 1; }
+    return 0;
+}
+static const char *ext_of(const char *n) { const char *d = strrchr(n, '.'); return d ? d + 1 : ""; }
+static const char *audio_mime(const char *n) {
+    const char *e = ext_of(n);
+    if (!strcasecmp(e, "mp3") || !strcasecmp(e, "mpga")) return "audio/mpeg";
+    if (!strcasecmp(e, "flac")) return "audio/flac";
+    if (!strcasecmp(e, "wav")) return "audio/wav";
+    if (!strcasecmp(e, "m4a") || !strcasecmp(e, "aac") || !strcasecmp(e, "mp4")) return "audio/mp4";
+    if (!strcasecmp(e, "ogg") || !strcasecmp(e, "opus")) return "audio/ogg";
+    return NULL;
+}
+static const char *any_mime(const char *n) {
+    const char *m = audio_mime(n); if (m) return m;
+    const char *e = ext_of(n);
+    if (!strcasecmp(e, "jpg") || !strcasecmp(e, "jpeg")) return "image/jpeg";
+    if (!strcasecmp(e, "png")) return "image/png";
+    return NULL;
+}
+
+/* ---------------------------------------------------------------- directory listing */
+typedef struct { char name[256]; int dir; } ent_t;
+static int ent_cmp(const void *a, const void *b) {
+    const ent_t *x = a, *y = b; if (x->dir != y->dir) return y->dir - x->dir; return strcasecmp(x->name, y->name); }
+/* entries of ROOT/rel (folders + audio files), sorted; *n = count. "" = the published tops */
+static ent_t *list_dir(const char *rel, int *n) {
+    *n = 0; ent_t *v = NULL; int cap = 0;
+    if (!rel[0]) {
+        for (int i = 0; TOPS[i]; i++) { char p[1024]; struct stat st; snprintf(p, sizeof p, "%s/%s", ROOT, TOPS[i]);
+            if (stat(p, &st) == 0 && S_ISDIR(st.st_mode)) { v = realloc(v, sizeof(ent_t) * (*n + 1));
+                snprintf(v[*n].name, sizeof v[0].name, "%s", TOPS[i]); v[*n].dir = 1; (*n)++; } }
+        return v; }
+    char p[1024]; snprintf(p, sizeof p, "%s/%s", ROOT, rel);
+    DIR *d = opendir(p); if (!d) return NULL; struct dirent *e;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        int dir = e->d_type == DT_DIR;
+        if (e->d_type == DT_UNKNOWN) { char f[1600]; struct stat st; snprintf(f, sizeof f, "%s/%s", p, e->d_name);
+            dir = stat(f, &st) == 0 && S_ISDIR(st.st_mode); }
+        if (!dir && !audio_mime(e->d_name)) continue;
+        if (*n == cap) { cap = cap ? cap * 2 : 64; v = realloc(v, sizeof(ent_t) * cap); }
+        snprintf(v[*n].name, sizeof v[0].name, "%s", e->d_name); v[*n].dir = dir; (*n)++; }
+    closedir(d);
+    qsort(v, *n, sizeof(ent_t), ent_cmp);
+    return v;
+}
+static int find_cover(const char *rel, char *out, size_t cap) {
+    static const char *names[] = { "cover.jpg", "Cover.jpg", "folder.jpg", "Folder.jpg", "front.jpg", "cover.png", "folder.png", NULL };
+    for (int i = 0; names[i]; i++) { char p[1600]; struct stat st;
+        snprintf(p, sizeof p, "%s/%s/%s", ROOT, rel, names[i]);
+        if (stat(p, &st) == 0) { snprintf(out, cap, "%s/%s", rel, names[i]); return 1; } }
+    return 0;
+}
+static void display_name(const char *fname, int dir, char *out, size_t cap) {
+    snprintf(out, cap, "%s", fname);
+    if (!dir) { char *d = strrchr(out, '.'); if (d) *d = 0; }
+}
+
+/* ---------------------------------------------------------------- connections */
+enum { C_READ, C_WRITE, C_FILE };
+typedef struct {
+    int fd, state, is_stream;
+    char req[16384]; size_t rlen;
+    buf_t out; size_t off;           /* response head/body being written */
+    int ffd; off_t fpos, fend;       /* file streaming */
+    char host[128];                  /* our address as the client reached us: "ip:port" */
+    long long last;
+} conn_t;
+#define MAXC 32
+static conn_t C[MAXC];
+static int nstreams(void) { int n = 0; for (int i = 0; i < MAXC; i++) if (C[i].fd > 0 && C[i].is_stream) n++; return n; }
+static void status_write(void) {
+    if (!STATF) return; FILE *f = fopen(STATF, "w"); if (!f) return;
+    fprintf(f, "streams=%d\nmax=%d\nport=%d\n", nstreams(), MAXSTREAMS, PORT); fclose(f);
+}
+static void conn_close(conn_t *c) {
+    int was = c->is_stream;
+    if (c->fd > 0) close(c->fd);
+    if (c->ffd > 0) close(c->ffd);
+    free(c->out.p); memset(c, 0, sizeof *c);
+    if (was) status_write();
+}
+static void respond(conn_t *c, int code, const char *ctype, const char *body, size_t blen, const char *extra) {
+    const char *msg = code == 200 ? "OK" : code == 206 ? "Partial Content" : code == 404 ? "Not Found" :
+                      code == 400 ? "Bad Request" : code == 503 ? "Service Unavailable" : code == 416 ? "Range Not Satisfiable" : "Error";
+    bprintf(&c->out, "HTTP/1.1 %d %s\r\nServer: Linux/3.x UPnP/1.0 r3srv/1.0\r\nContent-Type: %s\r\n"
+                     "Content-Length: %zu\r\nConnection: close\r\n%s\r\n", code, msg, ctype, blen, extra ? extra : "");
+    if (body) bput(&c->out, body, blen);
+    c->state = C_WRITE;
+}
+static void respond_buf(conn_t *c, int code, const char *ctype, buf_t *b) {
+    respond(c, code, ctype, b->p ? b->p : "", b->n, NULL); free(b->p); }
+
+/* ---------------------------------------------------------------- HTTP pages */
+static void page_browse(conn_t *c, const char *rel) {
+    int n; ent_t *v = list_dir(rel, &n);
+    if (rel[0] && !v) { respond(c, 404, "text/plain", "not found\n", 10, NULL); return; }
+    buf_t b = { 0 };
+    bprintf(&b, "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"
+                "<title>"); bxml(&b, NAME); bprintf(&b, "</title><style>body{font:16px sans-serif;background:#0a0a0a;color:#f4e4d0;margin:16px}"
+                "a{color:#e8731c;text-decoration:none}li{margin:6px 0}.m{color:#8a6a4a;font-size:13px}</style>"
+                "<h2>"); bxml(&b, NAME); bprintf(&b, "</h2><p>/"); bxml(&b, rel);
+    if (rel[0]) { bprintf(&b, " &nbsp; <a href='/m3u/"); burl(&b, rel); bprintf(&b, "'>&#9654; play all (m3u for VLC)</a>"); }
+    bprintf(&b, "</p><ul>");
+    if (rel[0]) { char up[1024]; snprintf(up, sizeof up, "%s", rel); char *s = strrchr(up, '/'); if (s) *s = 0; else up[0] = 0;
+        bprintf(&b, "<li><a href='/browse/"); burl(&b, up); bprintf(&b, "'>..</a>"); }
+    for (int i = 0; i < n; i++) {
+        char sub[1600], dn[300]; snprintf(sub, sizeof sub, "%s%s%s", rel, rel[0] ? "/" : "", v[i].name);
+        display_name(v[i].name, v[i].dir, dn, sizeof dn);
+        bprintf(&b, "<li><a href='/%s/", v[i].dir ? "browse" : "f"); burl(&b, sub); bprintf(&b, "'>%s ", v[i].dir ? "&#128193;" : "&#9835;");
+        bxml(&b, dn); bprintf(&b, "</a>");
+        if (v[i].dir) { bprintf(&b, " <a class=m href='/m3u/"); burl(&b, sub); bprintf(&b, "'>m3u</a>"); } }
+    bprintf(&b, "</ul><p class=m>In VLC: Media &gt; Open Network Stream, paste an m3u link; or Local Network &gt; Universal Plug'n'Play.</p>");
+    free(v); respond_buf(c, 200, "text/html; charset=utf-8", &b);
+}
+static void m3u_walk(buf_t *b, const char *host, const char *rel, int depth, int *count) {
+    if (depth > 6 || *count > 20000) return;
+    int n; ent_t *v = list_dir(rel, &n); if (!v) return;
+    for (int i = 0; i < n; i++) { char sub[1600]; snprintf(sub, sizeof sub, "%s/%s", rel, v[i].name);
+        if (v[i].dir) m3u_walk(b, host, sub, depth + 1, count);
+        else { char dn[300]; display_name(v[i].name, 0, dn, sizeof dn);
+            bprintf(b, "#EXTINF:-1,%s\nhttp://%s/f/", dn, host); burl(b, sub); bput(b, "\n", 1); (*count)++; } }
+    free(v);
+}
+static void page_m3u(conn_t *c, const char *rel) {
+    buf_t b = { 0 }; int count = 0; bprintf(&b, "#EXTM3U\n");
+    m3u_walk(&b, c->host, rel, 0, &count);
+    respond_buf(c, 200, "audio/x-mpegurl; charset=utf-8", &b);
+}
+static void serve_file(conn_t *c, const char *rel, const char *range, int head) {
+    char p[1600]; snprintf(p, sizeof p, "%s/%s", ROOT, rel);
+    const char *mime = any_mime(p); struct stat st;
+    if (!mime || stat(p, &st) != 0 || !S_ISREG(st.st_mode)) { respond(c, 404, "text/plain", "not found\n", 10, NULL); return; }
+    int is_audio = audio_mime(p) != NULL;
+    if (is_audio && !head && nstreams() >= MAXSTREAMS) {
+        respond(c, 503, "text/plain", "R3: too many listeners\n", 23, "Retry-After: 30\r\n"); return; }
+    off_t start = 0, end = st.st_size - 1; int partial = 0;
+    if (range && !strncasecmp(range, "bytes=", 6)) {
+        long long a = -1, z = -1; const char *r = range + 6;
+        if (*r == '-') { z = atoll(r + 1); a = st.st_size - z; z = st.st_size - 1; }
+        else { a = atoll(r); const char *dash = strchr(r, '-'); z = (dash && dash[1] && isdigit((unsigned char)dash[1])) ? atoll(dash + 1) : st.st_size - 1; }
+        if (a < 0) a = 0; if (z >= st.st_size) z = st.st_size - 1;
+        if (a > z) { char ex[64]; snprintf(ex, sizeof ex, "Content-Range: bytes */%lld\r\n", (long long)st.st_size);
+            respond(c, 416, "text/plain", "", 0, ex); return; }
+        start = a; end = z; partial = 1; }
+    char crange[96] = "", extra[512];
+    if (partial) snprintf(crange, sizeof crange, "Content-Range: bytes %lld-%lld/%lld\r\n",
+                          (long long)start, (long long)end, (long long)st.st_size);
+    snprintf(extra, sizeof extra, "Accept-Ranges: bytes\r\n%s"
+             "transferMode.dlna.org: Streaming\r\ncontentFeatures.dlna.org: DLNA.ORG_OP=01;DLNA.ORG_CI=0\r\n", crange);
+    respond(c, partial ? 206 : 200, mime, NULL, (size_t)(end - start + 1), extra);
+    if (head) return;
+    c->ffd = open(p, O_RDONLY); if (c->ffd < 0) { conn_close(c); return; }
+    c->fpos = start; c->fend = end + 1; c->is_stream = is_audio;
+    if (is_audio) status_write();
+}
+
+/* ---------------------------------------------------------------- UPnP */
+static void upnp_desc(conn_t *c) {
+    buf_t b = { 0 };
+    bprintf(&b, "<?xml version=\"1.0\"?>\n<root xmlns=\"urn:schemas-upnp-org:device-1-0\">"
+        "<specVersion><major>1</major><minor>0</minor></specVersion><device>"
+        "<deviceType>urn:schemas-upnp-org:device:MediaServer:1</deviceType><friendlyName>"); bxml(&b, NAME);
+    bprintf(&b, "</friendlyName><manufacturer>r3ii-player</manufacturer><modelName>HiBy R3 Pro II</modelName>"
+        "<modelDescription>r3ii music server</modelDescription><UDN>uuid:%s</UDN>"
+        "<serviceList>"
+        "<service><serviceType>urn:schemas-upnp-org:service:ContentDirectory:1</serviceType>"
+        "<serviceId>urn:upnp-org:serviceId:ContentDirectory</serviceId><SCPDURL>/cds.xml</SCPDURL>"
+        "<controlURL>/ctl/cds</controlURL><eventSubURL>/evt/cds</eventSubURL></service>"
+        "<service><serviceType>urn:schemas-upnp-org:service:ConnectionManager:1</serviceType>"
+        "<serviceId>urn:upnp-org:serviceId:ConnectionManager</serviceId><SCPDURL>/cms.xml</SCPDURL>"
+        "<controlURL>/ctl/cms</controlURL><eventSubURL>/evt/cms</eventSubURL></service>"
+        "</serviceList><presentationURL>http://%s/</presentationURL></device></root>\n", UUID, c->host);
+    respond_buf(c, 200, "text/xml; charset=\"utf-8\"", &b);
+}
+static const char CDS_SCPD[] =
+    "<?xml version=\"1.0\"?><scpd xmlns=\"urn:schemas-upnp-org:service-1-0\"><specVersion><major>1</major><minor>0</minor></specVersion>"
+    "<actionList><action><name>Browse</name><argumentList>"
+    "<argument><name>ObjectID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_ObjectID</relatedStateVariable></argument>"
+    "<argument><name>BrowseFlag</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_BrowseFlag</relatedStateVariable></argument>"
+    "<argument><name>Filter</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Filter</relatedStateVariable></argument>"
+    "<argument><name>StartingIndex</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Index</relatedStateVariable></argument>"
+    "<argument><name>RequestedCount</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>"
+    "<argument><name>SortCriteria</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_SortCriteria</relatedStateVariable></argument>"
+    "<argument><name>Result</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Result</relatedStateVariable></argument>"
+    "<argument><name>NumberReturned</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>"
+    "<argument><name>TotalMatches</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>"
+    "<argument><name>UpdateID</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_UpdateID</relatedStateVariable></argument>"
+    "</argumentList></action>"
+    "<action><name>GetSystemUpdateID</name><argumentList><argument><name>Id</name><direction>out</direction>"
+    "<relatedStateVariable>SystemUpdateID</relatedStateVariable></argument></argumentList></action>"
+    "<action><name>GetSortCapabilities</name><argumentList><argument><name>SortCaps</name><direction>out</direction>"
+    "<relatedStateVariable>SortCapabilities</relatedStateVariable></argument></argumentList></action>"
+    "<action><name>GetSearchCapabilities</name><argumentList><argument><name>SearchCaps</name><direction>out</direction>"
+    "<relatedStateVariable>SearchCapabilities</relatedStateVariable></argument></argumentList></action>"
+    "</actionList><serviceStateTable>"
+    "<stateVariable sendEvents=\"no\"><name>A_ARG_TYPE_ObjectID</name><dataType>string</dataType></stateVariable>"
+    "<stateVariable sendEvents=\"no\"><name>A_ARG_TYPE_BrowseFlag</name><dataType>string</dataType>"
+    "<allowedValueList><allowedValue>BrowseMetadata</allowedValue><allowedValue>BrowseDirectChildren</allowedValue></allowedValueList></stateVariable>"
+    "<stateVariable sendEvents=\"no\"><name>A_ARG_TYPE_Filter</name><dataType>string</dataType></stateVariable>"
+    "<stateVariable sendEvents=\"no\"><name>A_ARG_TYPE_Index</name><dataType>ui4</dataType></stateVariable>"
+    "<stateVariable sendEvents=\"no\"><name>A_ARG_TYPE_Count</name><dataType>ui4</dataType></stateVariable>"
+    "<stateVariable sendEvents=\"no\"><name>A_ARG_TYPE_SortCriteria</name><dataType>string</dataType></stateVariable>"
+    "<stateVariable sendEvents=\"no\"><name>A_ARG_TYPE_Result</name><dataType>string</dataType></stateVariable>"
+    "<stateVariable sendEvents=\"no\"><name>A_ARG_TYPE_UpdateID</name><dataType>ui4</dataType></stateVariable>"
+    "<stateVariable sendEvents=\"yes\"><name>SystemUpdateID</name><dataType>ui4</dataType></stateVariable>"
+    "<stateVariable sendEvents=\"no\"><name>SortCapabilities</name><dataType>string</dataType></stateVariable>"
+    "<stateVariable sendEvents=\"no\"><name>SearchCapabilities</name><dataType>string</dataType></stateVariable>"
+    "</serviceStateTable></scpd>";
+static const char CMS_SCPD[] =
+    "<?xml version=\"1.0\"?><scpd xmlns=\"urn:schemas-upnp-org:service-1-0\"><specVersion><major>1</major><minor>0</minor></specVersion>"
+    "<actionList><action><name>GetProtocolInfo</name><argumentList>"
+    "<argument><name>Source</name><direction>out</direction><relatedStateVariable>SourceProtocolInfo</relatedStateVariable></argument>"
+    "<argument><name>Sink</name><direction>out</direction><relatedStateVariable>SinkProtocolInfo</relatedStateVariable></argument>"
+    "</argumentList></action></actionList><serviceStateTable>"
+    "<stateVariable sendEvents=\"yes\"><name>SourceProtocolInfo</name><dataType>string</dataType></stateVariable>"
+    "<stateVariable sendEvents=\"yes\"><name>SinkProtocolInfo</name><dataType>string</dataType></stateVariable>"
+    "</serviceStateTable></scpd>";
+
+/* value of <tag>...</tag> in a SOAP body (no namespaces on argument names) */
+static int soap_arg(const char *body, const char *tag, char *out, size_t cap) {
+    char open[96]; snprintf(open, sizeof open, "<%s>", tag);
+    const char *s = strstr(body, open); if (!s) { snprintf(open, sizeof open, "<%s ", tag); s = strstr(body, open);
+        if (s) s = strchr(s, '>'); else return 0; if (!s) return 0; s++; } else s += strlen(open);
+    const char *e = strstr(s, "</"); if (!e) return 0;
+    size_t n = (size_t)(e - s); if (n >= cap) n = cap - 1; memcpy(out, s, n); out[n] = 0;
+    /* unescape the few entities that appear in IDs */
+    char *r = out, *w = out;
+    while (*r) { if (!strncmp(r, "&amp;", 5)) { *w++ = '&'; r += 5; } else if (!strncmp(r, "&apos;", 6)) { *w++ = '\''; r += 6; }
+        else if (!strncmp(r, "&quot;", 6)) { *w++ = '"'; r += 6; } else if (!strncmp(r, "&lt;", 4)) { *w++ = '<'; r += 4; }
+        else if (!strncmp(r, "&gt;", 4)) { *w++ = '>'; r += 4; } else *w++ = *r++; }
+    *w = 0; return 1;
+}
+/* object IDs: "0" = root, else the relative library path */
+static const char *rel_of_id(const char *id) { return strcmp(id, "0") ? id : ""; }
+static void didl_container(buf_t *d, const char *id, const char *parent, const char *title, int childs) {
+    bprintf(d, "<container id=\""); bxml(d, id); bprintf(d, "\" parentID=\""); bxml(d, parent);
+    bprintf(d, "\" restricted=\"1\" childCount=\"%d\"><dc:title>", childs); bxml(d, title);
+    bprintf(d, "</dc:title><upnp:class>object.container.storageFolder</upnp:class></container>");
+}
+static void didl_item(buf_t *d, const char *host, const char *rel, const char *parent, const char *title, const char *cover) {
+    char p[1600]; struct stat st; snprintf(p, sizeof p, "%s/%s", ROOT, rel);
+    long long sz = stat(p, &st) == 0 ? (long long)st.st_size : 0;
+    bprintf(d, "<item id=\""); bxml(d, rel); bprintf(d, "\" parentID=\""); bxml(d, parent);
+    bprintf(d, "\" restricted=\"1\"><dc:title>"); bxml(d, title);
+    bprintf(d, "</dc:title><upnp:class>object.item.audioItem.musicTrack</upnp:class>");
+    if (cover) { buf_t u = { 0 }; bprintf(&u, "http://%s/f/", host); burl(&u, cover);
+        bprintf(d, "<upnp:albumArtURI>"); bxml(d, u.p); bprintf(d, "</upnp:albumArtURI>"); free(u.p); }
+    buf_t u = { 0 }; bprintf(&u, "http://%s/f/", host); burl(&u, rel);
+    bprintf(d, "<res protocolInfo=\"http-get:*:%s:*\" size=\"%lld\">", audio_mime(rel), sz); bxml(d, u.p);
+    bprintf(d, "</res></item>"); free(u.p);
+}
+static void soap_reply(conn_t *c, const char *action, const char *svc, buf_t *inner) {
+    buf_t b = { 0 };
+    bprintf(&b, "<?xml version=\"1.0\" encoding=\"utf-8\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" "
+                "s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body><u:%sResponse xmlns:u=\"%s\">", action, svc);
+    if (inner && inner->p) bput(&b, inner->p, inner->n);
+    bprintf(&b, "</u:%sResponse></s:Body></s:Envelope>", action);
+    if (inner) free(inner->p);
+    respond_buf(c, 200, "text/xml; charset=\"utf-8\"", &b);
+}
+static void soap_fault(conn_t *c, int code, const char *desc) {
+    char body[1024]; int n = snprintf(body, sizeof body,
+        "<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" "
+        "s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body><s:Fault><faultcode>s:Client</faultcode>"
+        "<faultstring>UPnPError</faultstring><detail><UPnPError xmlns=\"urn:schemas-upnp-org:control-1-0\">"
+        "<errorCode>%d</errorCode><errorDescription>%s</errorDescription></UPnPError></detail></s:Fault></s:Body></s:Envelope>", code, desc);
+    respond(c, 500, "text/xml; charset=\"utf-8\"", body, n, NULL);
+}
+static void cds_control(conn_t *c, const char *soapaction, const char *body) {
+    const char *svc = "urn:schemas-upnp-org:service:ContentDirectory:1";
+    if (strstr(soapaction, "GetSystemUpdateID")) { buf_t i = { 0 }; bprintf(&i, "<Id>1</Id>"); soap_reply(c, "GetSystemUpdateID", svc, &i); return; }
+    if (strstr(soapaction, "GetSortCapabilities")) { buf_t i = { 0 }; bprintf(&i, "<SortCaps></SortCaps>"); soap_reply(c, "GetSortCapabilities", svc, &i); return; }
+    if (strstr(soapaction, "GetSearchCapabilities")) { buf_t i = { 0 }; bprintf(&i, "<SearchCaps></SearchCaps>"); soap_reply(c, "GetSearchCapabilities", svc, &i); return; }
+    if (!strstr(soapaction, "Browse")) { soap_fault(c, 401, "Invalid Action"); return; }
+    char id[1024] = "0", flag[64] = "BrowseDirectChildren", si[16] = "0", rc[16] = "0";
+    soap_arg(body, "ObjectID", id, sizeof id); soap_arg(body, "BrowseFlag", flag, sizeof flag);
+    soap_arg(body, "StartingIndex", si, sizeof si); soap_arg(body, "RequestedCount", rc, sizeof rc);
+    const char *rel = rel_of_id(id);
+    if (!safe_rel(rel)) { soap_fault(c, 701, "No such object"); return; }
+    int start = atoi(si), count = atoi(rc); if (count <= 0) count = 1 << 30;
+    buf_t d = { 0 }; int returned = 0, total = 0;
+    bprintf(&d, "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" "
+                "xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\">");
+    char parent[1024]; snprintf(parent, sizeof parent, "%s", rel); { char *s = strrchr(parent, '/'); if (s) *s = 0; else snprintf(parent, sizeof parent, "%s", rel[0] ? "0" : "-1"); }
+    if (!strcmp(flag, "BrowseMetadata")) {
+        char p[1600]; struct stat st; snprintf(p, sizeof p, "%s/%s", ROOT, rel);
+        if (!rel[0]) didl_container(&d, "0", "-1", NAME, 2);
+        else if (stat(p, &st) == 0 && S_ISDIR(st.st_mode)) { const char *t = strrchr(rel, '/'); didl_container(&d, rel, parent, t ? t + 1 : rel, 0); }
+        else if (stat(p, &st) == 0 && audio_mime(rel)) { const char *t = strrchr(rel, '/'); char dn[300]; display_name(t ? t + 1 : rel, 0, dn, sizeof dn);
+            char cover[1200], dir[1024]; snprintf(dir, sizeof dir, "%s", rel); char *s = strrchr(dir, '/'); if (s) *s = 0;
+            didl_item(&d, c->host, rel, parent, dn, find_cover(dir, cover, sizeof cover) ? cover : NULL); }
+        else { free(d.p); soap_fault(c, 701, "No such object"); return; }
+        returned = total = 1;
+    } else {
+        int n; ent_t *v = list_dir(rel, &n);
+        if (rel[0] && !v) { free(d.p); soap_fault(c, 701, "No such object"); return; }
+        char cover[1200]; int has_cover = rel[0] && find_cover(rel, cover, sizeof cover);
+        total = n;
+        for (int i = start; i < n && returned < count; i++, returned++) {
+            char sub[1600], dn[300]; snprintf(sub, sizeof sub, "%s%s%s", rel, rel[0] ? "/" : "", v[i].name);
+            display_name(v[i].name, v[i].dir, dn, sizeof dn);
+            if (v[i].dir) didl_container(&d, sub, rel[0] ? rel : "0", dn, 0);
+            else didl_item(&d, c->host, sub, rel[0] ? rel : "0", dn, has_cover ? cover : NULL); }
+        free(v);
+    }
+    bprintf(&d, "</DIDL-Lite>");
+    buf_t i = { 0 }; bprintf(&i, "<Result>"); bxml(&i, d.p); free(d.p);
+    bprintf(&i, "</Result><NumberReturned>%d</NumberReturned><TotalMatches>%d</TotalMatches><UpdateID>1</UpdateID>", returned, total);
+    soap_reply(c, "Browse", svc, &i);
+}
+static void cms_control(conn_t *c, const char *soapaction) {
+    const char *svc = "urn:schemas-upnp-org:service:ConnectionManager:1";
+    if (strstr(soapaction, "GetProtocolInfo")) { buf_t i = { 0 };
+        bprintf(&i, "<Source>http-get:*:audio/mpeg:*,http-get:*:audio/flac:*,http-get:*:audio/mp4:*,http-get:*:audio/wav:*</Source><Sink></Sink>");
+        soap_reply(c, "GetProtocolInfo", svc, &i); return; }
+    soap_fault(c, 401, "Invalid Action");
+}
+
+/* ---------------------------------------------------------------- request dispatch */
+static const char *header(const char *req, const char *name, char *out, size_t cap) {
+    size_t nl = strlen(name); const char *p = req;
+    while ((p = strchr(p, '\n'))) { p++;
+        if (!strncasecmp(p, name, nl) && p[nl] == ':') { p += nl + 1; while (*p == ' ') p++;
+            size_t n = strcspn(p, "\r\n"); if (n >= cap) n = cap - 1; memcpy(out, p, n); out[n] = 0; return out; } }
+    return NULL;
+}
+static void handle(conn_t *c) {
+    char method[8] = "", path[4096] = "";
+    if (sscanf(c->req, "%7s %4095s", method, path) != 2) { respond(c, 400, "text/plain", "bad request\n", 12, NULL); return; }
+    char *q = strchr(path, '?'); if (q) *q = 0;
+    url_decode(path);
+    char range[128], sa[256], *body = strstr(c->req, "\r\n\r\n"); body = body ? body + 4 : "";
+    int head = !strcmp(method, "HEAD");
+    if (!strcmp(path, "/desc.xml")) { upnp_desc(c); return; }
+    if (!strcmp(path, "/cds.xml")) { respond(c, 200, "text/xml; charset=\"utf-8\"", CDS_SCPD, sizeof CDS_SCPD - 1, NULL); return; }
+    if (!strcmp(path, "/cms.xml")) { respond(c, 200, "text/xml; charset=\"utf-8\"", CMS_SCPD, sizeof CMS_SCPD - 1, NULL); return; }
+    if (!strcmp(path, "/ctl/cds")) { cds_control(c, header(c->req, "SOAPACTION", sa, sizeof sa) ? sa : "", body); return; }
+    if (!strcmp(path, "/ctl/cms")) { cms_control(c, header(c->req, "SOAPACTION", sa, sizeof sa) ? sa : ""); return; }
+    if (!strncmp(path, "/evt/", 5)) {   /* no eventing: accept subscriptions so clients stay happy */
+        char ex[128]; snprintf(ex, sizeof ex, "SID: uuid:%s-evt\r\nTIMEOUT: Second-1800\r\n", UUID); respond(c, 200, "text/plain", "", 0, ex); return; }
+    const char *rel = NULL; int kind = 0;
+    if (!strcmp(path, "/") || !strcmp(path, "/browse") || !strcmp(path, "/browse/")) { rel = ""; kind = 1; }
+    else if (!strncmp(path, "/browse/", 8)) { rel = path + 8; kind = 1; }
+    else if (!strncmp(path, "/m3u/", 5)) { rel = path + 5; kind = 2; }
+    else if (!strncmp(path, "/f/", 3)) { rel = path + 3; kind = 3; }
+    if (!kind) { respond(c, 404, "text/plain", "not found\n", 10, NULL); return; }
+    char clean[4096]; snprintf(clean, sizeof clean, "%s", rel);
+    size_t L = strlen(clean); while (L && clean[L - 1] == '/') clean[--L] = 0;
+    if (!safe_rel(clean)) { respond(c, 404, "text/plain", "not found\n", 10, NULL); return; }
+    if (kind == 1) page_browse(c, clean);
+    else if (kind == 2) page_m3u(c, clean);
+    else serve_file(c, clean, header(c->req, "Range", range, sizeof range), head);
+}
+
+/* ---------------------------------------------------------------- SSDP */
+static int ssdp_fd;
+static const char *NTS[] = { "upnp:rootdevice", "urn:schemas-upnp-org:device:MediaServer:1",
+    "urn:schemas-upnp-org:service:ContentDirectory:1", "urn:schemas-upnp-org:service:ConnectionManager:1", NULL };
+static int local_ip_for(struct sockaddr_in *peer, char *ip, size_t cap) {
+    int s = socket(AF_INET, SOCK_DGRAM, 0); if (s < 0) return 0;
+    struct sockaddr_in a = *peer; if (connect(s, (struct sockaddr *)&a, sizeof a) < 0) { close(s); return 0; }
+    struct sockaddr_in me; socklen_t ml = sizeof me; getsockname(s, (struct sockaddr *)&me, &ml); close(s);
+    inet_ntop(AF_INET, &me.sin_addr, ip, cap); return 1;
+}
+static void ssdp_send(const char *msg, struct sockaddr_in *to) { sendto(ssdp_fd, msg, strlen(msg), 0, (struct sockaddr *)to, sizeof *to); }
+static void ssdp_notify(const char *nts) {
+    struct sockaddr_in g = { 0 }; g.sin_family = AF_INET; g.sin_port = htons(1900); inet_pton(AF_INET, "239.255.255.250", &g.sin_addr);
+    char ip[64] = "0.0.0.0"; local_ip_for(&g, ip, sizeof ip);
+    for (int i = -1; NTS[i + 1] || i < 0; i++) {
+        char nt[160], usn[256], msg[1024];
+        if (i < 0) { snprintf(nt, sizeof nt, "uuid:%s", UUID); snprintf(usn, sizeof usn, "uuid:%s", UUID); }
+        else { snprintf(nt, sizeof nt, "%s", NTS[i]); snprintf(usn, sizeof usn, "uuid:%s::%s", UUID, NTS[i]); }
+        snprintf(msg, sizeof msg, "NOTIFY * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nCACHE-CONTROL: max-age=1800\r\n"
+                 "LOCATION: http://%s:%d/desc.xml\r\nNT: %s\r\nNTS: %s\r\nSERVER: Linux/3.x UPnP/1.0 r3srv/1.0\r\nUSN: %s\r\n\r\n",
+                 ip, PORT, nt, nts, usn);
+        ssdp_send(msg, &g);
+        if (!NTS[i + 1] && i >= 0) break; }
+}
+static void ssdp_handle(void) {
+    char buf[2048]; struct sockaddr_in from; socklen_t fl = sizeof from;
+    int n = (int)recvfrom(ssdp_fd, buf, sizeof buf - 1, 0, (struct sockaddr *)&from, &fl); if (n <= 0) return; buf[n] = 0;
+    if (strncmp(buf, "M-SEARCH", 8)) return;
+    char st[200] = ""; if (!header(buf, "ST", st, sizeof st)) return;
+    char ip[64]; if (!local_ip_for(&from, ip, sizeof ip)) return;
+    const char *targets[8]; int nt = 0; char uu[80]; snprintf(uu, sizeof uu, "uuid:%s", UUID);
+    if (!strcmp(st, "ssdp:all")) { targets[nt++] = uu; for (int i = 0; NTS[i]; i++) targets[nt++] = NTS[i]; }
+    else if (!strcmp(st, uu)) targets[nt++] = uu;
+    else for (int i = 0; NTS[i]; i++) if (!strcmp(st, NTS[i])) targets[nt++] = NTS[i];
+    for (int i = 0; i < nt; i++) { char usn[256], msg[1024];
+        if (targets[i] == uu) snprintf(usn, sizeof usn, "%s", uu); else snprintf(usn, sizeof usn, "uuid:%s::%s", UUID, targets[i]);
+        snprintf(msg, sizeof msg, "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=1800\r\nEXT:\r\nLOCATION: http://%s:%d/desc.xml\r\n"
+                 "SERVER: Linux/3.x UPnP/1.0 r3srv/1.0\r\nST: %s\r\nUSN: %s\r\n\r\n", ip, PORT, targets[i], usn);
+        ssdp_send(msg, &from); }
+}
+
+/* ---------------------------------------------------------------- main loop */
+static volatile sig_atomic_t quit;
+static void on_term(int s) { (void)s; quit = 1; }
+static void load_uuid(void) {
+    FILE *f = fopen(UUIDF, "r");
+    if (f) { if (fscanf(f, "%47s", UUID) == 1 && strlen(UUID) > 30) { fclose(f); return; } fclose(f); }
+    srand((unsigned)time(NULL) ^ (unsigned)getpid());
+    snprintf(UUID, sizeof UUID, "%08x-%04x-4%03x-a%03x-%04x%08x", rand(), rand() & 0xffff, rand() & 0xfff, rand() & 0xfff, rand() & 0xffff, rand());
+    f = fopen(UUIDF, "w"); if (f) { fprintf(f, "%s\n", UUID); fclose(f); }
+}
+int main(int argc, char **argv) {
+    int o; while ((o = getopt(argc, argv, "r:p:n:m:u:s:")) != -1) switch (o) {
+        case 'r': ROOT = optarg; break; case 'p': PORT = atoi(optarg); break; case 'n': NAME = optarg; break;
+        case 'm': MAXSTREAMS = atoi(optarg); break; case 'u': UUIDF = optarg; break; case 's': STATF = optarg; break; }
+    signal(SIGPIPE, SIG_IGN); signal(SIGTERM, on_term); signal(SIGINT, on_term);
+    load_uuid();
+    int ls = socket(AF_INET, SOCK_STREAM, 0); if (ls < 0) die("socket");
+    int one = 1; setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    struct sockaddr_in a = { 0 }; a.sin_family = AF_INET; a.sin_port = htons(PORT); a.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(ls, (struct sockaddr *)&a, sizeof a) < 0) die("bind http");
+    listen(ls, 16); fcntl(ls, F_SETFL, O_NONBLOCK);
+    ssdp_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    setsockopt(ssdp_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    struct sockaddr_in sa = { 0 }; sa.sin_family = AF_INET; sa.sin_port = htons(1900); sa.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(ssdp_fd, (struct sockaddr *)&sa, sizeof sa) < 0) perror("bind ssdp (discovery off)");
+    struct ip_mreq mr; inet_pton(AF_INET, "239.255.255.250", &mr.imr_multiaddr); mr.imr_interface.s_addr = htonl(INADDR_ANY);
+    if (setsockopt(ssdp_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mr, sizeof mr) < 0) perror("multicast join");
+    unsigned char ttl = 4; setsockopt(ssdp_fd, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof ttl);
+    fprintf(stderr, "[r3srv] '%s' on :%d, root %s, max %d streams, uuid %s\n", NAME, PORT, ROOT, MAXSTREAMS, UUID);
+    status_write();
+    ssdp_notify("ssdp:alive"); long long last_notify = now_ms();
+    while (!quit) {
+        struct pollfd pf[MAXC + 2]; int map[MAXC + 2], np = 0;
+        pf[np].fd = ls; pf[np].events = POLLIN; map[np++] = -1;
+        pf[np].fd = ssdp_fd; pf[np].events = POLLIN; map[np++] = -2;
+        for (int i = 0; i < MAXC; i++) if (C[i].fd > 0) {
+            pf[np].fd = C[i].fd; pf[np].events = C[i].state == C_READ ? POLLIN : POLLOUT; map[np++] = i; }
+        if (poll(pf, np, 1000) < 0) { if (errno == EINTR) continue; break; }
+        long long t = now_ms();
+        if (t - last_notify > 10 * 60 * 1000) { ssdp_notify("ssdp:alive"); last_notify = t; }
+        for (int k = 0; k < np; k++) {
+            if (!pf[k].revents) continue;
+            if (map[k] == -1) {
+                struct sockaddr_in peer; socklen_t pl = sizeof peer;
+                int fd = accept(ls, (struct sockaddr *)&peer, &pl); if (fd < 0) continue;
+                int slot = -1; for (int i = 0; i < MAXC; i++) if (!C[i].fd) { slot = i; break; }
+                if (slot < 0) { close(fd); continue; }
+                fcntl(fd, F_SETFL, O_NONBLOCK);
+                conn_t *c = &C[slot]; memset(c, 0, sizeof *c); c->fd = fd; c->state = C_READ; c->last = t;
+                struct sockaddr_in me; socklen_t ml = sizeof me; getsockname(fd, (struct sockaddr *)&me, &ml);
+                char ip[64]; inet_ntop(AF_INET, &me.sin_addr, ip, sizeof ip); snprintf(c->host, sizeof c->host, "%s:%d", ip, PORT);
+                continue; }
+            if (map[k] == -2) { ssdp_handle(); continue; }
+            conn_t *c = &C[map[k]]; c->last = t;
+            if (pf[k].revents & (POLLERR | POLLHUP | POLLNVAL)) { conn_close(c); continue; }
+            if (c->state == C_READ) {
+                int n = (int)read(c->fd, c->req + c->rlen, sizeof c->req - 1 - c->rlen);
+                if (n <= 0) { conn_close(c); continue; }
+                c->rlen += n; c->req[c->rlen] = 0;
+                char *hend = strstr(c->req, "\r\n\r\n");
+                if (!hend) { if (c->rlen >= sizeof c->req - 1) conn_close(c); continue; }
+                char cl[32]; long need = header(c->req, "Content-Length", cl, sizeof cl) ? atol(cl) : 0;
+                if ((long)(c->rlen - (hend + 4 - c->req)) < need && c->rlen < sizeof c->req - 1) continue;   /* wait for SOAP body */
+                handle(c);
+            } else {   /* write head/body, then the file */
+                if (c->off < c->out.n) {
+                    int n = (int)write(c->fd, c->out.p + c->off, c->out.n - c->off);
+                    if (n < 0) { if (errno != EAGAIN) conn_close(c); continue; }
+                    c->off += n; if (c->off < c->out.n) continue; }
+                if (c->ffd > 0 && c->fpos < c->fend) {
+                    size_t chunk = (size_t)(c->fend - c->fpos); if (chunk > 256 * 1024) chunk = 256 * 1024;
+                    ssize_t n = sendfile(c->fd, c->ffd, &c->fpos, chunk);
+                    if (n < 0) { if (errno != EAGAIN) conn_close(c); continue; }
+                    if (n == 0) { conn_close(c); continue; }
+                    if (c->fpos < c->fend) continue; }
+                conn_close(c);
+            }
+        }
+        for (int i = 0; i < MAXC; i++)   /* drop idle half-open connections */
+            if (C[i].fd > 0 && C[i].state == C_READ && t - C[i].last > 15000) conn_close(&C[i]);
+    }
+    ssdp_notify("ssdp:byebye");
+    if (STATF) unlink(STATF);
+    fprintf(stderr, "[r3srv] stopped\n");
+    return 0;
+}
