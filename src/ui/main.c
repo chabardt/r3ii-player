@@ -7,6 +7,8 @@
 #include "bt.h"
 #include "cover.h"
 #include "game.h"
+#include "brick.h"
+#include "pet.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +27,8 @@
 #include <signal.h>
 #include <sys/mount.h>
 #include <sys/time.h>
+#include <sys/wait.h>
+#include <spawn.h>
 
 static void null_clock(void);
 static uint32_t g_last_input;   /* last touch/key (idle -> watch face / Now Playing) */
@@ -89,13 +93,16 @@ static void ts_read(lv_indev_drv_t*drv,lv_indev_data_t*d){ (void)drv;
 #define C_DIM     0x8A6A4A   /* secondary text */
 #define C_ACCENT  0xE8731C   /* orange */
 #define C_ACCENT2 0xB85518   /* deep orange */
+#define R_BTN     14         /* rounded buttons, tiles and rows */
 
 /* live-updated widgets — NULL when the screen that owns them is gone */
 static lv_obj_t *clock_lbl, *np_pos, *np_play, *np_title, *np_prog;
 static lv_obj_t *batt_lbl;    /* battery % on Home */
+static lv_obj_t *btbat_lbl;   /* connected headset battery on Home */
+static lv_obj_t *pet_bell;    /* Moko is calling (Home bar) */
 static lv_obj_t *np_cover;    /* the cover container on Now Playing (NULL elsewhere) */
 static lv_obj_t *set_list, *set_status;   /* Settings screen (NULL when not shown) */
-static void null_live(void){ clock_lbl=np_pos=np_play=np_title=np_prog=NULL; set_list=set_status=NULL; np_cover=NULL; batt_lbl=NULL; null_clock(); }
+static void null_live(void){ clock_lbl=np_pos=np_play=np_title=np_prog=NULL; set_list=set_status=NULL; np_cover=NULL; batt_lbl=NULL; btbat_lbl=NULL; pet_bell=NULL; null_clock(); }
 /* persistent volume overlay (lives on the top layer, survives screen changes) */
 static lv_obj_t *g_volov, *g_volbar; static uint32_t g_vol_hide;
 static uint32_t g_prog_hold;   /* don't auto-update the seek bar until this time (after a user seek) */
@@ -113,6 +120,7 @@ static void show_browser(const char*path);
 static void show_player(const char*title,const char*dir);
 static void show_settings(void);
 static void show_setup(void);
+static void show_games(void);
 static void np_set_cover(void);
 
 /* ---- helpers ---- */
@@ -229,7 +237,7 @@ static lv_obj_t* mk_tbtn(lv_obj_t*p,int w,int h,int x,int y,uint32_t bg,const ch
     lv_obj_t*b=lv_btn_create(p); lv_obj_set_size(b,w,h); lv_obj_align(b,LV_ALIGN_TOP_MID,x,y);
     lv_obj_set_style_bg_color(b,lv_color_hex(bg),0);
     lv_obj_set_style_border_color(b,lv_color_hex(C_ACCENT),0);
-    lv_obj_set_style_border_width(b,2,0); lv_obj_set_style_radius(b,0,0);
+    lv_obj_set_style_border_width(b,2,0); lv_obj_set_style_radius(b,R_BTN,0);
     if(cb) lv_obj_add_event_cb(b,cb,LV_EVENT_CLICKED,NULL);
     lv_obj_t*l=lv_label_create(b); lv_label_set_text(l,sym);
     lv_obj_set_style_text_color(l,lv_color_hex(bg==(uint32_t)C_ACCENT?C_BG:C_FG),0);
@@ -251,7 +259,7 @@ static void show_player(const char*title,const char*dir){
     np_cover=cov; np_set_cover();
     /* back chip over the cover */
     lv_obj_t*bk=lv_btn_create(scr); lv_obj_set_size(bk,48,40); lv_obj_set_pos(bk,8,8);
-    lv_obj_set_style_bg_color(bk,lv_color_hex(C_BAR),0); lv_obj_set_style_radius(bk,0,0);
+    lv_obj_set_style_bg_color(bk,lv_color_hex(C_BAR),0); lv_obj_set_style_radius(bk,R_BTN,0);
     lv_obj_set_style_border_width(bk,2,0); lv_obj_set_style_border_color(bk,lv_color_hex(C_ACCENT),0);
     lv_obj_add_event_cb(bk,np_back_cb,LV_EVENT_CLICKED,NULL);
     lv_obj_t*bl=lv_label_create(bk); lv_label_set_text(bl,LV_SYMBOL_LEFT);
@@ -329,7 +337,7 @@ static void show_browser(const char*path){
     lv_obj_set_style_bg_color(hdr,lv_color_hex(C_BAR),0); lv_obj_set_style_radius(hdr,0,0);
     lv_obj_set_style_border_width(hdr,0,0); lv_obj_clear_flag(hdr,LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t*bk=lv_btn_create(hdr); lv_obj_set_size(bk,46,40); lv_obj_align(bk,LV_ALIGN_LEFT_MID,0,0);
-    lv_obj_set_style_bg_color(bk,lv_color_hex(C_PANEL),0); lv_obj_set_style_radius(bk,0,0);
+    lv_obj_set_style_bg_color(bk,lv_color_hex(C_PANEL),0); lv_obj_set_style_radius(bk,R_BTN,0);
     lv_obj_set_style_border_width(bk,2,0); lv_obj_set_style_border_color(bk,lv_color_hex(C_ACCENT),0);
     char*parent=malloc(1024);
     if(!strcmp(cur,g_root)) parent[0]=0;
@@ -346,7 +354,8 @@ static void show_browser(const char*path){
     /* list (leave 30px on the right for the A-Z rail) */
     lv_obj_t*list=lv_list_create(scr); lv_obj_set_size(list,450,720-54); lv_obj_set_pos(list,0,54);
     lv_obj_set_style_bg_color(list,lv_color_hex(C_BG),0); lv_obj_set_style_border_width(list,0,0);
-    lv_obj_set_style_pad_all(list,0,0);
+    lv_obj_set_style_pad_all(list,0,0); lv_obj_set_style_pad_hor(list,8,0); lv_obj_set_style_pad_row(list,6,0);
+    lv_obj_set_style_pad_top(list,6,0);
     /* read dir */
     DIR*dp=opendir(cur);
     if(dp){
@@ -373,7 +382,7 @@ static void show_browser(const char*path){
             lv_obj_set_style_bg_color(b,lv_color_hex(C_PANEL2),LV_STATE_PRESSED);
             lv_obj_set_style_text_color(b,lv_color_hex(C_FG),0);
             lv_obj_set_style_border_color(b,lv_color_hex(0x000000),0);
-            lv_obj_set_style_border_width(b,1,0); lv_obj_set_style_radius(b,0,0);
+            lv_obj_set_style_border_width(b,1,0); lv_obj_set_style_radius(b,R_BTN,0);
             int li=letter_index(disp); if(!g_firstof[li]) g_firstof[li]=b;
             char*full=malloc(1600); snprintf(full,1600,"%s/%s",cur,es[i].name);
             lv_obj_add_event_cb(b,entry_cb,LV_EVENT_CLICKED,full);
@@ -429,8 +438,8 @@ static lv_obj_t* set_row(lv_obj_t*l,const char*icon,const char*title,const char*
     lv_obj_t*b=lv_btn_create(l); lv_obj_set_size(b,LV_PCT(100),sub?72:60);
     lv_obj_set_style_bg_color(b,lv_color_hex(on?C_PANEL2:C_PANEL),0);
     lv_obj_set_style_bg_color(b,lv_color_hex(C_PANEL2),LV_STATE_PRESSED);
-    lv_obj_set_style_radius(b,0,0); lv_obj_set_style_shadow_width(b,0,0);
-    lv_obj_set_style_border_width(b,on?3:0,0); lv_obj_set_style_border_side(b,LV_BORDER_SIDE_LEFT,0);
+    lv_obj_set_style_radius(b,R_BTN,0); lv_obj_set_style_shadow_width(b,0,0);
+    lv_obj_set_style_border_width(b,on?2:0,0);
     lv_obj_set_style_border_color(b,lv_color_hex(C_ACCENT),0);
     lv_obj_clear_flag(b,LV_OBJ_FLAG_SCROLL_ON_FOCUS);
     lv_obj_t*ic=lv_label_create(b); lv_label_set_text(ic,icon);
@@ -456,11 +465,13 @@ static void settings_fill(void){
     set_section(set_list,"OUTPUT");
     lv_obj_t*r=set_row(set_list,LV_SYMBOL_AUDIO,"Headphone jack",NULL,!out[0]);
     lv_obj_add_event_cb(r,set_out_cb,LV_EVENT_CLICKED,(void*)-1L);
+    char sub[48];
     for(int i=0;i<nd;i++){ if(d[i].phone) continue;
         snprintf(set_macs[k],18,"%s",d[i].mac);
         int sel=!strcmp(out,d[i].mac);
         r=set_row(set_list,LV_SYMBOL_BLUETOOTH,d[i].name,
-                  d[i].connected?"connected":(sel?"selected - not connected":"hold to forget"),sel);
+                  d[i].connected?(d[i].battery>=0?(snprintf(sub,sizeof sub,"connected - battery %d%%",d[i].battery),sub):"connected")
+                                :(sel?"selected - not connected":"hold to forget"),sel);
         lv_obj_add_event_cb(r,set_out_cb,LV_EVENT_SHORT_CLICKED,(void*)(long)k);
         lv_obj_add_event_cb(r,set_forget_cb,LV_EVENT_LONG_PRESSED,(void*)(long)k);
         k++; }
@@ -501,7 +512,7 @@ static void show_settings(void){
     lv_obj_set_style_bg_color(hdr,lv_color_hex(C_BAR),0); lv_obj_set_style_radius(hdr,0,0);
     lv_obj_set_style_border_width(hdr,0,0); lv_obj_clear_flag(hdr,LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t*bk=lv_btn_create(hdr); lv_obj_set_size(bk,46,40); lv_obj_align(bk,LV_ALIGN_LEFT_MID,0,0);
-    lv_obj_set_style_bg_color(bk,lv_color_hex(C_PANEL),0); lv_obj_set_style_radius(bk,0,0);
+    lv_obj_set_style_bg_color(bk,lv_color_hex(C_PANEL),0); lv_obj_set_style_radius(bk,R_BTN,0);
     lv_obj_set_style_border_width(bk,2,0); lv_obj_set_style_border_color(bk,lv_color_hex(C_ACCENT),0);
     lv_obj_add_event_cb(bk,set_back_cb,LV_EVENT_CLICKED,NULL);
     lv_obj_t*bkl=lv_label_create(bk); lv_label_set_text(bkl,LV_SYMBOL_LEFT);
@@ -511,8 +522,8 @@ static void show_settings(void){
 
     set_list=lv_obj_create(scr); lv_obj_set_size(set_list,480,720-54-36); lv_obj_set_pos(set_list,0,54);
     lv_obj_set_style_bg_color(set_list,lv_color_hex(C_BG),0); lv_obj_set_style_border_width(set_list,0,0);
-    lv_obj_set_style_radius(set_list,0,0); lv_obj_set_style_pad_all(set_list,0,0);
-    lv_obj_set_style_pad_row(set_list,2,0);
+    lv_obj_set_style_radius(set_list,0,0); lv_obj_set_style_pad_all(set_list,0,0); lv_obj_set_style_pad_hor(set_list,8,0);
+    lv_obj_set_style_pad_row(set_list,6,0);
     lv_obj_set_flex_flow(set_list,LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scroll_dir(set_list,LV_DIR_VER);
 
@@ -623,7 +634,7 @@ static void idle_poll(void){
     uint32_t now=r3_tick_ms();
     int playing = audio_is_playing() && !audio_is_paused();
     if(g_scr==SCR_CLOCK){ if(playing) show_player(g_pltitle,g_pldir); else clock_update(); return; }
-    if(g_scr==SCR_GAME && game_running()) return;   /* don't yank the player out of a game */
+    if(g_scr==SCR_GAME && (game_running()||brick_running()||pet_shown())) return;   /* don't yank the player out of a game */
     if(now-g_last_input < IDLE_MS) return;
     if(playing){ if(g_scr!=SCR_PLAYER) show_player(g_pltitle,g_pldir); }
     else if(!bt_busy()) show_clock();
@@ -663,7 +674,7 @@ static lv_obj_t* page_new(const char*title,lv_event_cb_t back,lv_obj_t**scr_out)
     lv_obj_set_style_bg_color(hdr,lv_color_hex(C_BAR),0); lv_obj_set_style_radius(hdr,0,0);
     lv_obj_set_style_border_width(hdr,0,0); lv_obj_clear_flag(hdr,LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t*bk=lv_btn_create(hdr); lv_obj_set_size(bk,46,40); lv_obj_align(bk,LV_ALIGN_LEFT_MID,0,0);
-    lv_obj_set_style_bg_color(bk,lv_color_hex(C_PANEL),0); lv_obj_set_style_radius(bk,0,0);
+    lv_obj_set_style_bg_color(bk,lv_color_hex(C_PANEL),0); lv_obj_set_style_radius(bk,R_BTN,0);
     lv_obj_set_style_border_width(bk,2,0); lv_obj_set_style_border_color(bk,lv_color_hex(C_ACCENT),0);
     lv_obj_add_event_cb(bk,back,LV_EVENT_CLICKED,NULL);
     lv_obj_t*bkl=lv_label_create(bk); lv_label_set_text(bkl,LV_SYMBOL_LEFT);
@@ -672,13 +683,13 @@ static lv_obj_t* page_new(const char*title,lv_event_cb_t back,lv_obj_t**scr_out)
     lv_obj_set_style_text_color(ttl,lv_color_hex(C_ACCENT),0); lv_obj_align(ttl,LV_ALIGN_LEFT_MID,56,0);
     lv_obj_t*l=lv_obj_create(scr); lv_obj_set_size(l,480,720-54); lv_obj_set_pos(l,0,54);
     lv_obj_set_style_bg_color(l,lv_color_hex(C_BG),0); lv_obj_set_style_border_width(l,0,0);
-    lv_obj_set_style_radius(l,0,0); lv_obj_set_style_pad_all(l,0,0); lv_obj_set_style_pad_row(l,2,0);
+    lv_obj_set_style_radius(l,0,0); lv_obj_set_style_pad_all(l,0,0); lv_obj_set_style_pad_hor(l,8,0); lv_obj_set_style_pad_row(l,6,0);
     lv_obj_set_flex_flow(l,LV_FLEX_FLOW_COLUMN); lv_obj_set_scroll_dir(l,LV_DIR_VER);
     *scr_out=scr; return l;
 }
 static lv_obj_t* page_box(lv_obj_t*l,int h){   /* a plain panel row for custom widgets */
     lv_obj_t*b=lv_obj_create(l); lv_obj_set_size(b,LV_PCT(100),h);
-    lv_obj_set_style_bg_color(b,lv_color_hex(C_PANEL),0); lv_obj_set_style_radius(b,0,0);
+    lv_obj_set_style_bg_color(b,lv_color_hex(C_PANEL),0); lv_obj_set_style_radius(b,R_BTN,0);
     lv_obj_set_style_border_width(b,0,0); lv_obj_set_style_pad_all(b,12,0);
     lv_obj_clear_flag(b,LV_OBJ_FLAG_SCROLLABLE); return b;
 }
@@ -687,7 +698,7 @@ static lv_obj_t* style_choice(lv_obj_t*bm){   /* button-matrix as a one-of-N sel
     lv_obj_set_style_pad_all(bm,0,0); lv_obj_set_style_pad_gap(bm,8,0);
     lv_obj_set_style_bg_color(bm,lv_color_hex(C_PANEL2),LV_PART_ITEMS);
     lv_obj_set_style_text_color(bm,lv_color_hex(C_FG),LV_PART_ITEMS);
-    lv_obj_set_style_radius(bm,0,LV_PART_ITEMS);
+    lv_obj_set_style_radius(bm,R_BTN,LV_PART_ITEMS);
     lv_obj_set_style_border_width(bm,0,LV_PART_ITEMS);
     lv_obj_set_style_bg_color(bm,lv_color_hex(C_ACCENT),LV_PART_ITEMS|LV_STATE_CHECKED);
     lv_obj_set_style_text_color(bm,lv_color_hex(C_BG),LV_PART_ITEMS|LV_STATE_CHECKED);
@@ -793,7 +804,7 @@ static void show_datetime(void){
         for(int s=0;s<2;s++){
             lv_obj_t*bt=lv_btn_create(b); lv_obj_set_size(bt,64,48);
             lv_obj_align(bt,LV_ALIGN_RIGHT_MID,s?0:-180,0);
-            lv_obj_set_style_bg_color(bt,lv_color_hex(C_PANEL2),0); lv_obj_set_style_radius(bt,0,0);
+            lv_obj_set_style_bg_color(bt,lv_color_hex(C_PANEL2),0); lv_obj_set_style_radius(bt,R_BTN,0);
             lv_obj_set_style_border_width(bt,2,0); lv_obj_set_style_border_color(bt,lv_color_hex(C_ACCENT),0);
             lv_obj_add_event_cb(bt,dt_step_cb,LV_EVENT_CLICKED,(void*)(long)(i*2+s));
             lv_obj_add_event_cb(bt,dt_step_cb,LV_EVENT_LONG_PRESSED_REPEAT,(void*)(long)(i*2+s));
@@ -806,7 +817,7 @@ static void show_datetime(void){
         lv_obj_align(dt_val[i],LV_ALIGN_RIGHT_MID,-72,0);
     }
     lv_obj_t*sb=lv_btn_create(l); lv_obj_set_size(sb,LV_PCT(100),64);
-    lv_obj_set_style_bg_color(sb,lv_color_hex(C_ACCENT),0); lv_obj_set_style_radius(sb,0,0);
+    lv_obj_set_style_bg_color(sb,lv_color_hex(C_ACCENT),0); lv_obj_set_style_radius(sb,R_BTN,0);
     lv_obj_add_event_cb(sb,dt_set_cb,LV_EVENT_CLICKED,NULL);
     lv_obj_t*sl=lv_label_create(sb); lv_label_set_text(sl,"Set clock");
     lv_obj_set_style_text_color(sl,lv_color_hex(C_BG),0); lv_obj_set_style_text_font(sl,&lv_font_montserrat_20,0);
@@ -846,12 +857,12 @@ static void tile_cb(lv_event_t*e){ const char*name=lv_event_get_user_data(e);
     if(!strcmp(name,"Music")){ strcpy(g_root,MUSIC_ROOT); strcpy(g_root_label,"Music"); show_browser(MUSIC_ROOT); }
     else if(!strcmp(name,"Podcasts")){ strcpy(g_root,PODCAST_ROOT); strcpy(g_root_label,"Podcasts"); show_browser(PODCAST_ROOT); }
     else if(!strcmp(name,"Settings")) show_setup();
-    else if(!strcmp(name,"Games")){ null_live(); lv_obj_t*gs=game_create(show_home); g_scr=SCR_GAME; load_screen(gs); }
+    else if(!strcmp(name,"Games")) show_games();
     else DBG("tile (todo): %s\n",name); }
 static void make_tile(lv_obj_t*g,const char*txt,uint32_t accent,int col,int row){
     lv_obj_t*b=lv_btn_create(g);
     lv_obj_set_grid_cell(b,LV_GRID_ALIGN_STRETCH,col,1,LV_GRID_ALIGN_STRETCH,row,1);
-    lv_obj_set_style_bg_color(b,lv_color_hex(C_PANEL),0); lv_obj_set_style_radius(b,0,0);
+    lv_obj_set_style_bg_color(b,lv_color_hex(C_PANEL),0); lv_obj_set_style_radius(b,R_BTN,0);
     lv_obj_set_style_border_color(b,lv_color_hex(accent),0); lv_obj_set_style_border_width(b,3,0);
     lv_obj_set_style_bg_color(b,lv_color_hex(accent),LV_STATE_PRESSED);
     lv_obj_add_event_cb(b,tile_cb,LV_EVENT_CLICKED,(void*)txt);
@@ -871,6 +882,11 @@ static void show_home(void){
     lv_obj_set_style_text_color(nm,lv_color_hex(C_ACCENT),0); lv_obj_align(nm,LV_ALIGN_LEFT_MID,4,0);
     clock_lbl=lv_label_create(bar); lv_label_set_text(clock_lbl,"--:--");
     lv_obj_set_style_text_color(clock_lbl,lv_color_hex(C_FG),0); lv_obj_align(clock_lbl,LV_ALIGN_RIGHT_MID,-4,0);
+    pet_bell=lv_label_create(bar); lv_label_set_text(pet_bell,LV_SYMBOL_BELL);
+    lv_obj_set_style_text_color(pet_bell,lv_color_hex(C_ACCENT),0); lv_obj_align(pet_bell,LV_ALIGN_LEFT_MID,60,0);
+    if(!pet_needs_you()) lv_obj_add_flag(pet_bell,LV_OBJ_FLAG_HIDDEN);
+    btbat_lbl=lv_label_create(bar); lv_label_set_text(btbat_lbl,"");
+    lv_obj_set_style_text_color(btbat_lbl,lv_color_hex(C_DIM),0); lv_obj_align(btbat_lbl,LV_ALIGN_RIGHT_MID,-170,0);
     batt_lbl=lv_label_create(bar); lv_label_set_text(batt_lbl,"");
     lv_obj_set_style_text_color(batt_lbl,lv_color_hex(C_DIM),0); lv_obj_align(batt_lbl,LV_ALIGN_RIGHT_MID,-80,0);
     static lv_coord_t cols[]={LV_GRID_FR(1),LV_GRID_FR(1),LV_GRID_TEMPLATE_LAST};
@@ -913,7 +929,7 @@ static void power_short(void){
     else if(g_pln>0)      show_player(g_pltitle,g_pldir);
     else                  show_browser(MUSIC_ROOT);
 }
-static void do_poweroff(void){ save_resume(); audio_stop(); sync(); system("poweroff"); }
+static void do_poweroff(void){ game_save(); brick_save(); save_resume(); audio_stop(); sync(); system("poweroff"); }
 static void keys_poll(void){
     struct input_event e;
     if(kf_pwr>=0) while(read(kf_pwr,&e,sizeof e)==sizeof e){
@@ -926,14 +942,14 @@ static void keys_poll(void){
                     if(g_scr_off){ screen_wake(); pwr_tap=0; }           /* first press only wakes */
                     else if(pwr_tap){ pwr_tap=0; show_home(); }         /* double press -> Home */
                     else { pwr_tap=1; pwr_tap_t=r3_tick_ms(); } } }
-        } else if(e.code==165 && e.value==1){ if(!(g_scr==SCR_GAME && game_key(165))) pl_prev(); }  /* previous */
+        } else if(e.code==165 && e.value==1){ if(!(g_scr==SCR_GAME && (game_key(165)||brick_key(165)))) pl_prev(); }  /* previous */
     }
     if(kf_media>=0) while(read(kf_media,&e,sizeof e)==sizeof e){
         if(e.type!=EV_KEY) continue;
         g_last_input=r3_tick_ms();
         if(e.code==115 && e.value){ bump_vol(+12); }        /* vol up (incl. autorepeat) */
         else if(e.code==114 && e.value){ bump_vol(-12); }   /* vol down */
-        else if(g_scr==SCR_GAME && e.value==1 && (e.code==163||e.code==164) && game_key(e.code)){}   /* game controls */
+        else if(g_scr==SCR_GAME && e.value==1 && (e.code==163||e.code==164) && (game_key(e.code)||brick_key(e.code))){}   /* game controls */
         else if(e.code==163 && e.value==1){ pl_next(); }    /* next */
         else if(e.code==164 && e.value==1){                 /* play/pause */
             if(!audio_is_playing() && g_pln>0) pl_resume();
@@ -945,6 +961,120 @@ static void keys_poll(void){
     if(pwr_tap && !pwr_held && r3_tick_ms()-pwr_tap_t>=350){ pwr_tap=0; power_short(); }
     /* long-press power -> off (fires while still held) */
     if(pwr_held && r3_tick_ms()-pwr_down>=1200){ pwr_held=0; do_poweroff(); }
+}
+
+
+/* ---- Games menu: Blockfall + Doom games found on the SD card ----
+ * Doom runs as its own process (/usr/data/r3doom, doomgeneric) on the player's own WADs in
+ * /usr/data/mnt/sd_0/Games/Doom. We hand it the screen and input, wait for it to exit
+ * (music keeps playing: the audio thread isn't blocked), then drop queued input + redraw. */
+#define DOOM_BIN "/usr/data/r3doom"
+#define DOOM_DIR "/usr/data/mnt/sd_0/Games/Doom"
+static const struct { const char*name,*iwad,*pwad,*sub; } DOOMS[]={
+    {"Doom",                    "doom.wad",    0,                 "The Ultimate Doom"},
+    {"Sigil",                   "doom.wad",    "sigil.wad",       "Doom + Sigil episode"},
+    {"Doom II",                 "doom2.wad",   0,                 "Hell on Earth"},
+    {"No Rest for the Living",  "doom2.wad",   "nerve.wad",       "Doom II expansion"},
+    {"Master Levels",           "doom2.wad",   "masterlevels.wad","Doom II"},
+    {"TNT: Evilution",          "tnt.wad",     0,                 "Final Doom"},
+    {"The Plutonia Experiment", "plutonia.wad",0,                 "Final Doom"},
+};
+#define NDOOM (int)(sizeof DOOMS/sizeof DOOMS[0])
+static int file_ok(const char*dir,const char*f){ char p[512]; struct stat st;
+    snprintf(p,sizeof p,"%s/%s",dir,f); return stat(p,&st)==0 && st.st_size>0; }
+static void games_back_cb(lv_event_t*e){ (void)e; show_home(); }
+static void show_games(void);
+static void drain_input(void){ struct input_event e;
+    while(read(tsfd,&e,sizeof e)==sizeof e){} t_down=0;
+    if(kf_pwr>=0) while(read(kf_pwr,&e,sizeof e)==sizeof e){}
+    if(kf_media>=0) while(read(kf_media,&e,sizeof e)==sizeof e){}
+    pwr_held=0; pwr_tap=0; }
+static void run_doom(int i){
+    char iwad[512],pwad[512]; snprintf(iwad,sizeof iwad,"%s/%s",DOOM_DIR,DOOMS[i].iwad);
+    if(DOOMS[i].pwad) snprintf(pwad,sizeof pwad,"%s/%s",DOOM_DIR,DOOMS[i].pwad);
+    char*argv[10]; int n=0;
+    argv[n++]="r3doom"; argv[n++]="-iwad"; argv[n++]=iwad;
+    if(DOOMS[i].pwad){ argv[n++]="-file"; argv[n++]=pwad; }
+    argv[n++]="-mb"; argv[n++]="12"; argv[n]=0;
+    mkdir("/usr/data/doom",0755);
+    char*envp[]={"HOME=/usr/data/doom","PATH=/usr/bin:/bin",0};
+    posix_spawn_file_actions_t fa; posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa,1,"/usr/data/doom/r3doom.log",O_WRONLY|O_CREAT|O_TRUNC,0644);
+    posix_spawn_file_actions_adddup2(&fa,1,2);
+    pid_t pid; int rc;
+    if(chdir("/usr/data/doom")!=0){}
+    rc=posix_spawn(&pid,DOOM_BIN,&fa,0,argv,envp);
+    posix_spawn_file_actions_destroy(&fa);
+    if(chdir("/")!=0){}
+    if(rc!=0){ DBG("doom spawn failed %d\n",rc); return; }
+    DBG("doom started pid %d (%s)\n",(int)pid,DOOMS[i].name);
+    waitpid(pid,0,0);                 /* SIGCHLD=SIG_IGN: returns once it has exited */
+    drain_input(); bl_set(p_bright); g_last_input=r3_tick_ms();
+    show_games();                     /* fresh screen => full redraw over Doom's pixels */
+}
+/* built-in games: -1 Blockfall, -2 Brickstorm. A saved unfinished game offers Resume / New. */
+static void start_builtin(long id,int resume){
+    null_live();
+    lv_obj_t*gs = id==-1 ? game_create(show_games,resume) : brick_create(show_games,resume);
+    g_scr=SCR_GAME; load_screen(gs); }
+static lv_obj_t*g_choice; static long g_choice_id;
+static void choice_close(void){ if(g_choice){ lv_obj_del_async(g_choice); g_choice=NULL; } }
+static void choice_cb(lv_event_t*e){ long act=(long)lv_event_get_user_data(e); long id=g_choice_id;
+    choice_close(); if(act>=0) start_builtin(id,act==1); }
+static lv_obj_t* choice_btn(lv_obj_t*p,const char*txt,int primary,long act){
+    lv_obj_t*b=lv_btn_create(p); lv_obj_set_size(b,LV_PCT(100),64);
+    lv_obj_set_style_radius(b,R_BTN,0); lv_obj_set_style_shadow_width(b,0,0);
+    lv_obj_set_style_bg_color(b,lv_color_hex(primary?C_ACCENT:C_PANEL2),0);
+    lv_obj_add_event_cb(b,choice_cb,LV_EVENT_CLICKED,(void*)act);
+    lv_obj_t*l=lv_label_create(b); lv_label_set_text(l,txt); lv_obj_center(l);
+    lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0);
+    lv_obj_set_style_text_color(l,lv_color_hex(primary?C_BG:C_FG),0); return b; }
+static void ask_resume(long id,const char*name,int score){
+    g_choice_id=id;
+    g_choice=lv_obj_create(lv_scr_act()); lv_obj_set_size(g_choice,480,720); lv_obj_set_pos(g_choice,0,0);
+    lv_obj_set_style_bg_color(g_choice,lv_color_hex(0x000000),0); lv_obj_set_style_bg_opa(g_choice,LV_OPA_70,0);
+    lv_obj_set_style_border_width(g_choice,0,0); lv_obj_set_style_radius(g_choice,0,0);
+    lv_obj_clear_flag(g_choice,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(g_choice,choice_cb,LV_EVENT_CLICKED,(void*)-1L);    /* tap outside = cancel */
+    lv_obj_t*p=lv_obj_create(g_choice); lv_obj_set_size(p,400,LV_SIZE_CONTENT); lv_obj_center(p);
+    lv_obj_set_style_bg_color(p,lv_color_hex(C_PANEL),0); lv_obj_set_style_radius(p,R_BTN,0);
+    lv_obj_set_style_border_color(p,lv_color_hex(C_ACCENT),0); lv_obj_set_style_border_width(p,2,0);
+    lv_obj_set_style_pad_all(p,16,0); lv_obj_set_style_pad_row(p,12,0);
+    lv_obj_set_flex_flow(p,LV_FLEX_FLOW_COLUMN); lv_obj_clear_flag(p,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t*t=lv_label_create(p); lv_label_set_text(t,name);
+    lv_obj_set_style_text_color(t,lv_color_hex(C_ACCENT),0); lv_obj_set_style_text_font(t,&lv_font_montserrat_20,0);
+    char b[48]; snprintf(b,sizeof b,"Resume  (score %d)",score);
+    choice_btn(p,b,1,1); choice_btn(p,"New game",0,0); }
+static void games_go_cb(lv_event_t*e){ long i=(long)lv_event_get_user_data(e); int sc=0;
+    if(i==-1){ if(game_has_save(&sc)) ask_resume(i,"BLOCKFALL",sc); else start_builtin(i,0); }
+    else if(i==-3){ null_live(); lv_obj_t*ps=pet_create(show_games); g_scr=SCR_GAME; load_screen(ps); }
+    else if(i==-2){ if(brick_has_save(&sc)) ask_resume(i,"BRICKSTORM",sc); else start_builtin(i,0); }
+    else run_doom((int)i); }
+static void show_games(void){
+    lv_obj_t*scr,*l=page_new("Games",games_back_cb,&scr);
+    lv_obj_t*pad=lv_obj_create(l); lv_obj_set_size(pad,10,8);
+    lv_obj_set_style_bg_opa(pad,LV_OPA_TRANSP,0); lv_obj_set_style_border_width(pad,0,0);
+    int sc;
+    lv_obj_t*r=set_row(l,LV_SYMBOL_SHUFFLE,"Blockfall",game_has_save(&sc)?"falling blocks - game in progress":"falling-block puzzle",0);
+    lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-1L);
+    r=set_row(l,LV_SYMBOL_EYE_OPEN,"Moko",pet_summary(),pet_needs_you());
+    lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-3L);
+    r=set_row(l,LV_SYMBOL_STOP,"Brickstorm",brick_has_save(&sc)?"bricks & balls - game in progress":"break the bricks, catch the balls",0);
+    lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-2L);
+    struct stat st; int have_bin = stat(DOOM_BIN,&st)==0, any=0;
+    for(long i=0;i<NDOOM;i++){
+        if(!file_ok(DOOM_DIR,DOOMS[i].iwad) || (DOOMS[i].pwad && !file_ok(DOOM_DIR,DOOMS[i].pwad))) continue;
+        if(!any){ set_section(l,"DOOM"); any=1; }
+        r=set_row(l,LV_SYMBOL_PLAY,DOOMS[i].name,DOOMS[i].sub,0);
+        if(have_bin) lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)i);
+    }
+    if(!any){ lv_obj_t*n=lv_label_create(l);
+        lv_label_set_text(n,"Doom: copy your doom.wad / doom2.wad\n(tnt, plutonia, sigil, nerve...) to\nGames/Doom on the SD card.");
+        lv_obj_set_style_text_color(n,lv_color_hex(C_DIM),0); lv_obj_set_style_pad_all(n,12,0); }
+    else { lv_obj_t*n=lv_label_create(l);
+        lv_label_set_text(n,"In game: power = menu, hold power = quit,\nplay = use, volume = weapons, next = map.");
+        lv_obj_set_style_text_color(n,lv_color_hex(C_DIM),0); lv_obj_set_style_pad_all(n,12,0); }
+    g_scr=SCR_SETTINGS; load_screen(scr);
 }
 
 static void heartbeat(void){ static uint32_t lh=0; uint32_t n=r3_tick_ms();
@@ -964,6 +1094,9 @@ static void tick_ui(void){
             lv_slider_set_value(np_prog,(int32_t)((long long)pos*1000/dur),LV_ANIM_OFF);
     }
     if(set_list && bt_version()!=set_ver) settings_fill();
+    static uint32_t lpet=0;
+    if(now-lpet>=30000 || !lpet){ lpet=now|1; pet_tick();
+        if(pet_bell){ if(pet_needs_you()) lv_obj_clear_flag(pet_bell,LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(pet_bell,LV_OBJ_FLAG_HIDDEN); } }
     static uint32_t lbat=0;
     if(batt_lbl && (now-lbat>=10000 || !lbat)){ lbat=now|1;
         int cap=-1; char st[24]="";
@@ -972,6 +1105,10 @@ static void tick_ui(void){
         if(cap>=0){ const char*sym= !strncmp(st,"Charging",8)?LV_SYMBOL_CHARGE: cap>80?LV_SYMBOL_BATTERY_FULL:
                 cap>55?LV_SYMBOL_BATTERY_3: cap>30?LV_SYMBOL_BATTERY_2: cap>10?LV_SYMBOL_BATTERY_1:LV_SYMBOL_BATTERY_EMPTY;
             char b[32]; snprintf(b,sizeof b,"%s %d%%",sym,cap); lv_label_set_text(batt_lbl,b);
+            if(btbat_lbl){ int hb=bt_audio_battery(NULL,0);   /* headset battery, when it reports one */
+                if(hb>=0){ snprintf(b,sizeof b,LV_SYMBOL_BLUETOOTH " %d%%",hb); lv_label_set_text(btbat_lbl,b);
+                    lv_obj_set_style_text_color(btbat_lbl,lv_color_hex(hb<=15?C_ACCENT:C_DIM),0); }
+                else lv_label_set_text(btbat_lbl,""); }
             lv_obj_set_style_text_color(batt_lbl,lv_color_hex(cap<=15?C_ACCENT:C_DIM),0); } }
     static uint32_t lr=0;
     if(bt_receiver() && now-lr>=120){ lr=now; audio_dac_follow(); }   /* cheap: cached mixer ctls */

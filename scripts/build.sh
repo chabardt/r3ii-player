@@ -10,7 +10,7 @@ mkdir -p build
 
 TA="vendor/tinyalsa/src/pcm.c vendor/tinyalsa/src/pcm_hw.c vendor/tinyalsa/src/pcm_plugin.c vendor/tinyalsa/src/snd_card_plugin.c vendor/tinyalsa/src/mixer.c vendor/tinyalsa/src/mixer_hw.c vendor/tinyalsa/src/mixer_plugin.c vendor/tinyalsa/src/limits.c"
 FAAD="$(find vendor/faad2/libfaad -name '*.c')"
-SRCS="$(find vendor/lvgl/src -name '*.c') $TA $FAAD src/ui/audio.c src/ui/m4a.c src/ui/bt.c src/ui/cover.c src/ui/game.c src/ui/main.c"
+SRCS="$(find vendor/lvgl/src -name '*.c') $TA $FAAD src/ui/audio.c src/ui/m4a.c src/ui/bt.c src/ui/cover.c src/ui/game.c src/ui/hiscore.c src/ui/brick_core.c src/ui/brick.c src/ui/pet_core.c src/ui/pet.c src/ui/main.c"
 
 N=$(nproc 2>/dev/null || echo 4); i=0
 for s in $SRCS; do
@@ -23,6 +23,7 @@ $CC $CFLAGS -c src/ui/audio.c -o src/ui/audio.c.o
 $CC $CFLAGS -c src/ui/bt.c   -o src/ui/bt.c.o
 $CC $CFLAGS -c src/ui/cover.c -o src/ui/cover.c.o
 $CC $CFLAGS -c src/ui/game.c  -o src/ui/game.c.o
+for f in hiscore brick_core brick pet_core pet; do $CC $CFLAGS -c src/ui/$f.c -o src/ui/$f.c.o; done
 $CC $CFLAGS -c src/ui/main.c  -o src/ui/main.c.o
 
 OBJS=""; for s in $SRCS; do OBJS="$OBJS $s.o"; done

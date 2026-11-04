@@ -15,6 +15,7 @@ typedef struct {
     char name[64];
     int  paired, connected;
     int  phone;           /* major device class = phone/computer => a source, not a speaker */
+    int  battery;         /* 0..100 reported by the device (HFP), -1 = unknown */
 } bt_dev_t;
 
 void bt_start(void);                    /* spawn worker: power on, daemons, auto-reconnect */
@@ -25,6 +26,7 @@ void bt_status(char*out,int cap);       /* one-line human status ("Scanning…")
 int  bt_busy(void);
 
 const char* bt_output(void);            /* selected output MAC, "" = headphone jack */
+int  bt_audio_battery(char*name,int cap);   /* battery % of a connected headset/speaker, -1 = none */
 void bt_select_output(const char*mac);  /* "" or NULL = jack; else connect + use it */
 int  bt_receiver(void);
 void bt_set_receiver(int on);           /* phone -> R3 sink mode */

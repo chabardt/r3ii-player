@@ -3,6 +3,7 @@
 # (stock adbd has no exec-out: dd to /tmp on the device, then pull)
 # Inject touches with src/bringup/tap.c:  adb shell /usr/data/r3tap X Y [hold_ms]
 set -e
+command -v adb >/dev/null 2>&1 || PATH="$HOME/.nix-profile/bin:$PATH"
 OUT=${1:-shot.png}; RAW=$(mktemp)
 adb shell "dd if=/dev/fb0 of=/tmp/fb.raw bs=691200 count=1" >/dev/null 2>&1
 adb pull /tmp/fb.raw "$RAW" >/dev/null
