@@ -315,12 +315,51 @@ static void br_back_cb(lv_event_t*e){ char*parent=lv_event_get_user_data(e);
     if(!parent||!parent[0]||!strcmp(parent,"/")) show_home(); else show_browser(parent); }
 static void free_cb(lv_event_t*e){ void*p=lv_event_get_user_data(e); if(p)free(p); }
 
-/* A-Z rail: tap a letter -> scroll the list to the first entry starting with it */
+/* A-Z rail: slide a finger along it -> the list follows smoothly, a big bubble shows the
+ * letter. Rail order is "#" (digits/symbols sort first) then A..Z. Inside a letter's slot
+ * the list position is interpolated toward the next letter's first entry, so dragging
+ * scrolls continuously instead of jumping. */
+#define RAIL_N 27
 static lv_obj_t *g_firstof[27];   /* 0..25 = A..Z, 26 = other/#  (buttons in the current list) */
-static void az_cb(lv_event_t*e){
-    long idx=(long)lv_event_get_user_data(e);
-    for(long k=idx;k<27;k++) if(g_firstof[k]){ lv_obj_scroll_to_view(g_firstof[k],LV_ANIM_OFF); return; }
-    for(long k=idx;k>=0;k--) if(g_firstof[k]){ lv_obj_scroll_to_view(g_firstof[k],LV_ANIM_OFF); return; }
+static lv_obj_t *g_brlist, *g_bubble, *g_bubble_lbl, *g_rail_lbl[RAIL_N]; static int g_rail_hl=-1;
+static int rail_letter(int pos){ return pos==0?26:pos-1; }
+static const char RAIL_TXT[RAIL_N][2]={"#","A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"};
+static void rail_highlight(int pos){
+    if(pos==g_rail_hl) return;
+    if(g_rail_hl>=0){ lv_obj_t*o=g_rail_lbl[g_rail_hl];
+        lv_obj_set_style_text_color(o,lv_color_hex(g_firstof[rail_letter(g_rail_hl)]?C_ACCENT:C_DIM),0);
+        lv_obj_set_style_text_font(o,&lv_font_montserrat_12,0); }
+    g_rail_hl=pos;
+    if(pos>=0){ lv_obj_set_style_text_color(g_rail_lbl[pos],lv_color_hex(C_FG),0);
+        lv_obj_set_style_text_font(g_rail_lbl[pos],&lv_font_montserrat_16,0); }
+}
+static void rail_cb(lv_event_t*e){
+    lv_event_code_t code=lv_event_get_code(e); lv_obj_t*rail=lv_event_get_target(e);
+    if(code==LV_EVENT_RELEASED || code==LV_EVENT_PRESS_LOST){
+        if(g_bubble) lv_obj_add_flag(g_bubble,LV_OBJ_FLAG_HIDDEN); rail_highlight(-1); return; }
+    if(code!=LV_EVENT_PRESSED && code!=LV_EVENT_PRESSING) return;
+    lv_point_t p; lv_indev_get_point(lv_indev_get_act(),&p);
+    lv_area_t a; lv_obj_get_coords(rail,&a);
+    float f=(p.y-a.y1)*(float)RAIL_N/lv_area_get_height(&a);
+    if(f<0)f=0; if(f>RAIL_N-0.001f)f=RAIL_N-0.001f;
+    int pos=(int)f; float frac=f-pos;
+    int k=-1; for(int q=pos;q<RAIL_N;q++) if(g_firstof[rail_letter(q)]){ k=q; break; }   /* empty letter: next one */
+    if(k<0) for(int q=pos;q>=0;q--) if(g_firstof[rail_letter(q)]){ k=q; break; }
+    if(k<0) return;
+    if(k!=pos) frac=0;
+    /* scroll target: from this letter's first row toward the next letter's first row */
+    lv_coord_t y0=lv_obj_get_y(g_firstof[rail_letter(k)]), y1=-1;
+    for(int q=k+1;q<RAIL_N && y1<0;q++) if(g_firstof[rail_letter(q)]) y1=lv_obj_get_y(g_firstof[rail_letter(q)]);
+    if(y1<y0){ uint32_t n=lv_obj_get_child_cnt(g_brlist); lv_obj_t*last=n?lv_obj_get_child(g_brlist,n-1):NULL;
+        y1 = last? lv_obj_get_y(last)+lv_obj_get_height(last) : y0; }
+    lv_coord_t cur=lv_obj_get_scroll_y(g_brlist), maxy=cur+lv_obj_get_scroll_bottom(g_brlist);
+    lv_coord_t t=(lv_coord_t)(y0+frac*(y1-y0)); if(t>maxy)t=maxy; if(t<0)t=0;
+    if(t!=cur) lv_obj_scroll_to_y(g_brlist,t,LV_ANIM_OFF);
+    /* bubble beside the finger, with the letter we are on */
+    lv_label_set_text(g_bubble_lbl,RAIL_TXT[k]);
+    lv_coord_t by=p.y-48; if(by<56)by=56; if(by>720-100)by=720-100;
+    lv_obj_set_pos(g_bubble,330,by); lv_obj_clear_flag(g_bubble,LV_OBJ_FLAG_HIDDEN);
+    rail_highlight(k);
 }
 static int letter_index(const char*disp){ char c=disp[0];
     if(c>='a'&&c<='z')return c-'a'; if(c>='A'&&c<='Z')return c-'A'; return 26; }
@@ -397,15 +436,25 @@ static void show_browser(const char*path){
     lv_obj_set_style_pad_row(rail,0,0); lv_obj_clear_flag(rail,LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(rail,LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(rail,LV_FLEX_ALIGN_SPACE_AROUND,LV_FLEX_ALIGN_CENTER,LV_FLEX_ALIGN_CENTER);
-    static const char LET[27][2]={"A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","#"};
-    for(long k=0;k<27;k++){
-        lv_obj_t*ll=lv_label_create(rail); lv_label_set_text(ll,LET[k]);
-        lv_obj_set_style_text_color(ll,lv_color_hex(g_firstof[k]?C_ACCENT:C_DIM),0);
+    g_rail_hl=-1; g_brlist=list;
+    for(int k=0;k<RAIL_N;k++){
+        lv_obj_t*ll=lv_label_create(rail); lv_label_set_text(ll,RAIL_TXT[k]); g_rail_lbl[k]=ll;
+        lv_obj_set_style_text_color(ll,lv_color_hex(g_firstof[rail_letter(k)]?C_ACCENT:C_DIM),0);
         lv_obj_set_style_text_font(ll,&lv_font_montserrat_12,0);
-        lv_obj_add_flag(ll,LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_ext_click_area(ll,8);
-        lv_obj_add_event_cb(ll,az_cb,LV_EVENT_CLICKED,(void*)k);
     }
+    lv_obj_add_flag(rail,LV_OBJ_FLAG_CLICKABLE); lv_obj_set_ext_click_area(rail,14);   /* the whole rail is the slider */
+    lv_obj_clear_flag(rail,LV_OBJ_FLAG_GESTURE_BUBBLE|LV_OBJ_FLAG_SCROLL_CHAIN);
+    lv_obj_add_event_cb(rail,rail_cb,LV_EVENT_ALL,NULL);
+    /* the zoom bubble (hidden until the rail is touched) */
+    g_bubble=lv_obj_create(scr); lv_obj_set_size(g_bubble,96,96);
+    lv_obj_set_style_radius(g_bubble,LV_RADIUS_CIRCLE,0); lv_obj_set_style_bg_color(g_bubble,lv_color_hex(C_ACCENT),0);
+    lv_obj_set_style_bg_opa(g_bubble,LV_OPA_90,0); lv_obj_set_style_border_width(g_bubble,0,0);
+    lv_obj_set_style_shadow_width(g_bubble,18,0); lv_obj_set_style_shadow_opa(g_bubble,LV_OPA_50,0);
+    lv_obj_clear_flag(g_bubble,LV_OBJ_FLAG_CLICKABLE|LV_OBJ_FLAG_SCROLLABLE);
+    g_bubble_lbl=lv_label_create(g_bubble); lv_label_set_text(g_bubble_lbl,"");
+    lv_obj_set_style_text_font(g_bubble_lbl,&lv_font_montserrat_48,0);
+    lv_obj_set_style_text_color(g_bubble_lbl,lv_color_hex(C_BG),0); lv_obj_center(g_bubble_lbl);
+    lv_obj_add_flag(g_bubble,LV_OBJ_FLAG_HIDDEN);
     g_scr=SCR_BROWSER;
     load_screen(scr);
 }
