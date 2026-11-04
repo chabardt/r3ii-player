@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #define COLS 10
 #define ROWS 18
@@ -174,7 +175,8 @@ static void board_input_cb(lv_event_t*e){
         while(drag_x<=-CELL){ move(-1); drag_x+=CELL; drag_moved=1; }
         lv_obj_invalidate(g_board); return; }
     if(code==LV_EVENT_RELEASED){
-        if(!drag_moved && !paused) rotate();   /* every tap turns at once (fast spins) */
+        if(paused){ paused=0; lv_label_set_text(g_pause,""); last_fall=r3_tick_ms(); }   /* tap resumes */
+        else if(!drag_moved) rotate();   /* every tap turns at once (fast spins) */
         lv_obj_invalidate(g_board); }
 }
 /* keys: next = drop, prev = turn, play = pause/resume (or new game after game over) */
@@ -193,11 +195,28 @@ static void tick_cb(lv_timer_t*t){ (void)t;
     if(over||paused) return; uint32_t now=r3_tick_ms();
     if(now-last_fall>=(uint32_t)fall_ms()){ last_fall=now; step_down(); lv_obj_invalidate(g_board); }
 }
+/* ---- save / resume: the running game is kept when you leave (or power off) ---- */
+#define SAVE_FILE "/usr/data/r3_blockfall.sav"
+#define SAVE_MAGIC 0x42465331u   /* "BFS1" */
+typedef struct { uint32_t magic; unsigned char board[ROWS][COLS]; piece_t cur,nxt;
+    int px,py,score,rows_done,level,piece_no; } bf_save_t;
+void game_save(void){
+    if(!g_scr) return;
+    if(over){ unlink(SAVE_FILE); return; }
+    bf_save_t s; memset(&s,0,sizeof s); s.magic=SAVE_MAGIC; memcpy(s.board,board,sizeof board);
+    s.cur=cur; s.nxt=nxt; s.px=px; s.py=py; s.score=score; s.rows_done=rows_done; s.level=level; s.piece_no=piece_no;
+    FILE*f=fopen(SAVE_FILE,"wb"); if(f){ fwrite(&s,sizeof s,1,f); fclose(f); }
+}
+static int load_save(bf_save_t*s){ FILE*f=fopen(SAVE_FILE,"rb"); if(!f) return 0;
+    int ok=fread(s,sizeof *s,1,f)==1 && s->magic==SAVE_MAGIC; fclose(f); return ok; }
+int game_has_save(int*score_out){ bf_save_t s; if(!load_save(&s)) return 0;
+    if(score_out) *score_out=s.score; return 1; }
+
 static void back_cb(lv_event_t*e){ (void)e; if(g_exit) g_exit(); }
-static void scr_del_cb(lv_event_t*e){ (void)e;
+static void scr_del_cb(lv_event_t*e){ (void)e; game_save();
     if(g_tmr){ lv_timer_del(g_tmr); g_tmr=0; } g_scr=0; }
 
-lv_obj_t* game_create(void (*on_exit)(void)){
+lv_obj_t* game_create(void (*on_exit)(void),int resume){
     g_exit=on_exit; srand((unsigned)time(0)^r3_tick_ms());
     hs_load();
     lv_obj_t*scr=lv_obj_create(NULL); g_scr=scr;
@@ -257,6 +276,13 @@ lv_obj_t* game_create(void (*on_exit)(void)){
     lv_obj_set_style_text_line_space(g_over_lbl,4,0);
     lv_obj_set_style_text_color(g_over_lbl,lv_color_hex(0xF4E4D0),0); lv_obj_center(g_over_lbl);
     reset();
+    bf_save_t sv;
+    if(resume && load_save(&sv)){   /* continue where we left off, paused until a tap */
+        memcpy(board,sv.board,sizeof board); cur=sv.cur; nxt=sv.nxt; px=sv.px; py=sv.py;
+        score=sv.score; rows_done=sv.rows_done; level=sv.level; piece_no=sv.piece_no;
+        paused=1; lv_label_set_text(g_pause,"PAUSED"); update_labels();
+    }
+    unlink(SAVE_FILE);              /* the live game owns the state now (saved again on leave) */
     g_tmr=lv_timer_create(tick_cb,20,NULL);
     return scr;
 }

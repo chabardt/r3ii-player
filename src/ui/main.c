@@ -7,6 +7,7 @@
 #include "bt.h"
 #include "cover.h"
 #include "game.h"
+#include "brick.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -626,7 +627,7 @@ static void idle_poll(void){
     uint32_t now=r3_tick_ms();
     int playing = audio_is_playing() && !audio_is_paused();
     if(g_scr==SCR_CLOCK){ if(playing) show_player(g_pltitle,g_pldir); else clock_update(); return; }
-    if(g_scr==SCR_GAME && game_running()) return;   /* don't yank the player out of a game */
+    if(g_scr==SCR_GAME && (game_running()||brick_running())) return;   /* don't yank the player out of a game */
     if(now-g_last_input < IDLE_MS) return;
     if(playing){ if(g_scr!=SCR_PLAYER) show_player(g_pltitle,g_pldir); }
     else if(!bt_busy()) show_clock();
@@ -916,7 +917,7 @@ static void power_short(void){
     else if(g_pln>0)      show_player(g_pltitle,g_pldir);
     else                  show_browser(MUSIC_ROOT);
 }
-static void do_poweroff(void){ save_resume(); audio_stop(); sync(); system("poweroff"); }
+static void do_poweroff(void){ game_save(); brick_save(); save_resume(); audio_stop(); sync(); system("poweroff"); }
 static void keys_poll(void){
     struct input_event e;
     if(kf_pwr>=0) while(read(kf_pwr,&e,sizeof e)==sizeof e){
@@ -929,14 +930,14 @@ static void keys_poll(void){
                     if(g_scr_off){ screen_wake(); pwr_tap=0; }           /* first press only wakes */
                     else if(pwr_tap){ pwr_tap=0; show_home(); }         /* double press -> Home */
                     else { pwr_tap=1; pwr_tap_t=r3_tick_ms(); } } }
-        } else if(e.code==165 && e.value==1){ if(!(g_scr==SCR_GAME && game_key(165))) pl_prev(); }  /* previous */
+        } else if(e.code==165 && e.value==1){ if(!(g_scr==SCR_GAME && (game_key(165)||brick_key(165)))) pl_prev(); }  /* previous */
     }
     if(kf_media>=0) while(read(kf_media,&e,sizeof e)==sizeof e){
         if(e.type!=EV_KEY) continue;
         g_last_input=r3_tick_ms();
         if(e.code==115 && e.value){ bump_vol(+12); }        /* vol up (incl. autorepeat) */
         else if(e.code==114 && e.value){ bump_vol(-12); }   /* vol down */
-        else if(g_scr==SCR_GAME && e.value==1 && (e.code==163||e.code==164) && game_key(e.code)){}   /* game controls */
+        else if(g_scr==SCR_GAME && e.value==1 && (e.code==163||e.code==164) && (game_key(e.code)||brick_key(e.code))){}   /* game controls */
         else if(e.code==163 && e.value==1){ pl_next(); }    /* next */
         else if(e.code==164 && e.value==1){                 /* play/pause */
             if(!audio_is_playing() && g_pln>0) pl_resume();
@@ -999,15 +1000,52 @@ static void run_doom(int i){
     drain_input(); bl_set(p_bright); g_last_input=r3_tick_ms();
     show_games();                     /* fresh screen => full redraw over Doom's pixels */
 }
-static void games_go_cb(lv_event_t*e){ long i=(long)lv_event_get_user_data(e);
-    if(i<0){ null_live(); lv_obj_t*gs=game_create(show_home); g_scr=SCR_GAME; load_screen(gs); }
+/* built-in games: -1 Blockfall, -2 Brickstorm. A saved unfinished game offers Resume / New. */
+static void start_builtin(long id,int resume){
+    null_live();
+    lv_obj_t*gs = id==-1 ? game_create(show_games,resume) : brick_create(show_games,resume);
+    g_scr=SCR_GAME; load_screen(gs); }
+static lv_obj_t*g_choice; static long g_choice_id;
+static void choice_close(void){ if(g_choice){ lv_obj_del_async(g_choice); g_choice=NULL; } }
+static void choice_cb(lv_event_t*e){ long act=(long)lv_event_get_user_data(e); long id=g_choice_id;
+    choice_close(); if(act>=0) start_builtin(id,act==1); }
+static lv_obj_t* choice_btn(lv_obj_t*p,const char*txt,int primary,long act){
+    lv_obj_t*b=lv_btn_create(p); lv_obj_set_size(b,LV_PCT(100),64);
+    lv_obj_set_style_radius(b,0,0); lv_obj_set_style_shadow_width(b,0,0);
+    lv_obj_set_style_bg_color(b,lv_color_hex(primary?C_ACCENT:C_PANEL2),0);
+    lv_obj_add_event_cb(b,choice_cb,LV_EVENT_CLICKED,(void*)act);
+    lv_obj_t*l=lv_label_create(b); lv_label_set_text(l,txt); lv_obj_center(l);
+    lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0);
+    lv_obj_set_style_text_color(l,lv_color_hex(primary?C_BG:C_FG),0); return b; }
+static void ask_resume(long id,const char*name,int score){
+    g_choice_id=id;
+    g_choice=lv_obj_create(lv_scr_act()); lv_obj_set_size(g_choice,480,720); lv_obj_set_pos(g_choice,0,0);
+    lv_obj_set_style_bg_color(g_choice,lv_color_hex(0x000000),0); lv_obj_set_style_bg_opa(g_choice,LV_OPA_70,0);
+    lv_obj_set_style_border_width(g_choice,0,0); lv_obj_set_style_radius(g_choice,0,0);
+    lv_obj_clear_flag(g_choice,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(g_choice,choice_cb,LV_EVENT_CLICKED,(void*)-1L);    /* tap outside = cancel */
+    lv_obj_t*p=lv_obj_create(g_choice); lv_obj_set_size(p,400,LV_SIZE_CONTENT); lv_obj_center(p);
+    lv_obj_set_style_bg_color(p,lv_color_hex(C_PANEL),0); lv_obj_set_style_radius(p,0,0);
+    lv_obj_set_style_border_color(p,lv_color_hex(C_ACCENT),0); lv_obj_set_style_border_width(p,2,0);
+    lv_obj_set_style_pad_all(p,16,0); lv_obj_set_style_pad_row(p,12,0);
+    lv_obj_set_flex_flow(p,LV_FLEX_FLOW_COLUMN); lv_obj_clear_flag(p,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t*t=lv_label_create(p); lv_label_set_text(t,name);
+    lv_obj_set_style_text_color(t,lv_color_hex(C_ACCENT),0); lv_obj_set_style_text_font(t,&lv_font_montserrat_20,0);
+    char b[48]; snprintf(b,sizeof b,"Resume  (score %d)",score);
+    choice_btn(p,b,1,1); choice_btn(p,"New game",0,0); }
+static void games_go_cb(lv_event_t*e){ long i=(long)lv_event_get_user_data(e); int sc=0;
+    if(i==-1){ if(game_has_save(&sc)) ask_resume(i,"BLOCKFALL",sc); else start_builtin(i,0); }
+    else if(i==-2){ if(brick_has_save(&sc)) ask_resume(i,"BRICKSTORM",sc); else start_builtin(i,0); }
     else run_doom((int)i); }
 static void show_games(void){
     lv_obj_t*scr,*l=page_new("Games",games_back_cb,&scr);
     lv_obj_t*pad=lv_obj_create(l); lv_obj_set_size(pad,10,8);
     lv_obj_set_style_bg_opa(pad,LV_OPA_TRANSP,0); lv_obj_set_style_border_width(pad,0,0);
-    lv_obj_t*r=set_row(l,LV_SYMBOL_SHUFFLE,"Blockfall","falling-block puzzle",0);
+    int sc;
+    lv_obj_t*r=set_row(l,LV_SYMBOL_SHUFFLE,"Blockfall",game_has_save(&sc)?"falling blocks - game in progress":"falling-block puzzle",0);
     lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-1L);
+    r=set_row(l,LV_SYMBOL_STOP,"Brickstorm",brick_has_save(&sc)?"bricks & balls - game in progress":"break the bricks, catch the balls",0);
+    lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-2L);
     struct stat st; int have_bin = stat(DOOM_BIN,&st)==0, any=0;
     for(long i=0;i<NDOOM;i++){
         if(!file_ok(DOOM_DIR,DOOMS[i].iwad) || (DOOMS[i].pwad && !file_ok(DOOM_DIR,DOOMS[i].pwad))) continue;
