@@ -75,9 +75,23 @@ static void hs_load(void){
 }
 static void hs_save(void){ FILE*f=fopen(BEST_FILE,"w"); if(!f) return;
     for(int i=0;i<nhs;i++) fprintf(f,"%d %s\n",hs[i],hsd[i]); fclose(f); }
+/* "LEVEL N" card over the board: fades in, holds, fades out; the game keeps running */
+static lv_obj_t *g_lvl, *g_lvl_lbl;
+static void lvl_opa_cb(void*o,int32_t v){ lv_obj_set_style_opa((lv_obj_t*)o,(lv_opa_t)v,0); }
+static void lvl_done_cb(lv_anim_t*a){ lv_obj_add_flag((lv_obj_t*)a->var,LV_OBJ_FLAG_HIDDEN); }
+static void level_popup_hide(void){ if(!g_lvl) return; lv_anim_del(g_lvl,lvl_opa_cb); lv_obj_add_flag(g_lvl,LV_OBJ_FLAG_HIDDEN); }
+static void level_popup(int lvl){
+    if(!g_lvl) return; char b[48]; snprintf(b,sizeof b,"LEVEL %d\n#8A6A4A faster!#",lvl); lv_label_set_text(g_lvl_lbl,b);
+    lv_anim_del(g_lvl,lvl_opa_cb); lv_obj_set_style_opa(g_lvl,LV_OPA_TRANSP,0); lv_obj_clear_flag(g_lvl,LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(g_lvl);
+    lv_anim_t a; lv_anim_init(&a); lv_anim_set_var(&a,g_lvl); lv_anim_set_exec_cb(&a,lvl_opa_cb);
+    lv_anim_set_values(&a,LV_OPA_TRANSP,LV_OPA_COVER); lv_anim_set_time(&a,180); lv_anim_start(&a);     /* fade in */
+    lv_anim_set_values(&a,LV_OPA_COVER,LV_OPA_TRANSP); lv_anim_set_time(&a,350); lv_anim_set_delay(&a,180+1300);
+    lv_anim_set_ready_cb(&a,lvl_done_cb); lv_anim_start(&a);                                         /* hold, fade out */
+}
 /* game over: enter the score in the table, show the table with this run highlighted */
 static void game_end(void){
-    over=1; int rank=-1;
+    over=1; int rank=-1; level_popup_hide();
     if(score>0){
         for(rank=0;rank<nhs && hs[rank]>=score;rank++);
         if(rank<NHS){
@@ -116,7 +130,8 @@ static void clear_rows(void){
     if(!cleared) return;
     static const int base[]={0,100,300,500,800,1200};
     int pts=base[cleared>5?5:cleared]*level + mono*base[1]*level;   /* single-colour row: double */
-    score+=pts; rows_done+=cleared; level=1+rows_done/10;
+    int was=level; score+=pts; rows_done+=cleared; level=1+rows_done/10;
+    if(level>was) level_popup(level);
 }
 static void lock(void){
     for(int i=0;i<cur.n;i++){ int y=py+cur.y[i], x=px+cur.x[i];
@@ -132,7 +147,7 @@ static void move(int dx){ if(fits(&cur,px+dx,py)) px+=dx; }
 static void reset(void){
     memset(board,0,sizeof board); score=0; rows_done=0; level=1; over=0; paused=0; if(g_pause) lv_label_set_text(g_pause,"");
     gen(&nxt); spawn(); last_fall=r3_tick_ms();
-    lv_obj_add_flag(g_over,LV_OBJ_FLAG_HIDDEN); update_labels();
+    lv_obj_add_flag(g_over,LV_OBJ_FLAG_HIDDEN); level_popup_hide(); update_labels();
 }
 static int fall_ms(void){ int t=720-(level-1)*60; return t<90?90:t; }
 
@@ -227,7 +242,7 @@ int game_has_save(int*score_out){ bf_save_t s; if(!load_save(&s)) return 0;
 
 static void back_cb(lv_event_t*e){ (void)e; if(g_exit) g_exit(); }
 static void scr_del_cb(lv_event_t*e){ (void)e; game_save();
-    if(g_tmr){ lv_timer_del(g_tmr); g_tmr=0; } g_scr=0; }
+    if(g_tmr){ lv_timer_del(g_tmr); g_tmr=0; } g_scr=0; g_lvl=g_lvl_lbl=NULL; }
 
 lv_obj_t* game_create(void (*on_exit)(void),int resume){
     g_exit=on_exit; srand((unsigned)time(0)^r3_tick_ms());
@@ -288,6 +303,15 @@ lv_obj_t* game_create(void (*on_exit)(void),int resume){
     lv_obj_set_style_text_align(g_over_lbl,LV_TEXT_ALIGN_CENTER,0);
     lv_obj_set_style_text_line_space(g_over_lbl,4,0);
     lv_obj_set_style_text_color(g_over_lbl,lv_color_hex(0xF4E4D0),0); lv_obj_center(g_over_lbl);
+    /* level-up card (hidden until a new level) */
+    g_lvl=lv_obj_create(scr); lv_obj_set_size(g_lvl,COLS*CELL-80,120); lv_obj_set_pos(g_lvl,BX+40,BY+ROWS*CELL/2-90);
+    lv_obj_set_style_bg_color(g_lvl,lv_color_hex(0x000000),0); lv_obj_set_style_bg_opa(g_lvl,LV_OPA_80,0);
+    lv_obj_set_style_border_color(g_lvl,lv_color_hex(0xE8731C),0); lv_obj_set_style_border_width(g_lvl,2,0);
+    lv_obj_set_style_radius(g_lvl,18,0); lv_obj_clear_flag(g_lvl,LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_CLICKABLE);
+    g_lvl_lbl=lv_label_create(g_lvl); lv_label_set_recolor(g_lvl_lbl,true);
+    lv_obj_set_style_text_font(g_lvl_lbl,&lv_font_montserrat_28,0); lv_obj_set_style_text_color(g_lvl_lbl,lv_color_hex(0xE8731C),0);
+    lv_obj_set_style_text_align(g_lvl_lbl,LV_TEXT_ALIGN_CENTER,0); lv_obj_center(g_lvl_lbl);
+    lv_obj_add_flag(g_lvl,LV_OBJ_FLAG_HIDDEN);
     reset();
     bf_save_t sv;
     if(resume && load_save(&sv)){   /* continue where we left off, paused until a tap */
