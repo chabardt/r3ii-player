@@ -18,6 +18,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -131,6 +132,115 @@ static int find_cover(const char *rel, char *out, size_t cap) {
         if (stat(p, &st) == 0) { snprintf(out, cap, "%s/%s", rel, names[i]); return 1; } }
     return 0;
 }
+/* ---------------------------------------------------------------- embedded album art
+ * Find the picture inside a track's tags and return where it sits in the file, so it is
+ * served straight from the card (sendfile), never decoded or copied.
+ * FLAC: PICTURE metadata block. MP3: ID3v2.2/2.3/2.4 PIC/APIC frame. M4A: moov/udta/meta/ilst/covr/data.
+ * Front cover (picture type 3) wins over other pictures. */
+static uint32_t rd32(const unsigned char *p) { return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3]; }
+static uint32_t syncsafe(const unsigned char *p) { return ((uint32_t)(p[0] & 0x7f) << 21) | ((p[1] & 0x7f) << 14) | ((p[2] & 0x7f) << 7) | (p[3] & 0x7f); }
+static const char *img_mime(int fd, off_t off) {
+    unsigned char m[4]; if (pread(fd, m, 4, off) != 4) return NULL;
+    if (m[0] == 0xFF && m[1] == 0xD8) return "image/jpeg";
+    if (m[0] == 0x89 && m[1] == 'P' && m[2] == 'N' && m[3] == 'G') return "image/png";
+    return NULL;
+}
+static int art_flac(int fd, off_t fsz, off_t *off, off_t *len) {
+    off_t p = 4; int found = 0; unsigned char h[4];
+    for (int blocks = 0; blocks < 256 && p + 4 <= fsz && pread(fd, h, 4, p) == 4; blocks++) {
+        int last = h[0] & 0x80, type = h[0] & 0x7f; off_t bl = ((off_t)h[1] << 16) | (h[2] << 8) | h[3];
+        if (type == 6 && bl >= 32) {
+            unsigned char b[8]; off_t q = p + 4;
+            if (pread(fd, b, 8, q) != 8) break; uint32_t ptype = rd32(b), ml = rd32(b + 4); q += 8 + ml;
+            if (pread(fd, b, 4, q) != 4) break; q += 4 + rd32(b) + 16;          /* description, w/h/depth/colours */
+            if (pread(fd, b, 4, q) != 4) break; off_t dl = rd32(b); q += 4;
+            if (dl > 0 && q + dl <= p + 4 + bl && (!found || ptype == 3)) { *off = q; *len = dl; found = 1 + (ptype == 3); }
+            if (found == 2) return 1; }
+        p += 4 + bl; if (last) break; }
+    return found > 0;
+}
+static int art_id3(int fd, off_t fsz, off_t *off, off_t *len) {
+    unsigned char h[10]; if (pread(fd, h, 10, 0) != 10) return 0;
+    int ver = h[3]; if (ver < 2 || ver > 4 || (h[5] & 0x80)) return 0;          /* unsynchronised tags: skip */
+    off_t end = 10 + (off_t)syncsafe(h + 6), p = 10; if (end > fsz) end = fsz; int found = 0;
+    if (ver >= 3 && (h[5] & 0x40)) { unsigned char e[4]; if (pread(fd, e, 4, p) != 4) return 0;
+        p += ver == 4 ? syncsafe(e) : rd32(e) + 4; }
+    while (p + 10 <= end) {
+        unsigned char f[10]; int hl = ver == 2 ? 6 : 10;
+        if (pread(fd, f, hl, p) != hl || !f[0]) break;                          /* padding */
+        off_t fl = ver == 2 ? (((off_t)f[3] << 16) | (f[4] << 8) | f[5]) : ver == 4 ? syncsafe(f + 4) : rd32(f + 4);
+        off_t body = p + hl; if (fl <= 0 || body + fl > end) break;
+        int pic = ver == 2 ? !memcmp(f, "PIC", 3) : !memcmp(f, "APIC", 4);
+        int plain = ver == 2 || !(f[9] & 0x0f);                                  /* no compression / per-frame unsync */
+        if (pic && plain) {
+            unsigned char b[512]; int n = (int)pread(fd, b, fl < (off_t)sizeof b ? (size_t)fl : sizeof b, body), i;
+            if (n > 4) {
+                int enc = b[0]; i = 1;
+                if (ver == 2) i += 3; else { while (i < n && b[i]) i++; i++; }       /* image format / MIME */
+                int ptype = i < n ? b[i] : 0; i++;
+                if (enc == 1 || enc == 2) { while (i + 1 < n && (b[i] || b[i + 1])) i += 2; i += 2; }   /* UTF-16 description */
+                else { while (i < n && b[i]) i++; i++; }
+                if (i < n && (!found || ptype == 3)) { *off = body + i; *len = fl - i; found = 1 + (ptype == 3); }
+                if (found == 2) return 1; } }
+        p = body + fl; }
+    return found > 0;
+}
+/* MP4 atoms: find child `name` inside [s,e) */
+static int mp4_child(int fd, off_t s, off_t e, const char *name, off_t *cs, off_t *ce) {
+    unsigned char h[16];
+    for (int n = 0; n < 4096 && s + 8 <= e && pread(fd, h, 16, s) >= 8; n++) {
+        off_t sz = rd32(h), hl = 8;
+        if (sz == 1) { sz = ((off_t)rd32(h + 8) << 32) | rd32(h + 12); hl = 16; } else if (sz == 0) sz = e - s;
+        if (sz < hl || s + sz > e) return 0;
+        if (!memcmp(h + 4, name, 4)) { *cs = s + hl; *ce = s + sz; return 1; }
+        s += sz; }
+    return 0;
+}
+static int art_mp4(int fd, off_t fsz, off_t *off, off_t *len) {
+    off_t a, b, c, d;
+    if (!mp4_child(fd, 0, fsz, "moov", &a, &b) || !mp4_child(fd, a, b, "udta", &a, &b) ||
+        !mp4_child(fd, a, b, "meta", &a, &b)) return 0;
+    a += 4;                                                                     /* meta is a full box */
+    if (!mp4_child(fd, a, b, "ilst", &a, &b) || !mp4_child(fd, a, b, "covr", &a, &b) ||
+        !mp4_child(fd, a, b, "data", &c, &d) || d - c <= 8) return 0;
+    *off = c + 8; *len = d - c - 8; return 1;                                   /* type + locale */
+}
+/* embedded picture of a track: 1 + region and MIME */
+static int art_embedded(const char *rel, off_t *off, off_t *len, const char **mime) {
+    char p[1600]; snprintf(p, sizeof p, "%s/%s", ROOT, rel);
+    int fd = open(p, O_RDONLY); if (fd < 0) return 0;
+    struct stat st; unsigned char h[12]; int ok = 0;
+    if (fstat(fd, &st) == 0 && pread(fd, h, 12, 0) == 12) {
+        if (!memcmp(h, "fLaC", 4)) ok = art_flac(fd, st.st_size, off, len);
+        else if (!memcmp(h, "ID3", 3)) ok = art_id3(fd, st.st_size, off, len);
+        else if (!memcmp(h + 4, "ftyp", 4)) ok = art_mp4(fd, st.st_size, off, len);
+        if (ok && *len > 16 * 1024 * 1024) ok = 0;
+        if (ok) { *mime = img_mime(fd, *off); ok = *mime != NULL; } }
+    close(fd); return ok;
+}
+/* album art for a folder or a track, as a server path ("f/<cover file>" or "art/<track>"); 0 = none */
+static int art_for(const char *rel, int is_dir, char *out, size_t cap) {
+    char dir[1024], cov[1200]; off_t o, l; const char *m;
+    if (!is_dir && art_embedded(rel, &o, &l, &m)) { snprintf(out, cap, "art/%s", rel); return 1; }
+    snprintf(dir, sizeof dir, "%s", rel);
+    if (!is_dir) { char *s = strrchr(dir, '/'); if (s) *s = 0; else return 0; }
+    if (!is_dir) { if (find_cover(dir, cov, sizeof cov)) { snprintf(out, cap, "f/%s", cov); return 1; } return 0; }
+    /* folder: one pass over it (SD card lookups are slow): a cover file, else the first of
+     * up to 3 tracks that carries a picture */
+    static const char *names[] = { "cover.jpg", "folder.jpg", "front.jpg", "cover.png", "folder.png", NULL };
+    char p[1600], tracks[3][256]; int nt = 0; snprintf(p, sizeof p, "%s/%s", ROOT, dir);
+    DIR *d = opendir(p); if (!d) return 0; struct dirent *e;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        for (int i = 0; names[i]; i++) if (!strcasecmp(e->d_name, names[i])) {
+            snprintf(out, cap, "f/%s/%s", dir, e->d_name); closedir(d); return 1; }
+        if (nt < 3 && e->d_type != DT_DIR && audio_mime(e->d_name)) snprintf(tracks[nt++], sizeof tracks[0], "%s", e->d_name); }
+    closedir(d);
+    for (int i = 0; i < nt; i++) { char t[1600]; snprintf(t, sizeof t, "%s/%s", dir, tracks[i]);
+        if (art_embedded(t, &o, &l, &m)) { snprintf(out, cap, "art/%s", t); return 1; } }
+    return 0;
+}
+#define ART_RICH 100      /* listings up to this size get per-entry art; bigger ones stay fast */
 static void display_name(const char *fname, int dir, char *out, size_t cap) {
     snprintf(out, cap, "%s", fname);
     if (!dir) { char *d = strrchr(out, '.'); if (d) *d = 0; }
@@ -235,6 +345,17 @@ static void serve_file(conn_t *c, const char *rel, const char *range, int head) 
     if (is_audio) status_write();
 }
 
+/* /art/<track>: the picture embedded in the track, straight from the file */
+static void serve_art(conn_t *c, const char *rel, int head) {
+    off_t off, len; const char *mime;
+    if (!audio_mime(rel) || !art_embedded(rel, &off, &len, &mime)) { respond(c, 404, "text/plain", "no picture\n", 11, NULL); return; }
+    respond(c, 200, mime, NULL, (size_t)len, "Cache-Control: max-age=86400\r\n");
+    if (head) return;
+    char p[1600]; snprintf(p, sizeof p, "%s/%s", ROOT, rel);
+    c->ffd = open(p, O_RDONLY); if (c->ffd < 0) { conn_close(c); return; }
+    c->fpos = off; c->fend = off + len; c->is_stream = 0;                       /* pictures don't count as listeners */
+}
+
 /* ---------------------------------------------------------------- UPnP */
 static void upnp_desc(conn_t *c) {
     buf_t b = { 0 };
@@ -313,10 +434,17 @@ static int soap_arg(const char *body, const char *tag, char *out, size_t cap) {
 }
 /* object IDs: "0" = root, else the relative library path */
 static const char *rel_of_id(const char *id) { return strcmp(id, "0") ? id : ""; }
-static void didl_container(buf_t *d, const char *id, const char *parent, const char *title, int childs) {
+/* <upnp:albumArtURI> for a server path ("f/..." or "art/...") */
+static void didl_art(buf_t *d, const char *host, const char *art) {
+    if (!art) return; buf_t u = { 0 }; bprintf(&u, "http://%s/", host); burl(&u, art);
+    bprintf(d, "<upnp:albumArtURI>");
+    bxml(d, u.p); bprintf(d, "</upnp:albumArtURI>"); free(u.p);
+}
+static void didl_container(buf_t *d, const char *host, const char *id, const char *parent, const char *title, int childs, const char *art) {
     bprintf(d, "<container id=\""); bxml(d, id); bprintf(d, "\" parentID=\""); bxml(d, parent);
     bprintf(d, "\" restricted=\"1\" childCount=\"%d\"><dc:title>", childs); bxml(d, title);
-    bprintf(d, "</dc:title><upnp:class>object.container.storageFolder</upnp:class></container>");
+    bprintf(d, "</dc:title><upnp:class>object.container.storageFolder</upnp:class>");
+    didl_art(d, host, art); bprintf(d, "</container>");
 }
 static void didl_item(buf_t *d, const char *host, const char *rel, const char *parent, const char *title, const char *cover) {
     char p[1600]; struct stat st; snprintf(p, sizeof p, "%s/%s", ROOT, rel);
@@ -324,8 +452,7 @@ static void didl_item(buf_t *d, const char *host, const char *rel, const char *p
     bprintf(d, "<item id=\""); bxml(d, rel); bprintf(d, "\" parentID=\""); bxml(d, parent);
     bprintf(d, "\" restricted=\"1\"><dc:title>"); bxml(d, title);
     bprintf(d, "</dc:title><upnp:class>object.item.audioItem.musicTrack</upnp:class>");
-    if (cover) { buf_t u = { 0 }; bprintf(&u, "http://%s/f/", host); burl(&u, cover);
-        bprintf(d, "<upnp:albumArtURI>"); bxml(d, u.p); bprintf(d, "</upnp:albumArtURI>"); free(u.p); }
+    didl_art(d, host, cover);
     buf_t u = { 0 }; bprintf(&u, "http://%s/f/", host); burl(&u, rel);
     bprintf(d, "<res protocolInfo=\"http-get:*:%s:*\" size=\"%lld\">", audio_mime(rel), sz); bxml(d, u.p);
     bprintf(d, "</res></item>"); free(u.p);
@@ -365,23 +492,30 @@ static void cds_control(conn_t *c, const char *soapaction, const char *body) {
     char parent[1024]; snprintf(parent, sizeof parent, "%s", rel); { char *s = strrchr(parent, '/'); if (s) *s = 0; else snprintf(parent, sizeof parent, "%s", rel[0] ? "0" : "-1"); }
     if (!strcmp(flag, "BrowseMetadata")) {
         char p[1600]; struct stat st; snprintf(p, sizeof p, "%s/%s", ROOT, rel);
-        if (!rel[0]) didl_container(&d, "0", "-1", NAME, 2);
-        else if (stat(p, &st) == 0 && S_ISDIR(st.st_mode)) { const char *t = strrchr(rel, '/'); didl_container(&d, rel, parent, t ? t + 1 : rel, 0); }
+        char art[1700];
+        if (!rel[0]) didl_container(&d, c->host, "0", "-1", NAME, 2, NULL);
+        else if (stat(p, &st) == 0 && S_ISDIR(st.st_mode)) { const char *t = strrchr(rel, '/');
+            didl_container(&d, c->host, rel, parent, t ? t + 1 : rel, 0, art_for(rel, 1, art, sizeof art) ? art : NULL); }
         else if (stat(p, &st) == 0 && audio_mime(rel)) { const char *t = strrchr(rel, '/'); char dn[300]; display_name(t ? t + 1 : rel, 0, dn, sizeof dn);
-            char cover[1200], dir[1024]; snprintf(dir, sizeof dir, "%s", rel); char *s = strrchr(dir, '/'); if (s) *s = 0;
-            didl_item(&d, c->host, rel, parent, dn, find_cover(dir, cover, sizeof cover) ? cover : NULL); }
+            didl_item(&d, c->host, rel, parent, dn, art_for(rel, 0, art, sizeof art) ? art : NULL); }
         else { free(d.p); soap_fault(c, 701, "No such object"); return; }
         returned = total = 1;
     } else {
         int n; ent_t *v = list_dir(rel, &n);
         if (rel[0] && !v) { free(d.p); soap_fault(c, 701, "No such object"); return; }
-        char cover[1200]; int has_cover = rel[0] && find_cover(rel, cover, sizeof cover);
+        /* folder art for its tracks: a cover file, or (big folders) the first embedded picture */
+        char fcov[1700]; int rich = n <= ART_RICH, has_cover = 0;
+        if (rel[0]) { char cover[1200];
+            if (find_cover(rel, cover, sizeof cover)) { snprintf(fcov, sizeof fcov, "f/%s", cover); has_cover = 1; }
+            else if (!rich) has_cover = art_for(rel, 1, fcov, sizeof fcov); }
         total = n;
         for (int i = start; i < n && returned < count; i++, returned++) {
-            char sub[1600], dn[300]; snprintf(sub, sizeof sub, "%s%s%s", rel, rel[0] ? "/" : "", v[i].name);
+            char sub[1600], dn[300], art[1700]; snprintf(sub, sizeof sub, "%s%s%s", rel, rel[0] ? "/" : "", v[i].name);
             display_name(v[i].name, v[i].dir, dn, sizeof dn);
-            if (v[i].dir) didl_container(&d, sub, rel[0] ? rel : "0", dn, 0);
-            else didl_item(&d, c->host, sub, rel[0] ? rel : "0", dn, has_cover ? cover : NULL); }
+            if (v[i].dir) didl_container(&d, c->host, sub, rel[0] ? rel : "0", dn, 0,
+                                         rel[0] && rich && art_for(sub, 1, art, sizeof art) ? art : NULL);
+            else didl_item(&d, c->host, sub, rel[0] ? rel : "0", dn,
+                           has_cover ? fcov : rich && art_for(sub, 0, art, sizeof art) ? art : NULL); }
         free(v);
     }
     bprintf(&d, "</DIDL-Lite>");
@@ -424,12 +558,14 @@ static void handle(conn_t *c) {
     else if (!strncmp(path, "/browse/", 8)) { rel = path + 8; kind = 1; }
     else if (!strncmp(path, "/m3u/", 5)) { rel = path + 5; kind = 2; }
     else if (!strncmp(path, "/f/", 3)) { rel = path + 3; kind = 3; }
+    else if (!strncmp(path, "/art/", 5)) { rel = path + 5; kind = 4; }
     if (!kind) { respond(c, 404, "text/plain", "not found\n", 10, NULL); return; }
     char clean[4096]; snprintf(clean, sizeof clean, "%s", rel);
     size_t L = strlen(clean); while (L && clean[L - 1] == '/') clean[--L] = 0;
     if (!safe_rel(clean)) { respond(c, 404, "text/plain", "not found\n", 10, NULL); return; }
     if (kind == 1) page_browse(c, clean);
     else if (kind == 2) page_m3u(c, clean);
+    else if (kind == 4) serve_art(c, clean, head);
     else serve_file(c, clean, header(c->req, "Range", range, sizeof range), head);
 }
 
