@@ -1259,7 +1259,17 @@ static void pad_action(int a){
 static void heartbeat(void){ static uint32_t lh=0; uint32_t n=r3_tick_ms();
     if(n-lh>=2000){ lh=n; printf("hb %lu\n",(unsigned long)n); } }
 static void fmt_ms(long ms,char*o,int c){ long s=ms/1000; snprintf(o,c,"%ld:%02ld",s/60,s%60); }
+/* SD card hot-plug: mount when the card appears, lazily unmount when it is pulled */
+static int sd_mounted(void){ FILE*f=fopen("/proc/mounts","r"); if(!f) return 0; char l[256]; int m=0;
+    while(fgets(l,sizeof l,f)) if(strstr(l," /usr/data/mnt/sd_0 ")) m=1; fclose(f); return m; }
+static void sd_hotplug(void){
+    int present = access("/dev/mmcblk0p1",F_OK)==0, mounted=sd_mounted();
+    if(present && !mounted){ mkdir("/usr/data/mnt",0755); mkdir("/usr/data/mnt/sd_0",0755);
+        if(mount("/dev/mmcblk0p1","/usr/data/mnt/sd_0","vfat",0,"codepage=936,iocharset=utf8")==0) DBG("sd mounted\n"); }
+    else if(!present && mounted){ umount2("/usr/data/mnt/sd_0",MNT_DETACH); DBG("sd removed\n"); }
+}
 static void tick_ui(void){
+    { static uint32_t lsd; uint32_t t=r3_tick_ms(); if(t-lsd>=3000){ lsd=t; sd_hotplug(); } }
     static uint32_t lc=0,lp=0; uint32_t now=r3_tick_ms();
     static uint32_t ls=0;   /* keep the resume point fresh: survives restarts / flat battery, not just power-off */
     if(audio_is_playing() && !audio_is_paused() && now-ls>=30000){ ls=now; save_resume(); }
@@ -1328,7 +1338,7 @@ int main(int argc,char**argv){
     signal(SIGHUP,SIG_IGN); signal(SIGPIPE,SIG_IGN); signal(SIGCHLD,SIG_IGN);
     dbgf=fopen("/usr/data/r3dbg.log","w");
     mkdir("/usr/data/mnt",0755); mkdir("/usr/data/mnt/sd_0",0755);
-    mount("/dev/mmcblk0p1","/usr/data/mnt/sd_0","vfat",0,"codepage=936,iocharset=utf8");
+    sd_hotplug();                  /* mount the SD card (and keep watching for insert / removal) */
     /* NOTE: no hiby_player DAC-init — the "it makes sound loud" was a volume red herring;
        the codec needs no stock init, so we boot straight into our UI (fast, no stock flash). */
     fb_init(); lv_init();
