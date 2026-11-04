@@ -1253,8 +1253,7 @@ static void show_scores(void){
             lv_obj_t*d=lv_label_create(row); lv_label_set_text(d,h.d[i]);
             lv_obj_set_style_text_color(d,lv_color_hex(C_DIM),0); lv_obj_align(d,LV_ALIGN_RIGHT_MID,-4,0); }
     }
-    lv_obj_t*sp=lv_obj_create(l); lv_obj_set_size(sp,10,16);
-    lv_obj_set_style_bg_opa(sp,LV_OPA_TRANSP,0); lv_obj_set_style_border_width(sp,0,0);
+    lv_obj_t*sp=lv_obj_create(l); lv_obj_remove_style_all(sp); lv_obj_set_size(sp,10,16);   /* gap, draws nothing */
     lv_obj_t*rb=lv_btn_create(l); lv_obj_set_size(rb,LV_PCT(100),56);
     lv_obj_set_style_radius(rb,R_BTN,0); lv_obj_set_style_shadow_width(rb,0,0);
     lv_obj_set_style_bg_color(rb,lv_color_hex(C_PANEL),0);
