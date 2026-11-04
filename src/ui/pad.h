@@ -12,6 +12,7 @@ int  pad_held(int action);           /* is it held right now */
 float pad_stick_x(void);             /* -1..1, 0 in the dead zone */
 int  pad_count(void);                /* connected controllers */
 const char* pad_name(int i);
+int  pad_battery(int i,int*charging);  /* 0..100 (Joy-Con: 25 % steps), -1 unknown */
 /* last raw event, for the "test buttons" page: type/code/value + device name */
 void pad_last_raw(int*type,int*code,int*value,const char**dev);
 #endif

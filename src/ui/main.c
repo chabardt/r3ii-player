@@ -575,7 +575,9 @@ static void settings_fill(void){
     set_section(set_list,"CONTROLLERS");
     for(int i=0;i<nd;i++){ if(!d[i].pad) continue;
         snprintf(set_macs[k],18,"%s",d[i].mac);
-        r=set_row(set_list,LV_SYMBOL_KEYBOARD,d[i].name,d[i].connected?"connected":"press a button on it to reconnect",d[i].connected);
+        { char ps[48]; int chg=0, pb=-1; for(int j=0;j<pad_count();j++) if(!strcmp(pad_name(j),d[i].name)) pb=pad_battery(j,&chg);
+          if(pb>=0) snprintf(ps,sizeof ps,"connected - battery %d%%%s",pb,chg?" (charging)":"");
+          r=set_row(set_list,LV_SYMBOL_KEYBOARD,d[i].name,pb>=0?ps:d[i].connected?"connected":"press a button on it to reconnect",d[i].connected); }
         lv_obj_add_event_cb(r,set_forget_cb,LV_EVENT_LONG_PRESSED,(void*)(long)k);
         k++; }
     r=set_row(set_list,LV_SYMBOL_EYE_OPEN,"Test buttons",pad_count()?pad_name(0):"no controller connected",0);
@@ -1298,10 +1300,12 @@ static void tick_ui(void){
         if(cap>=0){ const char*sym= !strncmp(st,"Charging",8)?LV_SYMBOL_CHARGE: cap>80?LV_SYMBOL_BATTERY_FULL:
                 cap>55?LV_SYMBOL_BATTERY_3: cap>30?LV_SYMBOL_BATTERY_2: cap>10?LV_SYMBOL_BATTERY_1:LV_SYMBOL_BATTERY_EMPTY;
             char b[32]; snprintf(b,sizeof b,"%s %d%%",sym,cap); lv_label_set_text(batt_lbl,b);
-            if(btbat_lbl){ int hb=bt_audio_battery(NULL,0);   /* headset battery, when it reports one */
-                if(hb>=0){ snprintf(b,sizeof b,LV_SYMBOL_BLUETOOTH " %d%%",hb); lv_label_set_text(btbat_lbl,b);
-                    lv_obj_set_style_text_color(btbat_lbl,lv_color_hex(hb<=15?C_ACCENT:C_DIM),0); }
-                else lv_label_set_text(btbat_lbl,""); }
+            if(btbat_lbl){ int hb=bt_audio_battery(NULL,0), chg=0, pb=pad_battery(0,&chg); char t[48]="";
+                /* headset (HFP / BLE) and game controller batteries, when they report one */
+                if(hb>=0) snprintf(t,sizeof t,LV_SYMBOL_BLUETOOTH " %d%%",hb);
+                if(pb>=0) snprintf(t+strlen(t),sizeof t-strlen(t),"%s" LV_SYMBOL_KEYBOARD " %d%%%s",t[0]?"  ":"",pb,chg?"+":"");
+                lv_label_set_text(btbat_lbl,t);
+                lv_obj_set_style_text_color(btbat_lbl,lv_color_hex((hb>=0&&hb<=15)||(pb>=0&&pb<=25&&!chg)?C_ACCENT:C_DIM),0); }
             lv_obj_set_style_text_color(batt_lbl,lv_color_hex(cap<=15?C_ACCENT:C_DIM),0); } }
     static uint32_t lr=0;
     if(bt_receiver() && now-lr>=120){ lr=now; audio_dac_follow(); }   /* cheap: cached mixer ctls */

@@ -125,6 +125,13 @@ static void do_refresh(void){
                      "/org/bluealsa/hci0/dev_%s/rfcomm org.freedesktop.DBus.Properties.Get "
                      "string:org.bluealsa.RFCOMM1 string:Battery 2>/dev/null",mp);
             sh(cmd,out,sizeof out);
+            char*b=strstr(out,"byte "); if(b){ int v=atoi(b+5); if(v>=0&&v<=100) tmp[i].battery=v; } }
+        if(tmp[i].connected && tmp[i].battery<0){   /* else the standard BlueZ battery (BLE / some headsets) */
+            char mp[24],cmd[256],out[512]; snprintf(mp,sizeof mp,"%s",tmp[i].mac); for(char*c=mp;*c;c++) if(*c==':')*c='_';
+            snprintf(cmd,sizeof cmd,"dbus-send --system --print-reply --reply-timeout=1500 --dest=org.bluez "
+                     "/org/bluez/hci0/dev_%s org.freedesktop.DBus.Properties.Get "
+                     "string:org.bluez.Battery1 string:Percentage 2>/dev/null",mp);
+            sh(cmd,out,sizeof out);
             char*b=strstr(out,"byte "); if(b){ int v=atoi(b+5); if(v>=0&&v<=100) tmp[i].battery=v; } } }
     /* stable order: speakers first, then by name */
     for(int i=0;i<n;i++) for(int j=i+1;j<n;j++){
