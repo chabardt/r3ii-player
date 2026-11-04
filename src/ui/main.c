@@ -1105,6 +1105,7 @@ static void run_doom(int i){
     if(rc!=0){ DBG("doom spawn failed %d\n",rc); return; }
     DBG("doom started pid %d (%s)\n",(int)pid,DOOMS[i].name);
     waitpid(pid,0,0);                 /* SIGCHLD=SIG_IGN: returns once it has exited */
+    { FILE*vf=fopen(VOL_FILE,"r"); int v; if(vf){ if(fscanf(vf,"%d",&v)==1) audio_set_volume(v); fclose(vf); } }   /* volume set in the game */
     drain_input(); bl_set(p_bright); g_last_input=r3_tick_ms();
     show_games();                     /* fresh screen => full redraw over Doom's pixels */
 }
@@ -1145,6 +1146,7 @@ static void run_gb(int i){
     posix_spawn_file_actions_destroy(&fa);
     if(rc!=0){ DBG("r3gb spawn failed %d\n",rc); return; }
     waitpid(pid,0,0);
+    { FILE*vf=fopen(VOL_FILE,"r"); int v; if(vf){ if(fscanf(vf,"%d",&v)==1) audio_set_volume(v); fclose(vf); } }   /* volume set in the game */
     drain_input(); bl_set(p_bright); g_last_input=r3_tick_ms();
     show_gb_list();
 }

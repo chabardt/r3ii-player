@@ -20,6 +20,9 @@
 #include "d_event.h"
 #include "i_video.h"
 #include "pad.h"
+#include "volbar.h"
+static uint32_t vb_until; static int vb_vol=160;      /* volume bar */
+void r3snd_apply_volume(void);
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -159,14 +162,10 @@ static void poll_keys(void){
     if(pwr_down && now_ms()-pwr_t>=1200){ fprintf(stderr,"[r3doom] long power: quit\n"); exit(0); }
     while(km_fd>=0 && read(km_fd,&e,sizeof e)==sizeof e){ if(e.type!=EV_KEY || e.value==2) continue;
         if(e.code==164) key(KEY_USE,e.value);                              /* play = use */
-        else if(e.code==163) key(KEY_TAB,e.value);                         /* next = automap */
-        else if(e.value && (e.code==115||e.code==114) && landscape_mode()){       /* controller: keys = volume */
-            int v=160; FILE*f=fopen("/usr/data/r3_vol","r"); if(f){ if(fscanf(f,"%d",&v)!=1) v=160; fclose(f); }
-            v+= e.code==115?12:-12; if(v<0)v=0; if(v>255)v=255;
-            f=fopen("/usr/data/r3_vol","w"); if(f){ fprintf(f,"%d\n",v); fclose(f); } }   /* r3snd applies it */
-        else if(e.value==1 && (e.code==115||e.code==114)){                 /* touch mode: vol = weapons */
-            weapon += e.code==115?1:-1; if(weapon>7)weapon=1; if(weapon<1)weapon=7;
-            tapkey((unsigned char)('0'+weapon)); }
+        else if(e.code==163 && e.value!=2){ if(e.value) tapkey(']'); }         /* next = next weapon */
+        else if(e.value && (e.code==115||e.code==114)){                     /* volume, like r3player */
+            vb_vol+= e.code==115?12:-12; if(vb_vol<0)vb_vol=0; if(vb_vol>255)vb_vol=255;
+            vb_save(vb_vol); r3snd_apply_volume(); vb_until=now_ms()+2000; }
     }
 }
 
@@ -180,7 +179,7 @@ void DG_Init(){
     ts_fd=open("/dev/input/event1",O_RDONLY|O_NONBLOCK);
     kp_fd=open("/dev/input/event0",O_RDONLY|O_NONBLOCK);
     km_fd=open("/dev/input/event2",O_RDONLY|O_NONBLOCK);
-    knob_x=stick_cx; knob_y=stick_cy;
+    knob_x=stick_cx; knob_y=stick_cy; vb_vol=vb_load();
     draw_deck(knob_x,knob_y,0); deck_dirty=0;
 }
 /* ---------------- game controller (Joy-Con...): landscape, no touch deck ----------------
@@ -228,14 +227,17 @@ void DG_DrawFrame(){
     const unsigned char*src=(const unsigned char*)DG_ScreenBuffer;
     if(landscape){
         for(int py=0;py<SH;py++){ const unsigned char*s=src+lx[py]; uint16_t*d=fb+py*fbstride;
-            for(int px=15;px<465;px++) d[px]=lut[s[ly[px]*320]]; }
+            for(int px=(now_ms()<vb_until?VB_THICK:15);px<465;px++) d[px]=lut[s[ly[px]*320]]; }
+        if(now_ms()<vb_until) vb_draw(fb,fbstride,1,vb_vol);
+        else if(vb_until){ vb_until=0; vb_erase(fb,fbstride,1); }        /* clears the letterbox too */
         pad_to_keys(); poll_keys();
         { struct input_event e; while(read(ts_fd,&e,sizeof e)==sizeof e){} }   /* touch off */
         return; }
-    for(int y=0;y<GH;y++){ const unsigned char*s=src+ym[y]*320; uint16_t*d=fb+y*fbstride;
+    for(int y=(now_ms()<vb_until?VB_THICK:0);y<GH;y++){ const unsigned char*s=src+ym[y]*320; uint16_t*d=fb+y*fbstride;
         for(int x=0;x<SW;x++) d[x]=lut[s[xm[x]]]; }
     poll_touch(); poll_keys();
     if(deck_dirty){ draw_deck(knob_x,knob_y,fire_held); deck_dirty=0; }
+    if(now_ms()<vb_until) vb_draw(fb,fbstride,0,vb_vol); else if(vb_until){ vb_until=0; }
 }
 void DG_SleepMs(uint32_t ms){ usleep(ms*1000); }
 uint32_t DG_GetTicksMs(){ return now_ms()-t0; }

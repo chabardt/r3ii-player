@@ -22,6 +22,8 @@ static uint8_t audio_read(const uint16_t addr){ return minigb_apu_audio_read(&ap
 static void audio_write(const uint16_t addr,const uint8_t val){ minigb_apu_audio_write(&apu,addr,val); }
 #include "peanut_gb.h"
 #include "pad.h"
+#include "volbar.h"
+static uint32_t vb_until;          /* volume bar visible until */
 #include "tinyalsa/pcm.h"
 #include "tinyalsa/mixer.h"
 #include <stdio.h>
@@ -68,7 +70,8 @@ static inline uint16_t rgb(uint32_t c){ return (uint16_t)(((c>>8)&0xF800)|((c>>5
 static void draw_line(struct gb_s*g,const uint8_t*px,const uint_fast8_t line){ (void)g;
     uint16_t row[SW];
     for(int x=0;x<160;x++){ uint16_t c=pal[(px[x]&LCD_PALETTE_ALL)>>4][px[x]&3]; row[x*3]=row[x*3+1]=row[x*3+2]=c; }
-    for(int k=0;k<3;k++) memcpy(fb+(line*3+k)*fbstride,row,sizeof row);
+    for(int k=0;k<3;k++){ int r=line*3+k; if(r<VB_THICK && now_ms()<vb_until) continue;   /* under the volume bar */
+        memcpy(fb+r*fbstride,row,sizeof row); }
 }
 
 /* ---------- deck (touch controls) ---------- */
@@ -163,7 +166,8 @@ static void poll_keys(int*bits){
     while(km_fd>=0 && read(km_fd,&e,sizeof e)==sizeof e){ if(e.type!=EV_KEY) continue;
         if(e.code==163) *bits = e.value ? (*bits|JOYPAD_A) : (*bits&~JOYPAD_A);
         else if(e.code==164) *bits = e.value ? (*bits|JOYPAD_START) : (*bits&~JOYPAD_START);
-        else if(e.value && (e.code==115||e.code==114)){ vol+= e.code==115?12:-12; if(vol<0)vol=0; if(vol>255)vol=255; hw_volume(); } }
+        else if(e.value && (e.code==115||e.code==114)){ vol+= e.code==115?12:-12; if(vol<0)vol=0; if(vol>255)vol=255;
+            hw_volume(); vb_save(vol); vb_until=now_ms()+2000; } }
 }
 static int pad_bits(void){
     int b=0;
@@ -198,7 +202,7 @@ int main(int argc,char**argv){
     gb_init_lcd(&gb,draw_line);
     minigb_apu_audio_init(&apu);
     for(int p=0;p<3;p++) for(int i=0;i<4;i++) pal[p][i]=rgb(SHADE[i]);
-    { FILE*v=fopen("/usr/data/r3_vol","r"); if(v){ if(fscanf(v,"%d",&vol)!=1) vol=160; fclose(v); } }
+    vol=vb_load();
 
     int fd=open("/dev/fb0",O_RDWR); struct fb_var_screeninfo vi; struct fb_fix_screeninfo fi;
     ioctl(fd,FBIOGET_VSCREENINFO,&vi); ioctl(fd,FBIOGET_FSCREENINFO,&fi);
@@ -243,6 +247,8 @@ int main(int argc,char**argv){
                  if(++vol_tick%30==0) hw_volume(); }      /* volume only sticks while the codec runs */
         else {   /* no DAC (e.g. busy): pace by the clock, 59.73 Hz */
             next+=17; uint32_t n=now_ms(); if((int32_t)(next-n)>0) usleep((next-n)*1000); else next=n; }
+        if(now_ms()<vb_until) vb_draw(fb,fbstride,0,vol);          /* r3player-style volume bar */
+        else if(vb_until){ vb_until=0; }                                /* next frame redraws those rows */
         if(now_ms()-last_save>60000){ last_save=now_ms(); save_ram(); }
     }
     save_ram();

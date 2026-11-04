@@ -14,7 +14,7 @@ if [ "$1" = host ]; then
 fi
 TC=toolchain/mipsel-linux-musl-cross/bin/mipsel-linux-musl-
 ARCH="-march=mips32r2 -mabi=32 -mhard-float -EL"
-CFLAGS="$ARCH -O2 -fno-pie -ffunction-sections -fdata-sections -w $DEFS -I $DG -I vendor/tinyalsa/include -I src/ui"
+CFLAGS="$ARCH -O2 -fno-pie -ffunction-sections -fdata-sections -w $DEFS -I $DG -I vendor/tinyalsa/include -I src/ui -I src/common"
 N=$(nproc 2>/dev/null || echo 4); i=0; OBJS=""
 for s in $SRCS; do o=build/dg_$(basename "$s" .c).o; OBJS="$OBJS $o"
   ( ${TC}gcc $CFLAGS -c "$s" -o "$o" ) & i=$((i+1)); [ $((i % N)) -eq 0 ] && wait

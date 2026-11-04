@@ -3,7 +3,7 @@
 set -e
 TC=toolchain/mipsel-linux-musl-cross/bin/mipsel-linux-musl-
 ARCH="-march=mips32r2 -mabi=32 -mhard-float -EL"
-CFLAGS="$ARCH -O2 -fno-pie -ffunction-sections -fdata-sections -I vendor/peanut_gb -I src/ui -I vendor/tinyalsa/include"
+CFLAGS="$ARCH -O2 -fno-pie -ffunction-sections -fdata-sections -I vendor/peanut_gb -I src/ui -I src/common -I vendor/tinyalsa/include"
 DEFS="-DMINIGB_APU_AUDIO_FORMAT_S16SYS -DAUDIO_SAMPLE_RATE=48000"
 mkdir -p build
 TA="vendor/tinyalsa/src/pcm.c vendor/tinyalsa/src/pcm_hw.c vendor/tinyalsa/src/pcm_plugin.c vendor/tinyalsa/src/snd_card_plugin.c vendor/tinyalsa/src/mixer.c vendor/tinyalsa/src/mixer_hw.c vendor/tinyalsa/src/mixer_plugin.c vendor/tinyalsa/src/limits.c"

@@ -120,3 +120,4 @@ void I_InitTimidityConfig(void){}
 /* config variables the FEATURE_SOUND code binds (libsamplerate is not used here) */
 int use_libsamplerate = 0;
 float libsamplerate_scale = 0.65f;
+void r3snd_apply_volume(void){ route_and_volume(); }   /* volume keys: apply now */
