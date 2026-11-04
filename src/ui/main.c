@@ -10,6 +10,7 @@
 #include "brick.h"
 #include "coil.h"
 #include "hiscore.h"
+#include "wifi.h"
 #include "pet.h"
 #include "pad.h"
 #include <stdio.h>
@@ -927,22 +928,128 @@ static void show_datetime(void){
 
 /* ---- Settings menu ---- */
 static void setup_home_cb(lv_event_t*e){ (void)e; show_home(); }
+/* ---- Settings > Wi-Fi: radio, networks, music server ---- */
+static lv_obj_t *wf_list; static int wf_ver=-1; static wifi_net_t wf_nets[WIFI_MAX]; static int wf_n;
+static char wf_pw_ssid[33]; static lv_obj_t *wf_pw_ta;
+static void show_wifi(void);
+static void wf_back_cb(lv_event_t*e){ (void)e; show_setup(); }
+static void wf_del_cb(lv_event_t*e){   /* screens are deleted after the next one loads: only drop our own list */
+    if(wf_list && lv_obj_get_screen(wf_list)==lv_event_get_target(e)) wf_list=NULL; }
+static void wf_onoff_cb(lv_event_t*e){ lv_obj_t*sw=lv_event_get_target(e); wifi_set_enabled(lv_obj_has_state(sw,LV_STATE_CHECKED)); }
+static void wf_srv_cb(lv_event_t*e){ lv_obj_t*sw=lv_event_get_target(e); wifi_set_server(lv_obj_has_state(sw,LV_STATE_CHECKED)); }
+static void wf_scan_cb(lv_event_t*e){ (void)e; wifi_scan(); }
+static void wf_forget_cb(lv_event_t*e){ long i=(long)lv_event_get_user_data(e);
+    if(i>=0 && i<wf_n && wf_nets[i].saved) wifi_forget(wf_nets[i].ssid); }
+/* password page */
+static void wf_pw_back_cb(lv_event_t*e){ (void)e; wf_pw_ta=NULL; show_wifi(); }
+static void wf_pw_go(void){ if(!wf_pw_ta) return; const char*pw=lv_textarea_get_text(wf_pw_ta);
+    if(strlen(pw)<8) return;                                  /* WPA needs 8+ characters */
+    wifi_connect(wf_pw_ssid,pw); lv_textarea_set_text(wf_pw_ta,""); wf_pw_ta=NULL; show_wifi(); }
+static void wf_pw_kb_cb(lv_event_t*e){ if(lv_event_get_code(e)==LV_EVENT_READY) wf_pw_go();
+    else if(lv_event_get_code(e)==LV_EVENT_CANCEL){ wf_pw_ta=NULL; show_wifi(); } }
+static void wf_pw_show_cb(lv_event_t*e){ lv_obj_t*sw=lv_event_get_target(e);
+    if(wf_pw_ta) lv_textarea_set_password_mode(wf_pw_ta,!lv_obj_has_state(sw,LV_STATE_CHECKED)); }
+static void show_wifi_password(const char*ssid){
+    snprintf(wf_pw_ssid,sizeof wf_pw_ssid,"%s",ssid);
+    lv_obj_t*scr,*l=page_new("Password",wf_pw_back_cb,&scr);
+    lv_obj_set_height(l,720-54-300);
+    lv_obj_t*t=lv_label_create(l); char tt[64]; snprintf(tt,sizeof tt,"%s",ssid); fold(tt); lv_label_set_text(t,tt);
+    lv_obj_set_style_text_font(t,&lv_font_montserrat_20,0); lv_obj_set_style_text_color(t,lv_color_hex(C_FG),0);
+    lv_obj_set_style_pad_top(t,14,0); lv_obj_set_style_pad_left(t,6,0);
+    wf_pw_ta=lv_textarea_create(l); lv_obj_set_width(wf_pw_ta,LV_PCT(100)); lv_textarea_set_one_line(wf_pw_ta,true);
+    lv_textarea_set_password_mode(wf_pw_ta,true); lv_textarea_set_max_length(wf_pw_ta,63);
+    lv_textarea_set_placeholder_text(wf_pw_ta,"Wi-Fi password");
+    lv_obj_set_style_text_font(wf_pw_ta,&lv_font_montserrat_20,0);
+    lv_obj_set_style_bg_color(wf_pw_ta,lv_color_hex(C_PANEL),0); lv_obj_set_style_text_color(wf_pw_ta,lv_color_hex(C_FG),0);
+    lv_obj_set_style_border_color(wf_pw_ta,lv_color_hex(C_ACCENT),0); lv_obj_set_style_radius(wf_pw_ta,R_BTN,0);
+    lv_obj_add_state(wf_pw_ta,LV_STATE_FOCUSED);
+    lv_obj_t*row=set_row(l,LV_SYMBOL_EYE_OPEN,"Show password",NULL,0); lv_obj_clear_flag(row,LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t*sw=lv_switch_create(row); lv_obj_align(sw,LV_ALIGN_RIGHT_MID,-4,0);
+    lv_obj_set_style_bg_color(sw,lv_color_hex(C_ACCENT),LV_PART_INDICATOR|LV_STATE_CHECKED);
+    lv_obj_add_event_cb(sw,wf_pw_show_cb,LV_EVENT_VALUE_CHANGED,NULL);
+    lv_obj_t*h=lv_label_create(l); lv_label_set_text(h,"Tap " LV_SYMBOL_OK " on the keyboard to connect.");
+    lv_obj_set_style_text_color(h,lv_color_hex(C_DIM),0); lv_obj_set_style_pad_left(h,6,0);
+    lv_obj_t*kb=lv_keyboard_create(scr); lv_obj_set_size(kb,480,300); lv_obj_align(kb,LV_ALIGN_BOTTOM_MID,0,0);
+    lv_keyboard_set_textarea(kb,wf_pw_ta);
+    lv_obj_set_style_bg_color(kb,lv_color_hex(C_BAR),0);
+    lv_obj_set_style_bg_color(kb,lv_color_hex(C_PANEL),LV_PART_ITEMS);
+    lv_obj_set_style_text_color(kb,lv_color_hex(C_FG),LV_PART_ITEMS);
+    lv_obj_set_style_radius(kb,8,LV_PART_ITEMS); lv_obj_set_style_border_width(kb,0,LV_PART_ITEMS);
+    lv_obj_set_style_bg_color(kb,lv_color_hex(C_ACCENT),LV_PART_ITEMS|LV_STATE_CHECKED);
+    lv_obj_set_style_text_font(kb,&lv_font_montserrat_20,LV_PART_ITEMS);
+    lv_obj_add_event_cb(kb,wf_pw_kb_cb,LV_EVENT_ALL,NULL);
+    g_scr=SCR_SETTINGS; load_screen(scr);
+}
+static void wf_net_cb(lv_event_t*e){ long i=(long)lv_event_get_user_data(e); if(i<0||i>=wf_n) return;
+    wifi_net_t*n=&wf_nets[i]; if(n->current) return;
+    if(n->saved || !n->secured) wifi_connect(n->ssid,NULL); else show_wifi_password(n->ssid); }
+static lv_obj_t* wf_switch(lv_obj_t*row,int on,lv_event_cb_t cb){
+    lv_obj_clear_flag(row,LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t*sw=lv_switch_create(row); lv_obj_align(sw,LV_ALIGN_RIGHT_MID,-4,0);
+    lv_obj_set_style_bg_color(sw,lv_color_hex(C_ACCENT),LV_PART_INDICATOR|LV_STATE_CHECKED);
+    if(on) lv_obj_add_state(sw,LV_STATE_CHECKED);
+    lv_obj_add_event_cb(sw,cb,LV_EVENT_VALUE_CHANGED,NULL); return sw; }
+static void wifi_fill(void){
+    if(!wf_list) return;
+    wf_ver=wifi_version();
+    lv_coord_t sy=lv_obj_get_scroll_y(wf_list); lv_obj_clean(wf_list);
+    char st[80], ip[20], sub[96]; wifi_status(st,sizeof st); fold(st); wifi_ip(ip,sizeof ip);
+    lv_obj_t*sp=lv_obj_create(wf_list); lv_obj_remove_style_all(sp); lv_obj_set_size(sp,10,8);
+    lv_obj_t*r=set_row(wf_list,LV_SYMBOL_WIFI,"Wi-Fi",st,0); wf_switch(r,wifi_enabled(),wf_onoff_cb);
+    if(!wifi_enabled()){ lv_obj_t*n=lv_label_create(wf_list);
+        lv_label_set_text(n,"Turn Wi-Fi on to share your music with\nVLC and other players on this network.\nWi-Fi uses more battery.");
+        lv_obj_set_style_text_color(n,lv_color_hex(C_DIM),0); lv_obj_set_style_pad_all(n,12,0); return; }
+
+    set_section(wf_list,"MUSIC SERVER");
+    if(!wifi_server()) snprintf(sub,sizeof sub,"let VLC on this network play your library");
+    else if(!ip[0]) snprintf(sub,sizeof sub,"starts once Wi-Fi is connected");
+    else if(!wifi_server_running()) snprintf(sub,sizeof sub,"starting...");
+    else { int s=wifi_server_streams(); if(s) snprintf(sub,sizeof sub,"%d playing now - http://%s:%d",s,ip,WIFI_SRV_PORT);
+           else snprintf(sub,sizeof sub,"on - http://%s:%d",ip,WIFI_SRV_PORT); }
+    r=set_row(wf_list,LV_SYMBOL_UPLOAD,"Share music",sub,0); wf_switch(r,wifi_server(),wf_srv_cb);
+    if(wifi_server() && ip[0]){ lv_obj_t*n=lv_label_create(wf_list);
+        lv_label_set_text(n,"VLC: View > Playlist > Local Network >\nUniversal Plug'n'Play > HiBy R3.\nOr open the address in a browser.");
+        lv_obj_set_style_text_color(n,lv_color_hex(C_DIM),0); lv_obj_set_style_pad_all(n,8,0); }
+
+    set_section(wf_list,"NETWORKS");
+    r=set_row(wf_list,LV_SYMBOL_REFRESH,wifi_busy()?"Working...":"Scan",NULL,0);
+    lv_obj_add_event_cb(r,wf_scan_cb,LV_EVENT_CLICKED,NULL);
+    wf_n=wifi_nets(wf_nets,WIFI_MAX);
+    for(long i=0;i<wf_n;i++){ wifi_net_t*n=&wf_nets[i];
+        const char*bars = !n->signal?"not in range":n->signal>-60?"strong":n->signal>-72?"good":"weak";
+        if(n->current) snprintf(sub,sizeof sub,"connected%s%s",ip[0]?" - ":"",ip);
+        else if(n->saved) snprintf(sub,sizeof sub,"saved - %s - hold to forget",bars);
+        else snprintf(sub,sizeof sub,"%s - %s",n->secured?"password":"open",bars);
+        r=set_row(wf_list,n->secured?LV_SYMBOL_WIFI:LV_SYMBOL_WARNING,n->ssid,sub,n->current);
+        lv_obj_add_event_cb(r,wf_net_cb,LV_EVENT_SHORT_CLICKED,(void*)i);
+        if(n->saved) lv_obj_add_event_cb(r,wf_forget_cb,LV_EVENT_LONG_PRESSED,(void*)i); }
+    lv_obj_t*pad=lv_obj_create(wf_list); lv_obj_remove_style_all(pad); lv_obj_set_size(pad,10,40);
+    lv_obj_update_layout(wf_list); lv_obj_scroll_to_y(wf_list,sy,LV_ANIM_OFF);
+}
+static void show_wifi(void){
+    lv_obj_t*scr; wf_list=page_new("Wi-Fi",wf_back_cb,&scr);
+    lv_obj_add_event_cb(scr,wf_del_cb,LV_EVENT_DELETE,NULL);
+    wifi_fill(); if(wifi_enabled()) wifi_scan();
+    g_scr=SCR_SETTINGS; load_screen(scr);
+}
 static void setup_go_cb(lv_event_t*e){ long i=(long)lv_event_get_user_data(e);
-    if(i==0) show_settings(); else if(i==1) show_display(); else if(i==2) show_sounds(); else show_datetime(); }
+    if(i==0) show_settings(); else if(i==1) show_wifi(); else if(i==2) show_display(); else if(i==3) show_sounds(); else show_datetime(); }
 static void show_setup(void){
     lv_obj_t*scr,*l=page_new("Settings",setup_home_cb,&scr);
-    static const char*ic[4]={LV_SYMBOL_BLUETOOTH,LV_SYMBOL_IMAGE,LV_SYMBOL_AUDIO,LV_SYMBOL_BELL};
-    static const char*nm[4]={"Bluetooth","Display","Sounds","Date & time"};
-    char sub[4][48];
-    snprintf(sub[0],48,"%s",bt_output()[0]?"output: speaker":"output: headphone jack");
-    if(p_timeout) snprintf(sub[1],48,"brightness %d%%, off after %d%s",p_bright*100/101,
+    static const char*ic[5]={LV_SYMBOL_BLUETOOTH,LV_SYMBOL_WIFI,LV_SYMBOL_IMAGE,LV_SYMBOL_AUDIO,LV_SYMBOL_BELL};
+    static const char*nm[5]={"Bluetooth","Wi-Fi","Display","Sounds","Date & time"};
+    char sub[5][64];
+    snprintf(sub[0],64,"%s",bt_output()[0]?"output: speaker":"output: headphone jack");
+    { char st[64]; wifi_status(st,sizeof st); fold(st);
+      snprintf(sub[1],64,"%s%s",st,wifi_enabled()&&wifi_server()?", sharing music":""); }
+    if(p_timeout) snprintf(sub[2],64,"brightness %d%%, off after %d%s",p_bright*100/101,
                            p_timeout>=60?p_timeout/60:p_timeout,p_timeout>=60?" min":" s");
-    else snprintf(sub[1],48,"brightness %d%%, always on",p_bright*100/101);
-    snprintf(sub[2],48,"filter %d%s",p_filter+1,p_nos?", NOS":"");
-    { time_t t=time(0); struct tm tm; localtime_r(&t,&tm); strftime(sub[3],48,"%d/%m/%Y %H:%M",&tm); }
+    else snprintf(sub[2],64,"brightness %d%%, always on",p_bright*100/101);
+    snprintf(sub[3],64,"filter %d%s",p_filter+1,p_nos?", NOS":"");
+    { time_t t=time(0); struct tm tm; localtime_r(&t,&tm); strftime(sub[4],64,"%d/%m/%Y %H:%M",&tm); }
     lv_obj_t*pad=lv_obj_create(l); lv_obj_set_size(pad,10,8);
     lv_obj_set_style_bg_opa(pad,LV_OPA_TRANSP,0); lv_obj_set_style_border_width(pad,0,0);
-    for(long i=0;i<4;i++){ lv_obj_t*r=set_row(l,ic[i],nm[i],sub[i],0);
+    for(long i=0;i<5;i++){ lv_obj_t*r=set_row(l,ic[i],nm[i],sub[i],0);
         lv_obj_t*ch=lv_label_create(r); lv_label_set_text(ch,LV_SYMBOL_RIGHT);
         lv_obj_set_style_text_color(ch,lv_color_hex(C_DIM),0); lv_obj_align(ch,LV_ALIGN_RIGHT_MID,-6,0);
         lv_obj_add_event_cb(r,setup_go_cb,LV_EVENT_CLICKED,(void*)i); }
@@ -1349,6 +1456,7 @@ static void tick_ui(void){
             lv_slider_set_value(np_prog,(int32_t)((long long)pos*1000/dur),LV_ANIM_OFF);
     }
     if(set_list && bt_version()!=set_ver) settings_fill();
+    if(wf_list && wifi_version()!=wf_ver) wifi_fill();
     static uint32_t lpet=0;
     if(now-lpet>=30000 || !lpet){ lpet=now|1; pet_tick();
         if(pet_bell){ if(pet_needs_you()) lv_obj_clear_flag(pet_bell,LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(pet_bell,LV_OBJ_FLAG_HIDDEN); } }
@@ -1430,6 +1538,7 @@ int main(int argc,char**argv){
         if(strcmp(argv[1],"-a")) show_player(b?b+1:argv[2],"/usr/data/mnt/sd_0/Music");
     }
     g_last_input=r3_tick_ms();
+    wifi_start();                  /* Wi-Fi worker: radio + music server, if switched on */
     bt_start();                    /* BT worker: daemons, auto-reconnect remembered speaker */
     printf("r3player UI up\n");
     for(;;){
