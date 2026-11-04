@@ -169,7 +169,9 @@ static int ensure_uhid(void){
 }
 static void do_init(void){
     set_status("Starting Bluetooth...");
-    if(ensure_uhid()) g_jobs|=J_RX;                       /* restart the receiver too if it was on */
+    /* The stock kernel already has Bluetooth HID (a paired Joy-Con shows up as eventN),
+     * so ensure_uhid() is kept only as a fallback for kernels without it. */
+    if(0 && ensure_uhid()) g_jobs|=J_RX;
     sh("bt-adapter --set Powered On >/dev/null 2>&1",0,0);
     char ps[4096]; sh("ps",ps,sizeof ps);
     /* stock runs source-only with --a2dp-volume ("native": volume is only reported over
@@ -237,7 +239,11 @@ static void do_rx(void){
     } else set_status("");
 }
 static void do_out(void){
-    char mac[18]; pthread_mutex_lock(&mu); snprintf(mac,sizeof mac,"%s",g_out); pthread_mutex_unlock(&mu);
+    char mac[18]; pthread_mutex_lock(&mu); snprintf(mac,sizeof mac,"%s",g_out);
+    /* a controller (or phone) can't be an audio output — e.g. picked with an older build */
+    for(int i=0;i<g_ndev;i++) if(!strcmp(g_dev[i].mac,mac) && (g_dev[i].pad||g_dev[i].phone)){
+        g_out[0]=0; mac[0]=0; save_state(); bump(); }
+    pthread_mutex_unlock(&mu);
     write_alsa_conf(mac);
     if(!mac[0]){ audio_reroute(0); set_status("Output: headphone jack"); return; }
     char m[96]; snprintf(m,sizeof m,"Connecting %s...",name_of(mac)); set_status(m);

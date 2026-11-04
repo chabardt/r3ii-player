@@ -37,6 +37,17 @@ static void set(int a,int on){
 }
 /* standard (kernel-mapped) codes first, then generic joystick button numbers */
 static int map_key(const pad_t*p,int code){
+    /* hid-generic numbers a gamepad's HID buttons 0x130+N (seen on the R3: Joy-Con (L)
+     * advertises keys 0x130-0x13f). For Joy-Con N is the Nintendo button index, not the
+     * standard BTN_SOUTH... meaning, so map by index. */
+    if(p->joycon && code>=BTN_GAMEPAD && code<BTN_GAMEPAD+16){
+        /* measured on a Joy-Con (L) held sideways (stick on the left): arrow buttons
+         * Down/Right/Left/Up = 0x130/131/132/133 = A (east) / X (north) / B (south) / Y (west);
+         * SL/SR 0x134/135, minus 0x138, stick click 0x13a, capture 0x13d, L 0x13e, ZL 0x13f.
+         * The stick arrives as HAT0X/HAT0Y already in the sideways frame. */
+        static const int JC[16]={PA_A,PA_X,PA_B,PA_Y, PA_L,PA_R,-1,-1, PA_MINUS,PA_PLUS,-1,-1,
+                                 PA_HOME,PA_HOME, PA_L,PA_R};   /* capture = Home (L has no Home) */
+        return JC[code-BTN_GAMEPAD]; }
     switch(code){
     case BTN_SOUTH: return PA_A;   case BTN_EAST: return PA_B;    /* A / B (Nintendo layout swaps) */
     case BTN_NORTH: return PA_X;   case BTN_WEST: return PA_Y;
@@ -63,6 +74,19 @@ static void dirs(void){       /* stick + hat -> the four directions */
 }
 static float norm(int v,int mn,int mx){ if(mx<=mn) return 0; float f=(2.0f*(v-mn)/(mx-mn))-1; if(f>-0.18f&&f<0.18f) f=0; return f; }
 
+/* A Joy-Con sweeps its four lights until the host assigns it a player number. Send
+ * subcommand 0x30 (set player lights) = player 1 through its hidraw node, like a Switch:
+ * output report 0x01: [0x01, counter, 8 bytes neutral rumble, subcmd, arg], 49 bytes. */
+static void joycon_player_light(int evnum){
+    char p[128]; snprintf(p,sizeof p,"/sys/class/input/event%d/device/device/hidraw",evnum);
+    DIR*d=opendir(p); if(!d) return; struct dirent*e; char dev[64]="";
+    while((e=readdir(d))) if(!strncmp(e->d_name,"hidraw",6)){ snprintf(dev,sizeof dev,"/dev/%s",e->d_name); break; }
+    closedir(d); if(!dev[0]) return;
+    int fd=open(dev,O_WRONLY|O_NONBLOCK); if(fd<0){ fprintf(stderr,"[pad] %s: %s\n",dev,strerror(errno)); return; }
+    unsigned char r[49]={0x01,0x00, 0x00,0x01,0x40,0x40,0x00,0x01,0x40,0x40, 0x30,0x01};
+    int n=(int)write(fd,r,sizeof r); close(fd);
+    fprintf(stderr,"[pad] player light via %s: %d\n",dev,n);
+}
 static int is_pad(int fd){
     unsigned char ev[EV_MAX/8+1]={0}, key[KEY_MAX/8+1]={0}, abs_[ABS_MAX/8+1]={0};
     if(ioctl(fd,EVIOCGBIT(0,sizeof ev),ev)<0) return 0;
@@ -84,6 +108,7 @@ static void scan(void){
         pad_t*p=&P[np]; memset(p,0,sizeof *p); p->fd=fd; p->num=num;
         ioctl(fd,EVIOCGNAME(sizeof p->name-1),p->name);
         p->joycon = strstr(p->name,"Joy-Con")!=NULL;
+        if(p->joycon) joycon_player_light(num);
         struct input_absinfo ai;
         if(ioctl(fd,EVIOCGABS(ABS_X),&ai)==0){ p->ax_min=ai.minimum; p->ax_max=ai.maximum; }
         if(ioctl(fd,EVIOCGABS(ABS_Y),&ai)==0){ p->ay_min=ai.minimum; p->ay_max=ai.maximum; }
@@ -102,6 +127,7 @@ void pad_poll(void){
             if(e.type==EV_KEY && e.value!=2) set(map_key(p,e.code),e.value);
             else if(e.type==EV_ABS){
                 if(e.code==ABS_HAT0X) hat_x=e.value; else if(e.code==ABS_HAT0Y) hat_y=e.value;
+                else if(p->joycon) continue;   /* Joy-Con HID mode: the stick is the hat; X/Y are filler */
                 else if(e.code==ABS_X) stick_x=norm(e.value,p->ax_min,p->ax_max);
                 else if(e.code==ABS_Y) stick_y=norm(e.value,p->ay_min,p->ay_max);
                 else continue;

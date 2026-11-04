@@ -574,7 +574,7 @@ static void settings_fill(void){
     set_section(set_list,"CONTROLLERS");
     for(int i=0;i<nd;i++){ if(!d[i].pad) continue;
         snprintf(set_macs[k],18,"%s",d[i].mac);
-        r=set_row(set_list,LV_SYMBOL_KEYBOARD,d[i].name,d[i].connected?"connected - press a button to wake":"press a button on it to reconnect",d[i].connected);
+        r=set_row(set_list,LV_SYMBOL_KEYBOARD,d[i].name,d[i].connected?"connected":"press a button on it to reconnect",d[i].connected);
         lv_obj_add_event_cb(r,set_forget_cb,LV_EVENT_LONG_PRESSED,(void*)(long)k);
         k++; }
     r=set_row(set_list,LV_SYMBOL_EYE_OPEN,"Test buttons",pad_count()?pad_name(0):"no controller connected",0);
