@@ -11,7 +11,9 @@ gcc -O1 -w $INC -DPET_FILE=\"$SAVE\" '-Dtime(x)=fake_time(x)' -c src/ui/pet.c -o
 gcc -O1 -w $INC -c src/ui/pet_core.c -o build/hostobj/pet_core.o
 gcc -O1 -w $INC '-Dtime(x)=fake_time(x)' -c src/ui/brick.c -o build/hostobj/brick.o
 gcc -O1 -w $INC -c src/ui/brick_core.c -o build/hostobj/brick_core.o
+gcc -O1 -w $INC '-Dtime(x)=fake_time(x)' -c src/ui/coil.c -o build/hostobj/coil.o
+gcc -O1 -w $INC -c src/ui/coil_core.c -o build/hostobj/coil_core.o
 gcc -O1 -w $INC -c src/ui/hiscore.c -o build/hostobj/hiscore.o
 gcc -O1 -w $INC -DPET_FILE=\"$SAVE\" -o build/ui_render tests/ui_render.c $OBJS \
-    build/hostobj/pet.o build/hostobj/pet_core.o build/hostobj/brick.o build/hostobj/brick_core.o build/hostobj/hiscore.o -lz -lm
-for s in egg baby child day bramble grub night dark elder brick; do build/ui_render $s build/shots/$s.png; done
+    build/hostobj/pet.o build/hostobj/pet_core.o build/hostobj/brick.o build/hostobj/brick_core.o build/hostobj/coil.o build/hostobj/coil_core.o build/hostobj/hiscore.o -lz -lm
+for s in egg baby child day bramble grub night dark elder brick coil; do build/ui_render $s build/shots/$s.png; done

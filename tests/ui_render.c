@@ -5,6 +5,7 @@
 #include "pet.h"
 #include "pet_core.h"
 #include "brick.h"
+#include "coil.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,7 @@
 static uint32_t fake_ms; static time_t fake_now;
 uint32_t r3_tick_ms(void){ return fake_ms; }
 time_t fake_time(time_t*t){ if(t)*t=fake_now; return fake_now; }
+float pad_stick_x(void){ return 0; } int pad_held(int a){ (void)a; return 0; }   /* no controller on the host */
 
 static uint16_t fb[480*720];
 static void flush(lv_disp_drv_t*d,const lv_area_t*a,lv_color_t*c){
@@ -41,6 +43,7 @@ int main(int argc,char**argv){
     static lv_disp_drv_t dd; lv_disp_drv_init(&dd); dd.draw_buf=&db; dd.flush_cb=flush; dd.hor_res=480; dd.ver_res=720;
     lv_disp_drv_register(&dd);
     if(!strncmp(scene,"brick",5)){ lv_scr_load(brick_create(noexit,0)); run(400); png(out); return 0; }
+    if(!strncmp(scene,"coil",4)){ lv_scr_load(coil_create(noexit,0)); run(900); png(out); return 0; }
     /* pet scenes: write a save file, then open the screen */
     struct tm tm={0}; tm.tm_year=126; tm.tm_mon=10; tm.tm_mday=4; tm.tm_isdst=-1;
     pet_t p; pet_new(&p,0,3);

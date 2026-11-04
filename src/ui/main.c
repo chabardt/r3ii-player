@@ -8,6 +8,7 @@
 #include "cover.h"
 #include "game.h"
 #include "brick.h"
+#include "coil.h"
 #include "pet.h"
 #include "pad.h"
 #include <stdio.h>
@@ -728,7 +729,7 @@ static void idle_poll(void){
     uint32_t now=r3_tick_ms();
     int playing = audio_is_playing() && !audio_is_paused();
     if(g_scr==SCR_CLOCK){ if(playing) show_player(g_pltitle,g_pldir); else clock_update(); return; }
-    if(g_scr==SCR_GAME && (game_running()||brick_running()||pet_shown())) return;   /* don't yank the player out of a game */
+    if(g_scr==SCR_GAME && (game_running()||brick_running()||coil_running()||pet_shown())) return;   /* don't yank the player out of a game */
     if(pt_lbl) return;                               /* controller test page stays up */
     if(now-g_last_input < IDLE_MS) return;
     if(playing){ if(g_scr!=SCR_PLAYER) show_player(g_pltitle,g_pldir); }
@@ -1024,7 +1025,7 @@ static void power_short(void){
     else if(g_pln>0)      show_player(g_pltitle,g_pldir);
     else                  show_browser(MUSIC_ROOT);
 }
-static void do_poweroff(void){ game_save(); brick_save(); save_resume(); audio_stop(); sync(); system("poweroff"); }
+static void do_poweroff(void){ game_save(); brick_save(); coil_save(); save_resume(); audio_stop(); sync(); system("poweroff"); }
 static void keys_poll(void){
     struct input_event e;
     if(kf_pwr>=0) while(read(kf_pwr,&e,sizeof e)==sizeof e){
@@ -1037,14 +1038,14 @@ static void keys_poll(void){
                     if(g_scr_off){ screen_wake(); pwr_tap=0; }           /* first press only wakes */
                     else if(pwr_tap){ pwr_tap=0; show_home(); }         /* double press -> Home */
                     else { pwr_tap=1; pwr_tap_t=r3_tick_ms(); } } }
-        } else if(e.code==165 && e.value==1){ if(!(g_scr==SCR_GAME && (game_key(165)||brick_key(165)))) pl_prev(); }  /* previous */
+        } else if(e.code==165 && e.value==1){ if(!(g_scr==SCR_GAME && (game_key(165)||brick_key(165)||coil_key(165)))) pl_prev(); }  /* previous */
     }
     if(kf_media>=0) while(read(kf_media,&e,sizeof e)==sizeof e){
         if(e.type!=EV_KEY) continue;
         g_last_input=r3_tick_ms();
         if(e.code==115 && e.value){ bump_vol(+12); }        /* vol up (incl. autorepeat) */
         else if(e.code==114 && e.value){ bump_vol(-12); }   /* vol down */
-        else if(g_scr==SCR_GAME && e.value==1 && (e.code==163||e.code==164) && (game_key(e.code)||brick_key(e.code))){}   /* game controls */
+        else if(g_scr==SCR_GAME && e.value==1 && (e.code==163||e.code==164) && (game_key(e.code)||brick_key(e.code)||coil_key(e.code))){}   /* game controls */
         else if(e.code==163 && e.value==1){ pl_next(); }    /* next */
         else if(e.code==164 && e.value==1){                 /* play/pause */
             if(!audio_is_playing() && g_pln>0) pl_resume();
@@ -1169,10 +1170,10 @@ static void show_gb_list(void){
     lv_obj_set_style_text_color(n,lv_color_hex(C_DIM),0); lv_obj_set_style_pad_all(n,12,0);
     g_scr=SCR_SETTINGS; load_screen(scr);
 }
-/* built-in games: -1 Blockfall, -2 Brickstorm. A saved unfinished game offers Resume / New. */
+/* built-in games: -1 Blockfall, -2 Brickstorm, -5 Coil. A saved unfinished game offers Resume / New. */
 static void start_builtin(long id,int resume){
     null_live();
-    lv_obj_t*gs = id==-1 ? game_create(show_games,resume) : brick_create(show_games,resume);
+    lv_obj_t*gs = id==-1 ? game_create(show_games,resume) : id==-5 ? coil_create(show_games,resume) : brick_create(show_games,resume);
     g_scr=SCR_GAME; load_screen(gs); }
 static lv_obj_t*g_choice; static long g_choice_id;
 static void choice_close(void){ if(g_choice){ lv_obj_del_async(g_choice); g_choice=NULL; } }
@@ -1207,6 +1208,7 @@ static void games_go_cb(lv_event_t*e){ long i=(long)lv_event_get_user_data(e); i
     else if(i==-3){ null_live(); lv_obj_t*ps=pet_create(show_games); g_scr=SCR_GAME; load_screen(ps); }
     else if(i==-4) show_gb_list();
     else if(i==-2){ if(brick_has_save(&sc)) ask_resume(i,"BRICKSTORM",sc); else start_builtin(i,0); }
+    else if(i==-5){ if(coil_has_save(&sc)) ask_resume(i,"COIL",sc); else start_builtin(i,0); }
     else run_doom((int)i); }
 static void show_games(void){
     lv_obj_t*scr,*l=page_new("Games",games_back_cb,&scr);
@@ -1219,6 +1221,8 @@ static void show_games(void){
     lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-3L);
     r=set_row(l,LV_SYMBOL_STOP,"Brickstorm",brick_has_save(&sc)?"bricks & balls - game in progress":"break the bricks, catch the balls",0);
     lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-2L);
+    r=set_row(l,LV_SYMBOL_LOOP,"Coil",coil_has_save(&sc)?"snake - game in progress":"eat, grow, don't bite yourself",0);
+    lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-5L);
     { struct stat gst; gb_scan(); char sub[48];
       if(stat(GB_BIN,&gst)==0){ snprintf(sub,sizeof sub,gb_nroms?"%d games":"copy your ROMs to Games/GameBoy",gb_nroms);
         r=set_row(l,LV_SYMBOL_IMAGE,"Game Boy",sub,0);
@@ -1247,7 +1251,7 @@ static void pad_action(int a){
     if(g_scr_off){ screen_wake(); return; }                          /* first press only wakes */
     if(pt_lbl) return;                               /* Test buttons page: only light the boxes */
     if(g_scr==SCR_CLOCK){ show_home(); return; }
-    if(g_scr==SCR_GAME && (game_pad(a)||brick_pad(a))) return;
+    if(g_scr==SCR_GAME && (game_pad(a)||brick_pad(a)||coil_pad(a))) return;
     switch(a){
     case PA_A: if(!audio_is_playing() && g_pln>0) pl_resume();
                else { audio_toggle_pause(); save_resume();
