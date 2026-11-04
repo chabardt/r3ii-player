@@ -6,6 +6,7 @@ set -e
 DG=vendor/doomgeneric
 SRCS=""
 for f in $DG/*.c; do case "$f" in *doomgeneric_*) ;; *) SRCS="$SRCS $f";; esac; done
+for f in $DG/opl/opl.c $DG/opl/opl_queue.c $DG/opl/dbopl.c $DG/opl/opl_r3.c; do SRCS="$SRCS $f"; done   # opl3.c (Nuked) with -DR3_NUKED
 DEFS="-DCMAP256 -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 -DFEATURE_SOUND -DR3_SOUND"
 mkdir -p build
 if [ "$1" = host ]; then
@@ -14,7 +15,7 @@ if [ "$1" = host ]; then
 fi
 TC=toolchain/mipsel-linux-musl-cross/bin/mipsel-linux-musl-
 ARCH="-march=mips32r2 -mabi=32 -mhard-float -EL"
-CFLAGS="$ARCH -O2 -fno-pie -ffunction-sections -fdata-sections -w $DEFS -I $DG -I vendor/tinyalsa/include -I src/ui -I src/common"
+CFLAGS="$ARCH -O2 -fno-pie -ffunction-sections -fdata-sections -w $DEFS -I $DG -I $DG/opl -I vendor/tinyalsa/include -I src/ui -I src/common"
 N=$(nproc 2>/dev/null || echo 4); i=0; OBJS=""
 for s in $SRCS; do o=build/dg_$(basename "$s" .c).o; OBJS="$OBJS $o"
   ( ${TC}gcc $CFLAGS -c "$s" -o "$o" ) & i=$((i+1)); [ $((i % N)) -eq 0 ] && wait
@@ -26,5 +27,6 @@ TA="vendor/tinyalsa/src/pcm.c vendor/tinyalsa/src/pcm_hw.c vendor/tinyalsa/src/p
 TAO=""; for s in $TA; do o=build/dg_ta_$(basename "$s" .c).o; ${TC}gcc $CFLAGS -c "$s" -o "$o"; TAO="$TAO $o"; done
 ${TC}gcc $CFLAGS -Wall -c src/doom/r3doom.c -o build/r3doom_main.o
 ${TC}gcc $ARCH -fno-pie -o build/r3doom $OBJS build/r3doom_main.o build/r3doom_pad.o build/r3doom_snd.o $TAO -static -no-pie -Wl,--gc-sections -lm -lpthread
+cp build/r3doom build/r3doom.unstripped
 ${TC}strip build/r3doom
 ls -la build/r3doom && file build/r3doom

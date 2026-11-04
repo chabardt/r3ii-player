@@ -131,7 +131,12 @@ static void InitSfxModule(boolean use_sfx_prefix)
 static void InitMusicModule(void)
 {
 #ifdef FEATURE_SOUND
+#ifdef R3_SOUND
+    { extern music_module_t music_opl_module;      /* r3ii: OPL music (i_oplmusic.c) */
+      music_module = &music_opl_module; }
+#else
     music_module = &DG_music_module;
+#endif
 #endif /* FEATURE_SOUND */
 }
 

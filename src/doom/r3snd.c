@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+void OPL_R3_Mix(int16_t*buffer,unsigned int frames);   /* opl/opl_r3.c */
 
 #define RATE 48000
 #define NCH 16
@@ -37,10 +38,11 @@ static void route_and_volume(void){
     mixer_close(mx);
 }
 static void* mixer_thread(void*arg){ (void)arg;
-    static int16_t out[PERIOD*2]; int n=0;
+    static int16_t out[PERIOD*2], mus[PERIOD*2]; int n=0;
     for(;;){
+        OPL_R3_Mix(mus,PERIOD);                    /* music (OPL3) for this period, outside our lock */
         pthread_mutex_lock(&mu);
-        for(int i=0;i<PERIOD;i++){ int L=0,R=0;
+        for(int i=0;i<PERIOD;i++){ int L=mus[2*i],R=mus[2*i+1];
             for(int c=0;c<NCH;c++){ chan_t*k=&ch[c]; if(!k->on) continue;
                 uint32_t p=k->pos>>16; if(p>=k->len){ k->on=0; continue; }
                 int s=((int)k->data[p]-128)<<8; L+=s*k->vl>>8; R+=s*k->vr>>8; k->pos+=k->step; }
@@ -121,3 +123,10 @@ void I_InitTimidityConfig(void){}
 int use_libsamplerate = 0;
 float libsamplerate_scale = 0.65f;
 void r3snd_apply_volume(void){ route_and_volume(); }   /* volume keys: apply now */
+
+/* helpers Chocolate Doom 3.0.1 code (midifile.c) expects (R3 is little-endian MIPS) */
+uint16_t SDL_SwapBE16(uint16_t x){ return (uint16_t)((x>>8)|(x<<8)); }
+uint32_t SDL_SwapBE32(uint32_t x){ return (x>>24)|((x>>8)&0xff00)|((x<<8)&0xff0000)|(x<<24); }
+#include <stdlib.h>
+void I_Error(char*error,...);
+void* I_Realloc(void*p,size_t n){ void*r=realloc(p,n); if(!r && n) I_Error("I_Realloc: failed on reallocation of %u bytes",(unsigned)n); return r; }

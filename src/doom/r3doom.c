@@ -243,7 +243,15 @@ void DG_SleepMs(uint32_t ms){ usleep(ms*1000); }
 uint32_t DG_GetTicksMs(){ return now_ms()-t0; }
 void DG_SetWindowTitle(const char*t){ (void)t; }
 
+#include <signal.h>
+#include <ucontext.h>
+static void on_crash(int sig,siginfo_t*si,void*uc_){ ucontext_t*uc=uc_;
+    fprintf(stderr,"[r3doom] CRASH signal %d addr %p pc 0x%lx ra 0x%lx\n",sig,si->si_addr,
+        (unsigned long)uc->uc_mcontext.pc,(unsigned long)uc->uc_mcontext.gregs[31]); _exit(128+sig); }
 int main(int argc,char**argv){
+    setvbuf(stdout,NULL,_IONBF,0);              /* log survives a crash */
+    { struct sigaction sa; memset(&sa,0,sizeof sa); sa.sa_sigaction=on_crash; sa.sa_flags=SA_SIGINFO;
+      sigaction(SIGSEGV,&sa,NULL); sigaction(SIGBUS,&sa,NULL); sigaction(SIGILL,&sa,NULL); sigaction(SIGFPE,&sa,NULL); }
     doomgeneric_Create(argc,argv);
     key_nextweapon=']'; key_prevweapon='[';    /* unbound by default: controller X / Y */
     for(;;){ doomgeneric_Tick(); if(!landscape) poll_touch(); poll_keys(); }
