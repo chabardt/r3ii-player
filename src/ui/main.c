@@ -9,6 +9,7 @@
 #include "game.h"
 #include "brick.h"
 #include "pet.h"
+#include "pad.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -315,12 +316,51 @@ static void br_back_cb(lv_event_t*e){ char*parent=lv_event_get_user_data(e);
     if(!parent||!parent[0]||!strcmp(parent,"/")) show_home(); else show_browser(parent); }
 static void free_cb(lv_event_t*e){ void*p=lv_event_get_user_data(e); if(p)free(p); }
 
-/* A-Z rail: tap a letter -> scroll the list to the first entry starting with it */
+/* A-Z rail: slide a finger along it -> the list follows smoothly, a big bubble shows the
+ * letter. Rail order is "#" (digits/symbols sort first) then A..Z. Inside a letter's slot
+ * the list position is interpolated toward the next letter's first entry, so dragging
+ * scrolls continuously instead of jumping. */
+#define RAIL_N 27
 static lv_obj_t *g_firstof[27];   /* 0..25 = A..Z, 26 = other/#  (buttons in the current list) */
-static void az_cb(lv_event_t*e){
-    long idx=(long)lv_event_get_user_data(e);
-    for(long k=idx;k<27;k++) if(g_firstof[k]){ lv_obj_scroll_to_view(g_firstof[k],LV_ANIM_OFF); return; }
-    for(long k=idx;k>=0;k--) if(g_firstof[k]){ lv_obj_scroll_to_view(g_firstof[k],LV_ANIM_OFF); return; }
+static lv_obj_t *g_brlist, *g_bubble, *g_bubble_lbl, *g_rail_lbl[RAIL_N]; static int g_rail_hl=-1;
+static int rail_letter(int pos){ return pos==0?26:pos-1; }
+static const char RAIL_TXT[RAIL_N][2]={"#","A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"};
+static void rail_highlight(int pos){
+    if(pos==g_rail_hl) return;
+    if(g_rail_hl>=0){ lv_obj_t*o=g_rail_lbl[g_rail_hl];
+        lv_obj_set_style_text_color(o,lv_color_hex(g_firstof[rail_letter(g_rail_hl)]?C_ACCENT:C_DIM),0);
+        lv_obj_set_style_text_font(o,&lv_font_montserrat_12,0); }
+    g_rail_hl=pos;
+    if(pos>=0){ lv_obj_set_style_text_color(g_rail_lbl[pos],lv_color_hex(C_FG),0);
+        lv_obj_set_style_text_font(g_rail_lbl[pos],&lv_font_montserrat_16,0); }
+}
+static void rail_cb(lv_event_t*e){
+    lv_event_code_t code=lv_event_get_code(e); lv_obj_t*rail=lv_event_get_target(e);
+    if(code==LV_EVENT_RELEASED || code==LV_EVENT_PRESS_LOST){
+        if(g_bubble) lv_obj_add_flag(g_bubble,LV_OBJ_FLAG_HIDDEN); rail_highlight(-1); return; }
+    if(code!=LV_EVENT_PRESSED && code!=LV_EVENT_PRESSING) return;
+    lv_point_t p; lv_indev_get_point(lv_indev_get_act(),&p);
+    lv_area_t a; lv_obj_get_coords(rail,&a);
+    float f=(p.y-a.y1)*(float)RAIL_N/lv_area_get_height(&a);
+    if(f<0)f=0; if(f>RAIL_N-0.001f)f=RAIL_N-0.001f;
+    int pos=(int)f; float frac=f-pos;
+    int k=-1; for(int q=pos;q<RAIL_N;q++) if(g_firstof[rail_letter(q)]){ k=q; break; }   /* empty letter: next one */
+    if(k<0) for(int q=pos;q>=0;q--) if(g_firstof[rail_letter(q)]){ k=q; break; }
+    if(k<0) return;
+    if(k!=pos) frac=0;
+    /* scroll target: from this letter's first row toward the next letter's first row */
+    lv_coord_t y0=lv_obj_get_y(g_firstof[rail_letter(k)]), y1=-1;
+    for(int q=k+1;q<RAIL_N && y1<0;q++) if(g_firstof[rail_letter(q)]) y1=lv_obj_get_y(g_firstof[rail_letter(q)]);
+    if(y1<y0){ uint32_t n=lv_obj_get_child_cnt(g_brlist); lv_obj_t*last=n?lv_obj_get_child(g_brlist,n-1):NULL;
+        y1 = last? lv_obj_get_y(last)+lv_obj_get_height(last) : y0; }
+    lv_coord_t cur=lv_obj_get_scroll_y(g_brlist), maxy=cur+lv_obj_get_scroll_bottom(g_brlist);
+    lv_coord_t t=(lv_coord_t)(y0+frac*(y1-y0)); if(t>maxy)t=maxy; if(t<0)t=0;
+    if(t!=cur) lv_obj_scroll_to_y(g_brlist,t,LV_ANIM_OFF);
+    /* bubble beside the finger, with the letter we are on */
+    lv_label_set_text(g_bubble_lbl,RAIL_TXT[k]);
+    lv_coord_t by=p.y-48; if(by<56)by=56; if(by>720-100)by=720-100;
+    lv_obj_set_pos(g_bubble,330,by); lv_obj_clear_flag(g_bubble,LV_OBJ_FLAG_HIDDEN);
+    rail_highlight(k);
 }
 static int letter_index(const char*disp){ char c=disp[0];
     if(c>='a'&&c<='z')return c-'a'; if(c>='A'&&c<='Z')return c-'A'; return 26; }
@@ -397,15 +437,25 @@ static void show_browser(const char*path){
     lv_obj_set_style_pad_row(rail,0,0); lv_obj_clear_flag(rail,LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(rail,LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(rail,LV_FLEX_ALIGN_SPACE_AROUND,LV_FLEX_ALIGN_CENTER,LV_FLEX_ALIGN_CENTER);
-    static const char LET[27][2]={"A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","#"};
-    for(long k=0;k<27;k++){
-        lv_obj_t*ll=lv_label_create(rail); lv_label_set_text(ll,LET[k]);
-        lv_obj_set_style_text_color(ll,lv_color_hex(g_firstof[k]?C_ACCENT:C_DIM),0);
+    g_rail_hl=-1; g_brlist=list;
+    for(int k=0;k<RAIL_N;k++){
+        lv_obj_t*ll=lv_label_create(rail); lv_label_set_text(ll,RAIL_TXT[k]); g_rail_lbl[k]=ll;
+        lv_obj_set_style_text_color(ll,lv_color_hex(g_firstof[rail_letter(k)]?C_ACCENT:C_DIM),0);
         lv_obj_set_style_text_font(ll,&lv_font_montserrat_12,0);
-        lv_obj_add_flag(ll,LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_ext_click_area(ll,8);
-        lv_obj_add_event_cb(ll,az_cb,LV_EVENT_CLICKED,(void*)k);
     }
+    lv_obj_add_flag(rail,LV_OBJ_FLAG_CLICKABLE); lv_obj_set_ext_click_area(rail,14);   /* the whole rail is the slider */
+    lv_obj_clear_flag(rail,LV_OBJ_FLAG_GESTURE_BUBBLE|LV_OBJ_FLAG_SCROLL_CHAIN);
+    lv_obj_add_event_cb(rail,rail_cb,LV_EVENT_ALL,NULL);
+    /* the zoom bubble (hidden until the rail is touched) */
+    g_bubble=lv_obj_create(scr); lv_obj_set_size(g_bubble,96,96);
+    lv_obj_set_style_radius(g_bubble,LV_RADIUS_CIRCLE,0); lv_obj_set_style_bg_color(g_bubble,lv_color_hex(C_ACCENT),0);
+    lv_obj_set_style_bg_opa(g_bubble,LV_OPA_90,0); lv_obj_set_style_border_width(g_bubble,0,0);
+    lv_obj_set_style_shadow_width(g_bubble,18,0); lv_obj_set_style_shadow_opa(g_bubble,LV_OPA_50,0);
+    lv_obj_clear_flag(g_bubble,LV_OBJ_FLAG_CLICKABLE|LV_OBJ_FLAG_SCROLLABLE);
+    g_bubble_lbl=lv_label_create(g_bubble); lv_label_set_text(g_bubble_lbl,"");
+    lv_obj_set_style_text_font(g_bubble_lbl,&lv_font_montserrat_48,0);
+    lv_obj_set_style_text_color(g_bubble_lbl,lv_color_hex(C_BG),0); lv_obj_center(g_bubble_lbl);
+    lv_obj_add_flag(g_bubble,LV_OBJ_FLAG_HIDDEN);
     g_scr=SCR_BROWSER;
     load_screen(scr);
 }
@@ -454,6 +504,38 @@ static lv_obj_t* set_row(lv_obj_t*l,const char*icon,const char*title,const char*
         lv_obj_set_style_text_color(ck,lv_color_hex(C_ACCENT),0); lv_obj_align(ck,LV_ALIGN_RIGHT_MID,-6,0); }
     return b;
 }
+/* ---- Controllers: live button test (shows raw codes + the action they map to) ---- */
+static lv_obj_t *pt_lbl, *pt_act[PA_N]; static lv_timer_t *pt_tmr;
+static const char*PA_NAMES[PA_N]={"Up","Down","Left","Right","A","B","X","Y","L","R","+","-","Home"};
+static void pt_tick(lv_timer_t*t){ (void)t; if(!pt_lbl) return;
+    int ty,co,va; const char*dv; pad_last_raw(&ty,&co,&va,&dv); char b[200];
+    snprintf(b,sizeof b,"%d controller(s)%s%s\nlast: %s %d = %d\n%s",pad_count(),pad_count()?": ":"",pad_count()?pad_name(0):"",
+             ty==1?"key":ty==3?"axis":"event",co,va,dv);
+    lv_label_set_text(pt_lbl,b);
+    for(int a=0;a<PA_N;a++) lv_obj_set_style_bg_color(pt_act[a],lv_color_hex(pad_held(a)?C_ACCENT:C_PANEL2),0); }
+static void pt_del_cb(lv_event_t*e){ (void)e; if(pt_tmr){ lv_timer_del(pt_tmr); pt_tmr=NULL; } pt_lbl=NULL; }
+static void show_settings(void);
+static void pt_back_cb(lv_event_t*e){ (void)e; show_settings(); }
+static lv_obj_t* page_new(const char*title,lv_event_cb_t back,lv_obj_t**scr_out);
+static void padtest_open_cb(lv_event_t*e){ (void)e;
+    lv_obj_t*scr,*l=page_new("Test buttons",pt_back_cb,&scr);
+    lv_obj_add_event_cb(scr,pt_del_cb,LV_EVENT_DELETE,NULL);
+    pt_lbl=lv_label_create(l); lv_obj_set_style_text_color(pt_lbl,lv_color_hex(C_FG),0);
+    lv_obj_set_style_pad_all(pt_lbl,12,0); lv_label_set_text(pt_lbl,"");
+    lv_obj_t*g=lv_obj_create(l); lv_obj_set_size(g,LV_PCT(100),LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(g,LV_OPA_TRANSP,0); lv_obj_set_style_border_width(g,0,0);
+    lv_obj_set_flex_flow(g,LV_FLEX_FLOW_ROW_WRAP); lv_obj_set_style_pad_gap(g,8,0);
+    for(int a=0;a<PA_N;a++){ pt_act[a]=lv_obj_create(g); lv_obj_set_size(pt_act[a],100,56);
+        lv_obj_set_style_radius(pt_act[a],R_BTN,0); lv_obj_set_style_border_width(pt_act[a],0,0);
+        lv_obj_clear_flag(pt_act[a],LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_t*n=lv_label_create(pt_act[a]); lv_label_set_text(n,PA_NAMES[a]); lv_obj_center(n);
+        lv_obj_set_style_text_color(n,lv_color_hex(C_FG),0); }
+    lv_obj_t*h=lv_label_create(l); lv_label_set_text(h,"Press buttons: the matching action lights up.\n"
+        "Pair a Joy-Con: hold its small sync button\nuntil the lights run, then Scan.");
+    lv_obj_set_style_text_color(h,lv_color_hex(C_DIM),0); lv_obj_set_style_pad_all(h,12,0);
+    pt_tmr=lv_timer_create(pt_tick,60,NULL); pt_tick(NULL);
+    g_scr=SCR_SETTINGS; load_screen(scr);
+}
 static void settings_fill(void){
     if(!set_list) return;
     set_ver=bt_version();
@@ -466,7 +548,7 @@ static void settings_fill(void){
     lv_obj_t*r=set_row(set_list,LV_SYMBOL_AUDIO,"Headphone jack",NULL,!out[0]);
     lv_obj_add_event_cb(r,set_out_cb,LV_EVENT_CLICKED,(void*)-1L);
     char sub[48];
-    for(int i=0;i<nd;i++){ if(d[i].phone) continue;
+    for(int i=0;i<nd;i++){ if(d[i].phone||d[i].pad) continue;
         snprintf(set_macs[k],18,"%s",d[i].mac);
         int sel=!strcmp(out,d[i].mac);
         r=set_row(set_list,LV_SYMBOL_BLUETOOTH,d[i].name,
@@ -488,6 +570,15 @@ static void settings_fill(void){
         r=set_row(set_list,LV_SYMBOL_CALL,d[i].name,d[i].connected?"connected":"hold to forget",d[i].connected);
         lv_obj_add_event_cb(r,set_forget_cb,LV_EVENT_LONG_PRESSED,(void*)(long)k);
         k++; }
+
+    set_section(set_list,"CONTROLLERS");
+    for(int i=0;i<nd;i++){ if(!d[i].pad) continue;
+        snprintf(set_macs[k],18,"%s",d[i].mac);
+        r=set_row(set_list,LV_SYMBOL_KEYBOARD,d[i].name,d[i].connected?"connected":"press a button on it to reconnect",d[i].connected);
+        lv_obj_add_event_cb(r,set_forget_cb,LV_EVENT_LONG_PRESSED,(void*)(long)k);
+        k++; }
+    r=set_row(set_list,LV_SYMBOL_EYE_OPEN,"Test buttons",pad_count()?pad_name(0):"no controller connected",0);
+    lv_obj_add_event_cb(r,padtest_open_cb,LV_EVENT_CLICKED,NULL);
 
     set_section(set_list,"ADD A DEVICE");
     r=set_row(set_list,LV_SYMBOL_REFRESH,bt_busy()?"Working...":"Scan for devices",NULL,0);
@@ -635,6 +726,7 @@ static void idle_poll(void){
     int playing = audio_is_playing() && !audio_is_paused();
     if(g_scr==SCR_CLOCK){ if(playing) show_player(g_pltitle,g_pldir); else clock_update(); return; }
     if(g_scr==SCR_GAME && (game_running()||brick_running()||pet_shown())) return;   /* don't yank the player out of a game */
+    if(pt_lbl) return;                               /* controller test page stays up */
     if(now-g_last_input < IDLE_MS) return;
     if(playing){ if(g_scr!=SCR_PLAYER) show_player(g_pltitle,g_pldir); }
     else if(!bt_busy()) show_clock();
@@ -1077,6 +1169,29 @@ static void show_games(void){
     g_scr=SCR_SETTINGS; load_screen(scr);
 }
 
+/* game controller / remote: games get it first, otherwise it is a music remote */
+static void scroll_current(int dy){ lv_obj_t*l = set_list?set_list : (g_scr==SCR_BROWSER?g_brlist:NULL);
+    if(l) lv_obj_scroll_by_bounded(l,0,dy,LV_ANIM_ON); }
+static void pad_action(int a){
+    g_last_input=r3_tick_ms();
+    if(g_scr_off){ screen_wake(); return; }                          /* first press only wakes */
+    if(pt_lbl) return;                               /* Test buttons page: only light the boxes */
+    if(g_scr==SCR_CLOCK){ show_home(); return; }
+    if(g_scr==SCR_GAME && (game_pad(a)||brick_pad(a))) return;
+    switch(a){
+    case PA_A: if(!audio_is_playing() && g_pln>0) pl_resume();
+               else { audio_toggle_pause(); save_resume();
+                      if(np_play) lv_label_set_text(np_play,audio_is_paused()?LV_SYMBOL_PLAY:LV_SYMBOL_PAUSE); } break;
+    case PA_R: pl_next(); break;
+    case PA_L: pl_prev(); break;
+    case PA_PLUS: case PA_X: bump_vol(+12); break;
+    case PA_MINUS: case PA_Y: bump_vol(-12); break;
+    case PA_HOME: show_home(); break;
+    case PA_B: power_short(); break;
+    case PA_UP: scroll_current(+120); break;
+    case PA_DOWN: scroll_current(-120); break;
+    }
+}
 static void heartbeat(void){ static uint32_t lh=0; uint32_t n=r3_tick_ms();
     if(n-lh>=2000){ lh=n; printf("hb %lu\n",(unsigned long)n); } }
 static void fmt_ms(long ms,char*o,int c){ long s=ms/1000; snprintf(o,c,"%ld:%02ld",s/60,s%60); }
@@ -1184,6 +1299,7 @@ int main(int argc,char**argv){
         if(!g_scr_off && p_timeout && r3_tick_ms()-g_last_input >= (uint32_t)p_timeout*1000) screen_off();
         if(g_to_del){ lv_obj_del(g_to_del); g_to_del=NULL; }
         keys_poll();
+        pad_poll(); { int a; while(pad_next(&a)) pad_action(a); }
         if(audio_finished()) pl_next();     /* album auto-advance */
         tick_ui(); idle_poll(); heartbeat(); usleep(15000); }
     return 0;

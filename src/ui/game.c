@@ -9,6 +9,7 @@
  * Top-5 high scores (with dates) in /usr/data/r3_blockfall, shown at game over. */
 #include "game.h"
 #include "r3_tick.h"
+#include "pad.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -190,6 +191,18 @@ int game_key(int code){
     lv_obj_invalidate(g_board); return 1;
 }
 int game_running(void){ return g_scr && !over; }
+/* game controller: left/right move (auto-repeat), up/A/X turn, down/B drop, +/- pause */
+int game_pad(int a){
+    if(!g_scr) return 0;
+    if(over){ if(a==PA_A||a==PA_PLUS) reset(); return 1; }
+    if(a==PA_PLUS||a==PA_MINUS){ return game_key(164); }
+    if(paused){ if(a==PA_A){ paused=0; lv_label_set_text(g_pause,""); last_fall=r3_tick_ms(); } return 1; }
+    if(a==PA_LEFT) move(-1); else if(a==PA_RIGHT) move(+1);
+    else if(a==PA_UP||a==PA_A||a==PA_X) rotate();
+    else if(a==PA_DOWN||a==PA_B) hard_drop();
+    else return 0;
+    lv_obj_invalidate(g_board); return 1;
+}
 
 static void tick_cb(lv_timer_t*t){ (void)t;
     if(over||paused) return; uint32_t now=r3_tick_ms();
