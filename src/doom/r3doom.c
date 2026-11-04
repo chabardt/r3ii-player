@@ -12,6 +12,9 @@
  *   +-----------+-----------+
  * Keys: power = menu (Esc), long power = quit, play = Use, vol+/- = next/prev weapon,
  * next = automap. Always-run while the stick is pushed far. */
+/* linux/input.h FIRST: it defines KEY_ENTER=28, KEY_TAB=15... which must not override
+ * Doom's own key codes from doomkeys.h (that broke menu confirm and the automap). */
+#include <linux/input.h>
 #include "doomgeneric.h"
 #include "doomkeys.h"
 #include "d_event.h"
@@ -26,7 +29,6 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <linux/fb.h>
-#include <linux/input.h>
 
 #define SW 480
 #define SH 720
@@ -51,7 +53,8 @@ static void key(unsigned char k,int down){ int n=(kq_w+1)%KQ; if(n==kq_r) return
 static void tapkey(unsigned char k){ key(k,1); key(k,0); }
 int DG_GetKey(int*pressed,unsigned char*k){
     if(kq_r==kq_w) return 0;
-    *pressed=kq[kq_r].pressed; *k=kq[kq_r].key; kq_r=(kq_r+1)%KQ; return 1; }
+    *pressed=kq[kq_r].pressed; *k=kq[kq_r].key; kq_r=(kq_r+1)%KQ;
+    return 1; }
 static void mouse_turn(int dx){ event_t ev; memset(&ev,0,sizeof ev);
     ev.type=ev_mouse; ev.data1=0; ev.data2=dx; ev.data3=0; D_PostEvent(&ev); }
 
@@ -183,13 +186,15 @@ void DG_Init(){
 /* ---------------- game controller (Joy-Con...): landscape, no touch deck ----------------
  * Held sideways: stick = forward/back/turn, A fire (+Enter), B use, X next weapon,
  * Y run on/off, SL/SR strafe, - menu, Capture automap. Run is on by default. */
+extern boolean menuactive;          /* m_menu.c */
 static int landscape, run_on=1, pad_weapon=1;
 static int pst[PA_N];                         /* last state sent per action */
 static void pad_to_keys(void){
     static const int K[PA_N]={KEY_UPARROW,KEY_DOWNARROW,KEY_LEFTARROW,KEY_RIGHTARROW,
         KEY_FIRE,KEY_USE,0,0, KEY_STRAFE_L,KEY_STRAFE_R, KEY_ESCAPE,KEY_ESCAPE,KEY_TAB};
     for(int a=0;a<PA_N;a++){ int h=pad_held(a); if(h==pst[a]) continue; pst[a]=h;
-        if(a==PA_A){ key(KEY_FIRE,h); key(KEY_ENTER,h); continue; }
+        if(a==PA_A){ static unsigned char sent; if(h){ sent = menuactive?KEY_ENTER:KEY_FIRE; key(sent,1); }
+                     else if(sent){ key(sent,0); sent=0; } continue; }   /* menu: Enter only, game: fire only */
         if(a==PA_X){ if(h){ pad_weapon=pad_weapon%7+1; tapkey((unsigned char)('0'+pad_weapon)); } continue; }
         if(a==PA_Y){ if(h){ run_on=!run_on; key(KEY_RSHIFT,run_on); } continue; }
         if(K[a]) key((unsigned char)K[a],h); }
