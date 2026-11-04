@@ -1091,6 +1091,8 @@ static void run_doom(int i){
     if(DOOMS[i].pwad){ argv[n++]="-file"; argv[n++]=pwad; }
     argv[n++]="-mb"; argv[n++]="12"; argv[n]=0;
     mkdir("/usr/data/doom",0755);
+    if(audio_is_playing()){ g_resume_ms=audio_pos_ms(); save_resume(); audio_stop();   /* Doom has sound now: free the DAC */
+        if(np_play) lv_label_set_text(np_play,LV_SYMBOL_PLAY); }
     char*envp[]={"HOME=/usr/data/doom","PATH=/usr/bin:/bin",0};
     posix_spawn_file_actions_t fa; posix_spawn_file_actions_init(&fa);
     posix_spawn_file_actions_addopen(&fa,1,"/usr/data/doom/r3doom.log",O_WRONLY|O_CREAT|O_TRUNC,0644);

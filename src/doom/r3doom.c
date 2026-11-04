@@ -144,6 +144,7 @@ static void poll_touch(void){
 }
 
 /* ---------------- physical keys ---------------- */
+static int landscape_mode(void);
 static uint32_t pwr_t; static int pwr_down, weapon=1;
 static void poll_keys(void){
     struct input_event e;
@@ -156,7 +157,11 @@ static void poll_keys(void){
     while(km_fd>=0 && read(km_fd,&e,sizeof e)==sizeof e){ if(e.type!=EV_KEY || e.value==2) continue;
         if(e.code==164) key(KEY_USE,e.value);                              /* play = use */
         else if(e.code==163) key(KEY_TAB,e.value);                         /* next = automap */
-        else if(e.value==1 && (e.code==115||e.code==114)){                 /* vol = weapons */
+        else if(e.value && (e.code==115||e.code==114) && landscape_mode()){       /* controller: keys = volume */
+            int v=160; FILE*f=fopen("/usr/data/r3_vol","r"); if(f){ if(fscanf(f,"%d",&v)!=1) v=160; fclose(f); }
+            v+= e.code==115?12:-12; if(v<0)v=0; if(v>255)v=255;
+            f=fopen("/usr/data/r3_vol","w"); if(f){ fprintf(f,"%d\n",v); fclose(f); } }   /* r3snd applies it */
+        else if(e.value==1 && (e.code==115||e.code==114)){                 /* touch mode: vol = weapons */
             weapon += e.code==115?1:-1; if(weapon>7)weapon=1; if(weapon<1)weapon=7;
             tapkey((unsigned char)('0'+weapon)); }
     }
@@ -228,3 +233,4 @@ int main(int argc,char**argv){
     for(;;){ doomgeneric_Tick(); if(!landscape) poll_touch(); poll_keys(); }
     return 0;
 }
+static int landscape_mode(void){ return landscape; }
