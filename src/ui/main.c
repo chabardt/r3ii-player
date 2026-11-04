@@ -726,6 +726,7 @@ static void idle_poll(void){
     int playing = audio_is_playing() && !audio_is_paused();
     if(g_scr==SCR_CLOCK){ if(playing) show_player(g_pltitle,g_pldir); else clock_update(); return; }
     if(g_scr==SCR_GAME && (game_running()||brick_running()||pet_shown())) return;   /* don't yank the player out of a game */
+    if(pt_lbl) return;                               /* controller test page stays up */
     if(now-g_last_input < IDLE_MS) return;
     if(playing){ if(g_scr!=SCR_PLAYER) show_player(g_pltitle,g_pldir); }
     else if(!bt_busy()) show_clock();
@@ -1174,6 +1175,7 @@ static void scroll_current(int dy){ lv_obj_t*l = set_list?set_list : (g_scr==SCR
 static void pad_action(int a){
     g_last_input=r3_tick_ms();
     if(g_scr_off){ screen_wake(); return; }                          /* first press only wakes */
+    if(pt_lbl) return;                               /* Test buttons page: only light the boxes */
     if(g_scr==SCR_CLOCK){ show_home(); return; }
     if(g_scr==SCR_GAME && (game_pad(a)||brick_pad(a))) return;
     switch(a){
