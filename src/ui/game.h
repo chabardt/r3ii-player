@@ -7,4 +7,5 @@ int  game_has_save(int*score);   /* a game was left unfinished */
 void game_save(void);            /* save now (e.g. before power-off) */
 int  game_key(int code);    /* media key while the game is shown; 1 = consumed */
 int  game_running(void);    /* shown and not over (suppresses the idle watch face) */
+int  game_pad(int action);   /* game-controller action (pad.h PA_*); 1 = consumed */
 #endif

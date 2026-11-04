@@ -16,6 +16,7 @@ typedef struct {
     int  paired, connected;
     int  phone;           /* major device class = phone/computer => a source, not a speaker */
     int  battery;         /* 0..100 reported by the device (HFP), -1 = unknown */
+    int  pad;             /* game controller / remote (HID peripheral) */
 } bt_dev_t;
 
 void bt_start(void);                    /* spawn worker: power on, daemons, auto-reconnect */

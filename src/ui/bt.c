@@ -101,6 +101,7 @@ static int read_info(const char*adir,const char*mac,bt_dev_t*d){
     if(!d->name[0]) snprintf(d->name,sizeof d->name,"%s",mac);
     int major=(cls>>8)&0x1f;              /* 1=computer 2=phone 4=audio/video */
     d->phone = (major==1||major==2);
+    d->pad   = (major==5);                 /* peripheral: gamepad, joystick, remote, keyboard */
     d->paired=haskey;
     return 1;
 }
@@ -117,7 +118,7 @@ static void do_refresh(void){
         closedir(ad); }
     char con[2048]; sh("hcitool con 2>/dev/null",con,sizeof con);
     for(int i=0;i<n;i++){ tmp[i].connected = strstr(con,tmp[i].mac)!=NULL; tmp[i].battery=-1;
-        if(tmp[i].connected && !tmp[i].phone){   /* battery reported over the HFP link, if any */
+        if(tmp[i].connected && !tmp[i].phone && !tmp[i].pad){   /* battery reported over the HFP link, if any */
             char mp[24],cmd[256],out[1024]; snprintf(mp,sizeof mp,"%s",tmp[i].mac);
             for(char*c=mp;*c;c++) if(*c==':')*c='_';
             snprintf(cmd,sizeof cmd,"dbus-send --system --print-reply --reply-timeout=1500 --dest=org.bluealsa "
@@ -149,8 +150,26 @@ static int dbus_connect(const char*mac){
 }
 
 /* ---- daemons ---- */
+/* Game controllers (Joy-Con, Pro Controller, DS4...) are Bluetooth HID. BlueZ can hand them
+ * to the kernel through /dev/uhid (UserspaceHID) -> hid-generic -> /dev/input/eventN, which
+ * pad.c reads. /etc is read-only squashfs, so we bind-mount a copy of /etc/bluetooth with
+ * input.conf added, and restart bluetoothd once (bonds live in /usr/data, untouched). */
+static int ensure_uhid(void){
+    if(access("/dev/uhid",F_OK)!=0) return 0;
+    char cur[512]=""; sh("cat /etc/bluetooth/input.conf 2>/dev/null",cur,sizeof cur);
+    if(strstr(cur,"UserspaceHID=true")) return 0;          /* already set up this boot */
+    sh("mkdir -p /tmp/r3bt_etc && cp -a /etc/bluetooth/. /tmp/r3bt_etc/ && "
+       "printf '[General]\\nUserspaceHID=true\\n' > /tmp/r3bt_etc/input.conf && "
+       "mount --bind /tmp/r3bt_etc /etc/bluetooth",0,0);
+    sh("cat /etc/bluetooth/input.conf 2>/dev/null",cur,sizeof cur);
+    if(!strstr(cur,"UserspaceHID=true")) return 0;
+    sh("killall bt-agent bluealsa bluealsa-aplay bluetoothd 2>/dev/null; sleep 1; "
+       "setsid sh -c '/usr/libexec/bluetooth/bluetoothd -E -C </dev/null >/tmp/bluetoothd.log 2>&1 &'; sleep 2",0,0);
+    return 1;
+}
 static void do_init(void){
     set_status("Starting Bluetooth...");
+    if(ensure_uhid()) g_jobs|=J_RX;                       /* restart the receiver too if it was on */
     sh("bt-adapter --set Powered On >/dev/null 2>&1",0,0);
     char ps[4096]; sh("ps",ps,sizeof ps);
     /* stock runs source-only with --a2dp-volume ("native": volume is only reported over
@@ -277,11 +296,12 @@ static void do_pair(const char*mac){
     sh(cmd,out,sizeof out);
     int ok=strstr(out,"Pairing successful")||strstr(out,"AlreadyExists");
     if(ok){ snprintf(cmd,sizeof cmd,"bluetoothctl trust %s >/dev/null 2>&1",mac); sh(cmd,0,0);
+        dbus_connect(mac);            /* bring the link up now (controllers: HID input appears) */
         sh("sync",0,0); }
     do_refresh();
     /* a freshly paired speaker becomes the output straight away */
     bt_dev_t d[BT_MAX]; int n=bt_devices(d,BT_MAX), spk=0;
-    for(int i=0;i<n;i++) if(!strcmp(d[i].mac,mac) && !d[i].phone) spk=1;
+    for(int i=0;i<n;i++) if(!strcmp(d[i].mac,mac) && !d[i].phone && !d[i].pad) spk=1;
     pthread_mutex_lock(&mu);
     for(int i=0;i<g_nfnd;i++) if(!strcmp(g_fnd[i].mac,mac)){ g_fnd[i]=g_fnd[--g_nfnd]; break; }
     if(ok&&spk){ snprintf(g_out,sizeof g_out,"%s",mac); save_state(); g_jobs|=J_OUT; }

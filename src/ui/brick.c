@@ -7,6 +7,7 @@
 #include "brick_core.h"
 #include "hiscore.h"
 #include "r3_tick.h"
+#include "pad.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -91,6 +92,9 @@ static void tick_cb(lv_timer_t*t){ (void)t;
     if(s_toast_until && now>s_toast_until){ s_toast_until=0; lv_obj_add_flag(s_toast,LV_OBJ_FLAG_HIDDEN); }
     if(G.over||paused) return;
     int sc=G.score, lv=G.level;
+    {   /* game controller: stick / d-pad slide the paddle (analog when the stick reports it) */
+        float sx=pad_stick_x(); if(pad_held(PA_LEFT)&&sx>-1) sx=-1; if(pad_held(PA_RIGHT)&&sx<1) sx=1;
+        if(sx!=0) bk_set_paddle(&G,G.px+G.pw/2.0f+sx*620.0f*dt); }
     bk_step(&G,dt);
     if(G.toast){ int k=G.toast; G.toast=0;
         toast(k==BT_MULTI?"MULTI BALL!":k==BT_BOMB?"EXPLOSIVE BALL!":k==BT_FAST?"FASTER!":
@@ -123,6 +127,14 @@ int brick_key(int code){
     return 1;
 }
 int brick_running(void){ return s_scr && !G.over; }
+/* game controller: A launch (or resume), +/- pause; movement is read in tick_cb */
+int brick_pad(int a){
+    if(!s_scr) return 0;
+    if(a==PA_A||a==PA_B) return brick_key(164);
+    if(a==PA_PLUS||a==PA_MINUS){ if(G.over) return 1;
+        paused=!paused; lv_label_set_text(s_pause,paused?"PAUSED":""); s_last=r3_tick_ms(); return 1; }
+    return a==PA_LEFT||a==PA_RIGHT||a==PA_UP||a==PA_DOWN;
+}
 
 static void (*s_exit)(void);
 static void back_cb(lv_event_t*e){ (void)e; if(s_exit) s_exit(); }

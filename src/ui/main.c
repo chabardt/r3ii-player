@@ -9,6 +9,7 @@
 #include "game.h"
 #include "brick.h"
 #include "pet.h"
+#include "pad.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -503,6 +504,38 @@ static lv_obj_t* set_row(lv_obj_t*l,const char*icon,const char*title,const char*
         lv_obj_set_style_text_color(ck,lv_color_hex(C_ACCENT),0); lv_obj_align(ck,LV_ALIGN_RIGHT_MID,-6,0); }
     return b;
 }
+/* ---- Controllers: live button test (shows raw codes + the action they map to) ---- */
+static lv_obj_t *pt_lbl, *pt_act[PA_N]; static lv_timer_t *pt_tmr;
+static const char*PA_NAMES[PA_N]={"Up","Down","Left","Right","A","B","X","Y","L","R","+","-","Home"};
+static void pt_tick(lv_timer_t*t){ (void)t; if(!pt_lbl) return;
+    int ty,co,va; const char*dv; pad_last_raw(&ty,&co,&va,&dv); char b[200];
+    snprintf(b,sizeof b,"%d controller(s)%s%s\nlast: %s %d = %d\n%s",pad_count(),pad_count()?": ":"",pad_count()?pad_name(0):"",
+             ty==1?"key":ty==3?"axis":"event",co,va,dv);
+    lv_label_set_text(pt_lbl,b);
+    for(int a=0;a<PA_N;a++) lv_obj_set_style_bg_color(pt_act[a],lv_color_hex(pad_held(a)?C_ACCENT:C_PANEL2),0); }
+static void pt_del_cb(lv_event_t*e){ (void)e; if(pt_tmr){ lv_timer_del(pt_tmr); pt_tmr=NULL; } pt_lbl=NULL; }
+static void show_settings(void);
+static void pt_back_cb(lv_event_t*e){ (void)e; show_settings(); }
+static lv_obj_t* page_new(const char*title,lv_event_cb_t back,lv_obj_t**scr_out);
+static void padtest_open_cb(lv_event_t*e){ (void)e;
+    lv_obj_t*scr,*l=page_new("Test buttons",pt_back_cb,&scr);
+    lv_obj_add_event_cb(scr,pt_del_cb,LV_EVENT_DELETE,NULL);
+    pt_lbl=lv_label_create(l); lv_obj_set_style_text_color(pt_lbl,lv_color_hex(C_FG),0);
+    lv_obj_set_style_pad_all(pt_lbl,12,0); lv_label_set_text(pt_lbl,"");
+    lv_obj_t*g=lv_obj_create(l); lv_obj_set_size(g,LV_PCT(100),LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(g,LV_OPA_TRANSP,0); lv_obj_set_style_border_width(g,0,0);
+    lv_obj_set_flex_flow(g,LV_FLEX_FLOW_ROW_WRAP); lv_obj_set_style_pad_gap(g,8,0);
+    for(int a=0;a<PA_N;a++){ pt_act[a]=lv_obj_create(g); lv_obj_set_size(pt_act[a],100,56);
+        lv_obj_set_style_radius(pt_act[a],R_BTN,0); lv_obj_set_style_border_width(pt_act[a],0,0);
+        lv_obj_clear_flag(pt_act[a],LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_t*n=lv_label_create(pt_act[a]); lv_label_set_text(n,PA_NAMES[a]); lv_obj_center(n);
+        lv_obj_set_style_text_color(n,lv_color_hex(C_FG),0); }
+    lv_obj_t*h=lv_label_create(l); lv_label_set_text(h,"Press buttons: the matching action lights up.\n"
+        "Pair a Joy-Con: hold its small sync button\nuntil the lights run, then Scan.");
+    lv_obj_set_style_text_color(h,lv_color_hex(C_DIM),0); lv_obj_set_style_pad_all(h,12,0);
+    pt_tmr=lv_timer_create(pt_tick,60,NULL); pt_tick(NULL);
+    g_scr=SCR_SETTINGS; load_screen(scr);
+}
 static void settings_fill(void){
     if(!set_list) return;
     set_ver=bt_version();
@@ -515,7 +548,7 @@ static void settings_fill(void){
     lv_obj_t*r=set_row(set_list,LV_SYMBOL_AUDIO,"Headphone jack",NULL,!out[0]);
     lv_obj_add_event_cb(r,set_out_cb,LV_EVENT_CLICKED,(void*)-1L);
     char sub[48];
-    for(int i=0;i<nd;i++){ if(d[i].phone) continue;
+    for(int i=0;i<nd;i++){ if(d[i].phone||d[i].pad) continue;
         snprintf(set_macs[k],18,"%s",d[i].mac);
         int sel=!strcmp(out,d[i].mac);
         r=set_row(set_list,LV_SYMBOL_BLUETOOTH,d[i].name,
@@ -537,6 +570,15 @@ static void settings_fill(void){
         r=set_row(set_list,LV_SYMBOL_CALL,d[i].name,d[i].connected?"connected":"hold to forget",d[i].connected);
         lv_obj_add_event_cb(r,set_forget_cb,LV_EVENT_LONG_PRESSED,(void*)(long)k);
         k++; }
+
+    set_section(set_list,"CONTROLLERS");
+    for(int i=0;i<nd;i++){ if(!d[i].pad) continue;
+        snprintf(set_macs[k],18,"%s",d[i].mac);
+        r=set_row(set_list,LV_SYMBOL_KEYBOARD,d[i].name,d[i].connected?"connected - press a button to wake":"press a button on it to reconnect",d[i].connected);
+        lv_obj_add_event_cb(r,set_forget_cb,LV_EVENT_LONG_PRESSED,(void*)(long)k);
+        k++; }
+    r=set_row(set_list,LV_SYMBOL_EYE_OPEN,"Test buttons",pad_count()?pad_name(0):"no controller connected",0);
+    lv_obj_add_event_cb(r,padtest_open_cb,LV_EVENT_CLICKED,NULL);
 
     set_section(set_list,"ADD A DEVICE");
     r=set_row(set_list,LV_SYMBOL_REFRESH,bt_busy()?"Working...":"Scan for devices",NULL,0);
@@ -1126,6 +1168,28 @@ static void show_games(void){
     g_scr=SCR_SETTINGS; load_screen(scr);
 }
 
+/* game controller / remote: games get it first, otherwise it is a music remote */
+static void scroll_current(int dy){ lv_obj_t*l = set_list?set_list : (g_scr==SCR_BROWSER?g_brlist:NULL);
+    if(l) lv_obj_scroll_by_bounded(l,0,dy,LV_ANIM_ON); }
+static void pad_action(int a){
+    g_last_input=r3_tick_ms();
+    if(g_scr_off){ screen_wake(); return; }                          /* first press only wakes */
+    if(g_scr==SCR_CLOCK){ show_home(); return; }
+    if(g_scr==SCR_GAME && (game_pad(a)||brick_pad(a))) return;
+    switch(a){
+    case PA_A: if(!audio_is_playing() && g_pln>0) pl_resume();
+               else { audio_toggle_pause(); save_resume();
+                      if(np_play) lv_label_set_text(np_play,audio_is_paused()?LV_SYMBOL_PLAY:LV_SYMBOL_PAUSE); } break;
+    case PA_R: pl_next(); break;
+    case PA_L: pl_prev(); break;
+    case PA_PLUS: case PA_X: bump_vol(+12); break;
+    case PA_MINUS: case PA_Y: bump_vol(-12); break;
+    case PA_HOME: show_home(); break;
+    case PA_B: power_short(); break;
+    case PA_UP: scroll_current(+120); break;
+    case PA_DOWN: scroll_current(-120); break;
+    }
+}
 static void heartbeat(void){ static uint32_t lh=0; uint32_t n=r3_tick_ms();
     if(n-lh>=2000){ lh=n; printf("hb %lu\n",(unsigned long)n); } }
 static void fmt_ms(long ms,char*o,int c){ long s=ms/1000; snprintf(o,c,"%ld:%02ld",s/60,s%60); }
@@ -1233,6 +1297,7 @@ int main(int argc,char**argv){
         if(!g_scr_off && p_timeout && r3_tick_ms()-g_last_input >= (uint32_t)p_timeout*1000) screen_off();
         if(g_to_del){ lv_obj_del(g_to_del); g_to_del=NULL; }
         keys_poll();
+        pad_poll(); { int a; while(pad_next(&a)) pad_action(a); }
         if(audio_finished()) pl_next();     /* album auto-advance */
         tick_ui(); idle_poll(); heartbeat(); usleep(15000); }
     return 0;
