@@ -186,17 +186,25 @@ void DG_Init(){
 /* ---------------- game controller (Joy-Con...): landscape, no touch deck ----------------
  * Held sideways: stick = forward/back/turn, A fire (+Enter), B use, X next weapon,
  * Y run on/off, SL/SR strafe, - menu, Capture automap. Run is on by default. */
-extern boolean menuactive;          /* m_menu.c */
+extern boolean menuactive, messageNeedsInput; extern int messageToPrint;   /* m_menu.c */
+extern int key_nextweapon, key_prevweapon;                               /* m_controls.c */
 static int landscape, run_on=1, pad_weapon=1;
 static int pst[PA_N];                         /* last state sent per action */
+/* A and B depend on context: in a yes/no prompt (quit, nightmare...) y / n, in menus
+ * Enter / Backspace (= back), in game fire / use. X/Y = next/previous weapon (Doom's own
+ * key_nextweapon/prevweapon, bound in main). Run is always on with a controller. */
+static void ctx_key(int a,int h,unsigned char game_key,unsigned char menu_key,unsigned char yn_key){
+    static unsigned char sent[PA_N];
+    if(h){ sent[a] = (menuactive && messageToPrint && messageNeedsInput) ? yn_key : menuactive ? menu_key : game_key;
+           key(sent[a],1); }
+    else if(sent[a]){ key(sent[a],0); sent[a]=0; }
+}
 static void pad_to_keys(void){
     static const int K[PA_N]={KEY_UPARROW,KEY_DOWNARROW,KEY_LEFTARROW,KEY_RIGHTARROW,
-        KEY_FIRE,KEY_USE,0,0, KEY_STRAFE_L,KEY_STRAFE_R, KEY_ESCAPE,KEY_ESCAPE,KEY_TAB};
+        0,0,']','[', KEY_STRAFE_L,KEY_STRAFE_R, KEY_ESCAPE,KEY_ESCAPE,KEY_TAB};
     for(int a=0;a<PA_N;a++){ int h=pad_held(a); if(h==pst[a]) continue; pst[a]=h;
-        if(a==PA_A){ static unsigned char sent; if(h){ sent = menuactive?KEY_ENTER:KEY_FIRE; key(sent,1); }
-                     else if(sent){ key(sent,0); sent=0; } continue; }   /* menu: Enter only, game: fire only */
-        if(a==PA_X){ if(h){ pad_weapon=pad_weapon%7+1; tapkey((unsigned char)('0'+pad_weapon)); } continue; }
-        if(a==PA_Y){ if(h){ run_on=!run_on; key(KEY_RSHIFT,run_on); } continue; }
+        if(a==PA_A){ ctx_key(a,h,KEY_FIRE,KEY_ENTER,'y'); continue; }
+        if(a==PA_B){ ctx_key(a,h,KEY_USE,KEY_BACKSPACE,'n'); continue; }
         if(K[a]) key((unsigned char)K[a],h); }
     int a; while(pad_next(&a)){}             /* presses are handled as held states above */
 }
@@ -235,6 +243,7 @@ void DG_SetWindowTitle(const char*t){ (void)t; }
 
 int main(int argc,char**argv){
     doomgeneric_Create(argc,argv);
+    key_nextweapon=']'; key_prevweapon='[';    /* unbound by default: controller X / Y */
     for(;;){ doomgeneric_Tick(); if(!landscape) poll_touch(); poll_keys(); }
     return 0;
 }
