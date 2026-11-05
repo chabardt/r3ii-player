@@ -1,0 +1,41 @@
+MIT License
+
+Copyright (c) 2026 Théodore Chabardès
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+Third-party components bundled under vendor/ keep their own licenses, which
+govern their use and any redistribution:
+
+  - LVGL ................. MIT
+  - minimp3 ............. CC0 / public domain
+  - dr_libs (dr_flac, dr_wav) .. public domain / MIT-0
+  - stb_image ........... public domain / MIT
+  - minimp4 ............. CC0 / public domain
+  - tinyalsa ............ BSD-3-Clause
+  - faad2 ............... GPLv2  (AAC/M4A)
+  - doomgeneric ......... GPLv2  (Doom)
+  - Peanut-GB, minigb_apu ... MIT  (Game Boy)
+
+NOTE: because faad2 and doomgeneric are GPLv2, any compiled binary that links
+them (e.g. r3player with AAC support, r3doom) is a combined work governed by
+the GNU GPL v2. The MIT terms above apply to this project's own source code;
+binaries you distribute must comply with the GPL of the components they include.

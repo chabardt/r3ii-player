@@ -16,6 +16,16 @@ for this one model.
 
 ---
 
+## Screenshots
+
+| Home | Now Playing | Library (A–Z rail) |
+|:---:|:---:|:---:|
+| <img src="docs/screenshots/home.png" width="220"> | <img src="docs/screenshots/nowplaying.png" width="220"> | <img src="docs/screenshots/library.png" width="220"> |
+| **Settings** | **Watch face (idle)** | |
+| <img src="docs/screenshots/settings.png" width="220"> | <img src="docs/screenshots/watchface.png" width="220"> | |
+
+---
+
 ## Features
 
 **Player**
@@ -170,3 +180,13 @@ license):
 
 No HiBy firmware, Doom WADs, or game ROMs are included — bring your own data files.
 Reverse-engineered purely for interoperability on hardware you own.
+
+---
+
+## License
+
+This project's own source code is released under the **MIT License** (see [`LICENSE`](LICENSE))
+— free to use, modify and redistribute. The bundled third-party libraries keep their own
+licenses (listed above). Note that **faad2** and **doomgeneric** are **GPLv2**, so any compiled
+**binary** that links them (e.g. `r3player` with AAC, `r3doom`) is a combined work governed by the
+GNU GPL v2 when distributed.
