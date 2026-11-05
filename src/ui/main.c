@@ -120,6 +120,8 @@ enum { SCR_HOME, SCR_BROWSER, SCR_PLAYER, SCR_SETTINGS, SCR_CLOCK, SCR_GAME, SCR
 static int g_scr=SCR_HOME;
 static char g_cur_m3u[1024];                 /* playlist currently being viewed */
 static char g_add_track[1600], g_add_title[256];  /* track pending "add to playlist" */
+/* track-action sheet (long-press a track in a playlist/Favorites view): move/add/remove */
+static char g_act_full[1600], g_act_title[256], g_act_src[1024]; static int g_act_idx, g_act_move;
 static lv_obj_t *npl_ta;                      /* new-playlist name textarea */
 
 /* switch screens now, but defer deleting the old one to the main loop (never mid-event) */
@@ -136,6 +138,8 @@ static void show_gb_list(void);
 static void np_set_cover(void);
 static void show_playlists(void);
 static void show_add_to_playlist(void);
+static void show_track_actions(void);
+static void show_track_pick(void);
 
 /* ---- helpers ---- */
 /* The built-in Montserrat fonts are ASCII-only: fold UTF-8 Latin accents to ASCII in
@@ -255,6 +259,17 @@ static void m3u_remove(const char*m3u,const char*full){
     fclose(w); for(int i=0;i<n;i++)free(a[i]); free(a); sync(); }
 static int m3u_count(const char*m3u){ FILE*f=fopen(m3u,"r"); if(!f)return 0; int n=0; char l[1024];
     while(fgets(l,sizeof l,f)) if(l[0]&&l[0]!='#') n++; fclose(f); return n; }
+/* read the idx-th track (0-based) of an m3u: its full path + #EXTINF title. Returns 1 if found. */
+static int m3u_nth(const char*m3u,int idx,char*full,int fcap,char*title,int tcap){
+    FILE*f=fopen(m3u,"r"); if(!f) return 0; char l[1024],t[256]=""; int i=0,ok=0;
+    while(fgets(l,sizeof l,f)){ l[strcspn(l,"\r\n")]=0; if(!l[0]) continue;
+        if(!strncmp(l,"#EXTINF",7)){ char*c=strchr(l,','); if(c) snprintf(t,sizeof t,"%s",c+1); continue; }
+        if(l[0]=='#') continue;
+        if(i==idx){ if(l[0]=='/') snprintf(full,fcap,"%s",l); else snprintf(full,fcap,"%s/%s",SD_ROOT,l);
+            if(title){ if(t[0]) snprintf(title,tcap,"%s",t); else snprintf(title,tcap,"%s",pl_base(full)); }
+            ok=1; break; }
+        t[0]=0; i++; }
+    fclose(f); return ok; }
 static int fav_has(const char*full){ return m3u_has(FAV_M3U,full); }
 static void fav_toggle(const char*full,const char*title){
     if(fav_has(full)) m3u_remove(FAV_M3U,full); else m3u_append(FAV_M3U,full,title); }
@@ -1352,6 +1367,13 @@ static void pl_tracks_back_cb(lv_event_t*e){ (void)e; show_playlists(); }
 static void pl_track_cb(lv_event_t*e){ long i=(long)lv_event_get_user_data(e);
     pl_load_m3u(g_cur_m3u);
     if(i>=0 && i<g_pln){ pl_play((int)i); show_player(g_pltitle,g_pldir); } }
+static int  is_fav_m3u(const char*m3u){ return !strcmp(m3u,FAV_M3U); }
+static void pl_disp(const char*m3u,char*out,int cap){ snprintf(out,cap,"%s",pl_base(m3u));
+    char*d=strrchr(out,'.'); if(d&&!strcasecmp(d,".m3u"))*d=0; }
+static void pl_track_hold_cb(lv_event_t*e){ long i=(long)lv_event_get_user_data(e);
+    lv_indev_wait_release(lv_indev_get_act());   /* don't let the finger-release click the new screen */
+    if(!m3u_nth(g_cur_m3u,(int)i,g_act_full,sizeof g_act_full,g_act_title,sizeof g_act_title)) return;
+    g_act_idx=(int)i; snprintf(g_act_src,sizeof g_act_src,"%s",g_cur_m3u); show_track_actions(); }
 static void show_playlist_tracks(const char*m3u,const char*disp){
     snprintf(g_cur_m3u,sizeof g_cur_m3u,"%s",m3u);
     lv_obj_t*scr,*l=page_new(disp,pl_tracks_back_cb,&scr);
@@ -1366,11 +1388,64 @@ static void show_playlist_tracks(const char*m3u,const char*disp){
             struct stat st; if(stat(full,&st)!=0){ title[0]=0; continue; }   /* skip missing (Phase 2: offer to fetch) */
             char d2[256]; if(title[0]) snprintf(d2,sizeof d2,"%s",title); else pretty(pl_base(full),d2,sizeof d2);
             title[0]=0;
-            lv_obj_t*b=set_row(l,LV_SYMBOL_AUDIO,d2,NULL,0);
-            lv_obj_add_event_cb(b,pl_track_cb,LV_EVENT_CLICKED,(void*)idx); idx++; }
+            lv_obj_t*b=set_row(l,LV_SYMBOL_AUDIO,d2,"hold to move / remove",0);
+            lv_obj_add_event_cb(b,pl_track_cb,LV_EVENT_CLICKED,(void*)idx);
+            lv_obj_add_event_cb(b,pl_track_hold_cb,LV_EVENT_LONG_PRESSED,(void*)idx); idx++; }
         fclose(f); }
     if(idx==0){ lv_obj_t*n=lv_label_create(l); lv_label_set_text(n,"(empty - add songs from Now Playing)");
         lv_obj_set_style_text_color(n,lv_color_hex(C_DIM),0); lv_obj_set_style_pad_all(n,12,0); }
+    g_scr=SCR_PLAYLISTS; load_screen(scr);
+}
+/* --- track action sheet: long-press a track in a playlist/Favorites view --- */
+static void act_reshow(void){ char d[128]; pl_disp(g_act_src,d,sizeof d); show_playlist_tracks(g_act_src,d); }
+static void act_back_cb(lv_event_t*e){ (void)e; act_reshow(); }
+static void act_play_cb(lv_event_t*e){ (void)e; pl_load_m3u(g_act_src);
+    int pi=-1; for(int k=0;k<g_pln;k++) if(!strcmp(g_pl[k],g_act_full)){ pi=k; break; }
+    if(pi<0) pi=(g_act_idx<g_pln)?g_act_idx:0;
+    if(pi>=0&&pi<g_pln){ pl_play(pi); show_player(g_pltitle,g_pldir); } }
+static void act_remove_cb(lv_event_t*e){ (void)e; m3u_remove(g_act_src,g_act_full); act_reshow(); }
+static void act_move_cb(lv_event_t*e){ (void)e; g_act_move=1; show_track_pick(); }
+static void act_add_cb (lv_event_t*e){ (void)e; g_act_move=0; show_track_pick(); }
+static void show_track_actions(void){
+    lv_obj_t*scr,*l=page_new("Song",act_back_cb,&scr);
+    lv_obj_t*t=lv_label_create(l); lv_label_set_text(t,g_act_title[0]?g_act_title:pl_base(g_act_full));
+    lv_obj_set_style_text_color(t,lv_color_hex(C_FG),0); lv_obj_set_style_pad_all(t,12,0);
+    lv_label_set_long_mode(t,LV_LABEL_LONG_DOT); lv_obj_set_width(t,440);
+    lv_obj_t*pb=set_row(l,LV_SYMBOL_PLAY,"Play",NULL,0);          lv_obj_add_event_cb(pb,act_play_cb,LV_EVENT_CLICKED,NULL);
+    lv_obj_t*mb=set_row(l,LV_SYMBOL_SHUFFLE,"Move to...",NULL,0); lv_obj_add_event_cb(mb,act_move_cb,LV_EVENT_CLICKED,NULL);
+    lv_obj_t*ab=set_row(l,LV_SYMBOL_PLUS,"Add to...",NULL,0);     lv_obj_add_event_cb(ab,act_add_cb,LV_EVENT_CLICKED,NULL);
+    char rm[80]; { char d[64]; pl_disp(g_act_src,d,sizeof d); snprintf(rm,sizeof rm,"Remove from %s",d); }
+    lv_obj_t*rb=set_row(l,LV_SYMBOL_TRASH,rm,NULL,0);            lv_obj_add_event_cb(rb,act_remove_cb,LV_EVENT_CLICKED,NULL);
+    g_scr=SCR_PLAYLISTS; load_screen(scr);
+}
+/* pick a destination playlist for Move/Add (excludes Favorites-if-source and the source list itself) */
+static void pick_back_cb(lv_event_t*e){ (void)e; show_track_actions(); }
+static void act_apply(const char*target){
+    if(g_act_full[0]) m3u_append(target,g_act_full,g_act_title);
+    if(g_act_move && g_act_src[0] && strcmp(g_act_src,target)) m3u_remove(g_act_src,g_act_full);
+    sync(); act_reshow();
+}
+static void pick_fav_cb(lv_event_t*e){ (void)e; act_apply(FAV_M3U); }
+static void pick_file_cb(lv_event_t*e){ char*m3u=lv_event_get_user_data(e); act_apply(m3u); }
+static void show_track_pick(void){
+    char ttl[48]; snprintf(ttl,sizeof ttl,"%s to...",g_act_move?"Move":"Add");
+    lv_obj_t*scr,*l=page_new(ttl,pick_back_cb,&scr);
+    if(!is_fav_m3u(g_act_src)){ lv_obj_t*fb=set_row(l,LV_SYMBOL_OK,"Favorites",NULL,0);
+        lv_obj_add_event_cb(fb,pick_fav_cb,LV_EVENT_CLICKED,NULL); }
+    DIR*dp=opendir(PL_DIR);
+    if(dp){ static char names[256][128]; int nn=0; struct dirent*de;
+        while((de=readdir(dp))&&nn<256){ const char*e2=strrchr(de->d_name,'.');
+            if(!e2||strcasecmp(e2,".m3u")||!strcasecmp(de->d_name,"Favorites.m3u")) continue;
+            char full[1024]; snprintf(full,sizeof full,"%s/%s",PL_DIR,de->d_name);
+            if(!strcmp(full,g_act_src)) continue;                 /* can't move to itself */
+            snprintf(names[nn++],128,"%s",de->d_name); }
+        closedir(dp); qsort(names,nn,128,cmp_row);
+        for(int i=0;i<nn;i++){ char d[128]; snprintf(d,sizeof d,"%s",names[i]); char*dot=strrchr(d,'.'); if(dot)*dot=0;
+            char full[1024]; snprintf(full,sizeof full,"%s/%s",PL_DIR,names[i]);
+            char sub[24]; int c=m3u_count(full); snprintf(sub,sizeof sub,"%d song%s",c,c==1?"":"s");
+            lv_obj_t*b=set_row(l,LV_SYMBOL_LIST,d,sub,0); char*fm=strdup(full);
+            lv_obj_add_event_cb(b,pick_file_cb,LV_EVENT_CLICKED,fm);
+            lv_obj_add_event_cb(b,free_cb,LV_EVENT_DELETE,fm); } }
     g_scr=SCR_PLAYLISTS; load_screen(scr);
 }
 /* add-to-playlist picker (current track) */

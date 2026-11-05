@@ -16,6 +16,7 @@
 
 #define SD_ROOT  "/usr/data/mnt/sd_0"
 #define IDX_CACHE "/usr/data/r3_mix.idx"
+#define FULL_FLAG "/usr/data/r3_mix.full"    /* present once genre/year enrichment has finished */
 #define STATS_FILE "/usr/data/r3_stats"
 #define FAV_M3U  SD_ROOT "/Playlists/Favorites.m3u"
 #define BLISS_FILE SD_ROOT "/.r3bliss"     /* PC-built: <rel>\t f0 f1 ... per line */
@@ -28,6 +29,7 @@ static ent_t E[MAXTRK]; static int NE;
 static char *ART[MAXSTR]; static int NART; static char *GEN[MAXSTR]; static int NGEN;
 static float *VEC;                      /* VDIM*NE pool when a bliss file is loaded */
 static volatile int g_ready, g_dirty;
+static int g_cache_has_genre;   /* a loaded cache already carried genres -> no re-enrich */
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static char g_root[512];
 
@@ -46,8 +48,10 @@ static void id3_text(const unsigned char*b,int n,const char*id,char*out,int cap)
         long fs = ver==4 ? (long)sid(b+i+4) : (((long)b[i+4]<<24)|((long)b[i+5]<<16)|((long)b[i+6]<<8)|b[i+7]);
         if(fs<=0||i+10+fs>n) break;
         if(!memcmp(b+i,id,4)){ const unsigned char*d=b+i+10; int enc=d[0]; const unsigned char*t=d+1; int tl=fs-1;
-            int j=0; if(enc==1||enc==2){ for(int k=0;k+1<tl&&j<cap-1;k+=2){ unsigned char c=enc==1?t[k]:t[k+1]; if(c>=32)out[j++]=c; } }
-            else { for(int k=0;k<tl&&j<cap-1;k++){ unsigned char c=t[k]; if(c>=32)out[j++]=c; } }
+            /* stop at the first NUL: ID3v2.4 separates multiple values (e.g. several genres)
+             * with NUL — without this they concatenate into "Alternative MetalAlternative Rock". */
+            int j=0; if(enc==1||enc==2){ for(int k=0;k+1<tl&&j<cap-1;k+=2){ unsigned char c=enc==1?t[k]:t[k+1]; if(c==0)break; if(c>=32)out[j++]=c; } }
+            else { for(int k=0;k<tl&&j<cap-1;k++){ unsigned char c=t[k]; if(c==0)break; if(c>=32)out[j++]=c; } }
             out[j]=0; return; }
         i+=10+fs; }
 }
@@ -73,24 +77,35 @@ static void read_meta(const char*full,char*genre,int gcap,int*year){
 static int is_audio(const char*n){ const char*d=strrchr(n,'.'); if(!d)return 0;
     return !strcasecmp(d,".mp3")||!strcasecmp(d,".mpga")||!strcasecmp(d,".flac")||!strcasecmp(d,".wav")||!strcasecmp(d,".m4a"); }
 
-/* recursively index <root>/... ; artist = first path component under the music root */
-static void walk(const char*dir,int artist){
+/* PHASE 1 — paths only (no file opens): artist = first path component under the music root.
+ * Uses d_type to skip a stat() per entry, so this runs at raw directory-listing speed and
+ * makes browsing usable long before the (slow) tag-reading pass finishes. */
+static void walk_paths(const char*dir,int artist){
     DIR*dp=opendir(dir); if(!dp) return; struct dirent*de;
     while((de=readdir(dp)) && NE<MAXTRK){ if(de->d_name[0]=='.') continue;
         char p[1024]; snprintf(p,sizeof p,"%s/%s",dir,de->d_name);
-        struct stat st; if(stat(p,&st)!=0) continue;
-        if(S_ISDIR(st.st_mode)){ int a=artist; if(artist<0) a=intern(ART,&NART,de->d_name); walk(p,a); }
-        else if(S_ISREG(st.st_mode) && is_audio(de->d_name)){
-            char genre[48]; int yr; read_meta(p,genre,sizeof genre,&yr);
-            pthread_mutex_lock(&mu);
+        int isdir=0,isreg=0;
+        if(de->d_type==DT_DIR) isdir=1;
+        else if(de->d_type==DT_REG) isreg=1;
+        else { struct stat st; if(stat(p,&st)!=0) continue; isdir=S_ISDIR(st.st_mode); isreg=S_ISREG(st.st_mode); }
+        if(isdir){ int a=artist; if(artist<0) a=intern(ART,&NART,de->d_name); walk_paths(p,a); }
+        else if(isreg && is_audio(de->d_name)){
             ent_t*e=&E[NE]; memset(e,0,sizeof *e);
-            e->rel=strdup(rel_of(p)); e->artist=artist;
-            e->genre=genre[0]?intern(GEN,&NGEN,genre):-1; e->yr=yr;
-            NE++; pthread_mutex_unlock(&mu);
-            usleep(400);   /* stay gentle: indexing must not starve playback/UI */
+            e->rel=strdup(rel_of(p)); e->artist=artist; e->genre=-1; e->yr=0;
+            NE++;
         }
     }
     closedir(dp);
+}
+/* PHASE 2 — open each track and read genre + year (the slow pass). Runs in the background
+ * after phase 1; browsing + artist-based mixes already work while this fills in tags. */
+static void enrich_all(void){
+    for(int i=0;i<NE;i++){
+        char full[1024]; snprintf(full,sizeof full,"%s/%s",SD_ROOT,E[i].rel);
+        char genre[48]; int yr; read_meta(full,genre,sizeof genre,&yr);
+        E[i].genre = genre[0]?intern(GEN,&NGEN,genre):-1; E[i].yr=yr;
+        if((i&63)==0) usleep(300);   /* yield to playback/UI periodically */
+    }
 }
 
 static void load_stats(void){ FILE*f=fopen(STATS_FILE,"r"); if(!f) return; char l[1200];
@@ -131,6 +146,7 @@ static int load_cache(void){ FILE*f=fopen(IDX_CACHE,"r"); if(!f) return 0;
         e->rel=strdup(l);
         e->artist = t1[1] ? intern(ART,&NART,t1+1) : -1;
         e->genre  = t2[1] ? intern(GEN,&NGEN,t2+1) : -1;
+        if(t2[1]) g_cache_has_genre=1;
         e->yr=atoi(t3+1); NE++; n++; }
     fclose(f); return n;
 }
@@ -143,11 +159,16 @@ static void save_cache(void){ FILE*f=fopen(IDX_CACHE,"w"); if(!f) return;
 }
 
 static void* idx_thread(void*a){ (void)a;
-    int cached = load_cache();   /* instant on later boots */
-    if(!cached) walk(g_root,-1); /* first boot (or after a rescan): full SD scan */
+    int cached = load_cache();        /* instant on later boots */
+    if(!cached) walk_paths(g_root,-1);/* phase 1: paths only, at listing speed */
     load_stats(); load_fav(); load_bliss();
-    g_ready=1;
-    if(!cached) save_cache();    /* persist for next boot */
+    g_ready=1;                        /* browsing + artist mixes available from here */
+    { FILE*r=fopen("/tmp/r3mix.ready","w"); if(r){ fprintf(r,"%d tracks ready\n",NE); fclose(r); } }
+    if(!cached) save_cache();         /* persist paths right away */
+    /* phase 2: enrich genre/year unless the cache already had them (or a prior run finished it) */
+    int full = (access(FULL_FLAG,F_OK)==0) || g_cache_has_genre;
+    if(!full && NE>0){ enrich_all(); save_cache(); }
+    if(NE>0){ FILE*ff=fopen(FULL_FLAG,"w"); if(ff) fclose(ff); }
     FILE*m=fopen("/tmp/r3mix.done","w"); if(m){ fprintf(m,"%d tracks (%s), %d with vectors\n",NE,cached?"cached":"scanned",VEC?1:0); fclose(m); }
     return 0;
 }
@@ -198,11 +219,13 @@ static void reset_index(void){
 }
 static void* rescan_thread(void*a){ (void)a;
     g_ready=0;              /* browser falls back to live SD reads while we rebuild */
-    reset_index();
-    remove(IDX_CACHE);
-    walk(g_root,-1);
+    reset_index(); g_cache_has_genre=0;
+    remove(IDX_CACHE); remove(FULL_FLAG);
+    walk_paths(g_root,-1);                 /* phase 1 */
     load_stats(); load_fav(); load_bliss();
     g_ready=1; save_cache();
+    enrich_all(); save_cache();            /* phase 2 */
+    { FILE*ff=fopen(FULL_FLAG,"w"); if(ff) fclose(ff); }
     FILE*m=fopen("/tmp/r3mix.done","w"); if(m){ fprintf(m,"%d tracks (rescan), %d with vectors\n",NE,VEC?1:0); fclose(m); }
     return 0;
 }
