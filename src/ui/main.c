@@ -14,6 +14,7 @@
 #include "pet.h"
 #include "pad.h"
 #include "share.h"
+#include "smartmix.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -185,13 +186,16 @@ static const char* pl_base(const char*full){ const char*b=strrchr(full,'/'); ret
 static void pl_build(const char*dir,const char*selname){
     pl_free();
     strncpy(g_pldir,dir,sizeof g_pldir-1); g_pldir[sizeof g_pldir-1]=0;
-    DIR*dp=opendir(dir); if(!dp)return;
     char **tmp=malloc(sizeof(char*)*4096); int n=0;
-    struct dirent*de;
-    while((de=readdir(dp))&&n<4096){ if(de->d_name[0]=='.')continue;
-        if(!is_audio(de->d_name))continue;
-        char fp[1600]; snprintf(fp,sizeof fp,"%s/%s",dir,de->d_name); tmp[n++]=strdup(fp); }
-    closedir(dp);
+    if(!strncmp(dir,MUSIC_ROOT,strlen(MUSIC_ROOT)) && smartmix_ready()){
+        char (*ff)[1024]=malloc((size_t)1024*1024);   /* up to 1024 tracks in a folder */
+        if(ff){ int m=smartmix_folder(dir,ff,1024); if(m>0) for(int i=0;i<m;i++) tmp[n++]=strdup(ff[i]); free(ff); }
+    }
+    if(n==0){ DIR*dp=opendir(dir); if(dp){ struct dirent*de;
+        while((de=readdir(dp))&&n<4096){ if(de->d_name[0]=='.')continue;
+            if(!is_audio(de->d_name))continue;
+            char fp[1600]; snprintf(fp,sizeof fp,"%s/%s",dir,de->d_name); tmp[n++]=strdup(fp); }
+        closedir(dp); } }
     qsort(tmp,n,sizeof(char*),cmp_pstr);
     g_pl=tmp; g_pln=n; g_pli=0;
     if(selname) for(int i=0;i<n;i++) if(!strcmp(pl_base(tmp[i]),selname)){ g_pli=i; break; }
@@ -303,7 +307,9 @@ static void np_playpause_cb(lv_event_t*e){ (void)e;
     if(!audio_is_playing() && g_pln>0){ pl_resume(); return; }   /* resume-ready: continue where it stopped */
     audio_toggle_pause(); save_resume();
     if(np_play) lv_label_set_text(np_play, audio_is_paused()?LV_SYMBOL_PLAY:LV_SYMBOL_PAUSE); }
-static void np_next_cb(lv_event_t*e){ (void)e; pl_next(); }
+static void np_next_cb(lv_event_t*e){ (void)e;
+    if(g_pln>0&&g_pli>=0 && audio_dur_ms()>0 && audio_pos_ms()<audio_dur_ms()/2) smartmix_note(g_pl[g_pli],0); /* early skip */
+    pl_next(); }
 static void np_prev_cb(lv_event_t*e){ (void)e; pl_prev(); }
 static void np_prog_cb(lv_event_t*e){ (void)e; long dur=audio_dur_ms();   /* user released the seek bar */
     long v = np_prog?lv_slider_get_value(np_prog):-1;
@@ -505,22 +511,32 @@ static void show_browser(const char*path){
     lv_obj_set_style_bg_color(list,lv_color_hex(C_BG),0); lv_obj_set_style_border_width(list,0,0);
     lv_obj_set_style_pad_all(list,0,0); lv_obj_set_style_pad_hor(list,8,0); lv_obj_set_style_pad_row(list,6,0);
     lv_obj_set_style_pad_top(list,6,0);
-    /* read dir */
-    DIR*dp=opendir(cur);
-    if(dp){
-        entry_t*es=malloc(sizeof(entry_t)*4096); int ne=0;
-        struct dirent*de;
-        while((de=readdir(dp)) && ne<4096){
-            if(de->d_name[0]=='.')continue;
-            int isdir;
-            if(de->d_type==DT_DIR) isdir=1;
-            else if(de->d_type==DT_REG) isdir=0;
-            else { char full[1600]; snprintf(full,sizeof full,"%s/%s",cur,de->d_name);
-                   struct stat st; isdir=(stat(full,&st)==0 && S_ISDIR(st.st_mode)); }
-            if(!isdir && !is_audio(de->d_name)) continue;
-            strncpy(es[ne].name,de->d_name,255); es[ne].name[255]=0; es[ne].dir=isdir; ne++;
+    /* entries: served from the smart index (instant) when browsing Music and the index
+     * is ready; otherwise a live directory read (podcasts, first boot, any non-Music path). */
+    entry_t*es=malloc(sizeof(entry_t)*4096); int ne=0, from_index=0;
+    if(!strncmp(cur,MUSIC_ROOT,strlen(MUSIC_ROOT)) && smartmix_ready()){
+        char (*nm)[256]=malloc((size_t)4096*256); char*dd=malloc(4096);
+        if(nm&&dd){ int n=smartmix_listdir(cur,nm,dd,4096);
+            if(n>=0){ ne=n; for(int i=0;i<n;i++){ strncpy(es[i].name,nm[i],255); es[i].name[255]=0; es[i].dir=dd[i]; } from_index=1; } }
+        free(nm); free(dd);
+    }
+    if(!from_index){
+        DIR*dp=opendir(cur);
+        if(dp){ struct dirent*de;
+            while((de=readdir(dp)) && ne<4096){
+                if(de->d_name[0]=='.')continue;
+                int isdir;
+                if(de->d_type==DT_DIR) isdir=1;
+                else if(de->d_type==DT_REG) isdir=0;
+                else { char full[1600]; snprintf(full,sizeof full,"%s/%s",cur,de->d_name);
+                       struct stat st; isdir=(stat(full,&st)==0 && S_ISDIR(st.st_mode)); }
+                if(!isdir && !is_audio(de->d_name)) continue;
+                strncpy(es[ne].name,de->d_name,255); es[ne].name[255]=0; es[ne].dir=isdir; ne++;
+            }
+            closedir(dp);
         }
-        closedir(dp);
+    }
+    {
         qsort(es,ne,sizeof(entry_t),ecmp);
         for(int i=0;i<ne;i++){
             char disp[256];
@@ -1139,6 +1155,7 @@ static void show_wifi(void){
 }
 static void setup_go_cb(lv_event_t*e){ long i=(long)lv_event_get_user_data(e);
     if(i==0) show_settings(); else if(i==1) show_wifi(); else if(i==2) show_display(); else if(i==3) show_sounds(); else show_datetime(); }
+static void rescan_cb(lv_event_t*e){ (void)e; smartmix_rescan(); show_setup(); }   /* rebuild the smart index + fast-browse cache */
 static void show_setup(void){
     lv_obj_t*scr,*l=page_new("Settings",setup_home_cb,&scr);
     static const char*ic[5]={LV_SYMBOL_BLUETOOTH,LV_SYMBOL_WIFI,LV_SYMBOL_IMAGE,LV_SYMBOL_AUDIO,LV_SYMBOL_BELL};
@@ -1158,6 +1175,12 @@ static void show_setup(void){
         lv_obj_t*ch=lv_label_create(r); lv_label_set_text(ch,LV_SYMBOL_RIGHT);
         lv_obj_set_style_text_color(ch,lv_color_hex(C_DIM),0); lv_obj_align(ch,LV_ALIGN_RIGHT_MID,-6,0);
         lv_obj_add_event_cb(r,setup_go_cb,LV_EVENT_CLICKED,(void*)i); }
+    /* Rescan library: rebuild the smart index + fast-browse cache (after adding/removing music) */
+    { char rsub[48];
+      if(smartmix_ready()) snprintf(rsub,sizeof rsub,"%d tracks indexed",smartmix_count());
+      else snprintf(rsub,sizeof rsub,"indexing library...");
+      lv_obj_t*r=set_row(l,LV_SYMBOL_REFRESH,"Rescan library",rsub,0);
+      lv_obj_add_event_cb(r,rescan_cb,LV_EVENT_CLICKED,NULL); }
     g_scr=SCR_SETTINGS; load_screen(scr);
 }
 
@@ -1188,6 +1211,20 @@ static void pl_add_file_rows(lv_obj_t*l, lv_event_cb_t cb){
         lv_obj_add_event_cb(b,cb,LV_EVENT_CLICKED,fm);
         lv_obj_add_event_cb(b,free_cb,LV_EVENT_DELETE,fm); }
 }
+/* ---- smart mix playback ---- */
+static void play_mix(char mix[][1024],int n){
+    if(n<=0) return;
+    pl_free();
+    char**tmp=malloc(sizeof(char*)*n); for(int i=0;i<n;i++) tmp[i]=strdup(mix[i]);
+    g_pl=tmp; g_pln=n; g_pli=0;
+    pl_play(0); show_player(g_pltitle,g_pldir);
+}
+static void mix_foryou_cb(lv_event_t*e){ (void)e; static char mix[60][1024];
+    int n=smartmix_for_you(mix,60); if(n>0) play_mix(mix,n); }
+static void mix_similar_cb(lv_event_t*e){ (void)e; if(!(g_pln>0&&g_pli>=0)) return;
+    char seed[1024]; snprintf(seed,sizeof seed,"%s",g_pl[g_pli]);
+    static char mix[60][1024]; int n=smartmix_build(seed,mix,60); if(n>0) play_mix(mix,n); }
+
 /* ---- peer (LAN) playlist sharing ---- */
 static peer_t g_peer; static char g_peer_pl[128];
 static char g_dl_local_m3u[1024];
@@ -1287,6 +1324,12 @@ static void show_import_confirm(int missing){
 
 static void show_playlists(void){
     lv_obj_t*scr,*l=page_new("Playlists",pl_home_cb,&scr);
+    /* smart suggestions */
+    { lv_obj_t*fy=set_row(l,LV_SYMBOL_AUDIO,"For You",
+        smartmix_ready()?"from your favorites & plays":"indexing your library...",1);
+      lv_obj_add_event_cb(fy,mix_foryou_cb,LV_EVENT_CLICKED,NULL); }
+    if(g_pln>0){ lv_obj_t*sm=set_row(l,LV_SYMBOL_SHUFFLE,"Similar to current song",NULL,0);
+      lv_obj_add_event_cb(sm,mix_similar_cb,LV_EVENT_CLICKED,NULL); }
     int fc=m3u_count(FAV_M3U); char fsub[24]; snprintf(fsub,sizeof fsub,"%d song%s",fc,fc==1?"":"s");
     lv_obj_t*fb=set_row(l,LV_SYMBOL_OK,"Favorites",fsub,1);
     char*fm=strdup(FAV_M3U); lv_obj_add_event_cb(fb,pl_file_cb,LV_EVENT_CLICKED,fm);
@@ -1394,17 +1437,21 @@ static void tile_cb(lv_event_t*e){ const char*name=lv_event_get_user_data(e);
     else if(!strcmp(name,"Settings")) show_setup();
     else if(!strcmp(name,"Games")) show_games();
     else DBG("tile (todo): %s\n",name); }
-static void make_tile(lv_obj_t*g,const char*txt,uint32_t accent,int col,int row){
-    lv_obj_t*b=lv_btn_create(g);
-    lv_obj_set_grid_cell(b,LV_GRID_ALIGN_STRETCH,col,1,LV_GRID_ALIGN_STRETCH,row,1);
+static void make_row(lv_obj_t*c,const char*txt,const char*icon,uint32_t accent){
+    lv_obj_t*b=lv_btn_create(c);
+    lv_obj_set_width(b,LV_PCT(100)); lv_obj_set_flex_grow(b,1);   /* rows share the height evenly */
     lv_obj_set_style_bg_color(b,lv_color_hex(C_PANEL),0); lv_obj_set_style_radius(b,R_BTN,0);
     lv_obj_set_style_border_color(b,lv_color_hex(accent),0); lv_obj_set_style_border_width(b,3,0);
     lv_obj_set_style_bg_color(b,lv_color_hex(accent),LV_STATE_PRESSED);
     lv_obj_add_event_cb(b,tile_cb,LV_EVENT_CLICKED,(void*)txt);
+    lv_obj_t*ic=lv_label_create(b); lv_label_set_text(ic,icon);
+    lv_obj_set_style_text_color(ic,lv_color_hex(accent),0);
+    lv_obj_set_style_text_color(ic,lv_color_hex(C_BG),LV_STATE_PRESSED);
+    lv_obj_set_style_text_font(ic,&lv_font_montserrat_28,0); lv_obj_align(ic,LV_ALIGN_LEFT_MID,20,0);
     lv_obj_t*l=lv_label_create(b); lv_label_set_text(l,txt);
     lv_obj_set_style_text_color(l,lv_color_hex(accent),0);
     lv_obj_set_style_text_color(l,lv_color_hex(C_BG),LV_STATE_PRESSED);
-    lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0); lv_obj_center(l);
+    lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0); lv_obj_align(l,LV_ALIGN_LEFT_MID,70,0);
 }
 static void show_home(void){
     null_live();
@@ -1424,16 +1471,16 @@ static void show_home(void){
     lv_obj_set_style_text_color(btbat_lbl,lv_color_hex(C_DIM),0); lv_obj_align(btbat_lbl,LV_ALIGN_RIGHT_MID,-170,0);
     batt_lbl=lv_label_create(bar); lv_label_set_text(batt_lbl,"");
     lv_obj_set_style_text_color(batt_lbl,lv_color_hex(C_DIM),0); lv_obj_align(batt_lbl,LV_ALIGN_RIGHT_MID,-80,0);
-    static lv_coord_t cols[]={LV_GRID_FR(1),LV_GRID_FR(1),LV_GRID_TEMPLATE_LAST};
-    static lv_coord_t rows[]={LV_GRID_FR(1),LV_GRID_FR(1),LV_GRID_FR(1),LV_GRID_TEMPLATE_LAST};
     lv_obj_t*g=lv_obj_create(scr); lv_obj_set_style_bg_opa(g,LV_OPA_TRANSP,0);
     lv_obj_set_style_border_width(g,0,0); lv_obj_set_style_pad_all(g,0,0);
     lv_obj_set_size(g,448,634); lv_obj_align(g,LV_ALIGN_TOP_MID,0,70);
-    lv_obj_set_style_pad_row(g,16,0); lv_obj_set_style_pad_column(g,16,0);
-    lv_obj_set_grid_dsc_array(g,cols,rows); lv_obj_clear_flag(g,LV_OBJ_FLAG_SCROLLABLE);
-    make_tile(g,"Music",C_ACCENT,0,0);     make_tile(g,"Podcasts",C_ACCENT2,1,0);
-    make_tile(g,"Playlists",C_ACCENT,0,1); make_tile(g,"Games",C_ACCENT2,1,1);
-    make_tile(g,"Settings",C_ACCENT,0,2);
+    lv_obj_set_flex_flow(g,LV_FLEX_FLOW_COLUMN); lv_obj_set_style_pad_row(g,14,0);
+    lv_obj_clear_flag(g,LV_OBJ_FLAG_SCROLLABLE);
+    make_row(g,"Music",   LV_SYMBOL_AUDIO,   C_ACCENT);
+    make_row(g,"Podcasts",LV_SYMBOL_VIDEO,   C_ACCENT2);
+    make_row(g,"Playlists",LV_SYMBOL_LIST,   C_ACCENT);
+    make_row(g,"Games",   LV_SYMBOL_PLAY,    C_ACCENT2);
+    make_row(g,"Settings",LV_SYMBOL_SETTINGS,C_ACCENT);
     g_scr=SCR_HOME;
     load_screen(scr);
 }
@@ -1465,7 +1512,7 @@ static void power_short(void){
     else if(g_pln>0)      show_player(g_pltitle,g_pldir);
     else                  show_browser(MUSIC_ROOT);
 }
-static void do_poweroff(void){ game_save(); brick_save(); coil_save(); save_resume(); audio_stop(); sync(); system("poweroff"); }
+static void do_poweroff(void){ game_save(); brick_save(); coil_save(); save_resume(); smartmix_flush(); audio_stop(); sync(); system("poweroff"); }
 static void keys_poll(void){
     struct input_event e;
     if(kf_pwr>=0) while(read(kf_pwr,&e,sizeof e)==sizeof e){
@@ -1777,7 +1824,7 @@ static void tick_ui(void){
     { static uint32_t lsd; uint32_t t=r3_tick_ms(); if(t-lsd>=3000){ lsd=t; sd_hotplug(); } }
     static uint32_t lc=0,lp=0; uint32_t now=r3_tick_ms();
     static uint32_t ls=0;   /* keep the resume point fresh: survives restarts / flat battery, not just power-off */
-    if(audio_is_playing() && !audio_is_paused() && now-ls>=30000){ ls=now; save_resume(); }
+    if(audio_is_playing() && !audio_is_paused() && now-ls>=30000){ ls=now; save_resume(); smartmix_flush(); }
     if(now-lc>=1000){ lc=now; if(clock_lbl){ time_t t=time(0); char b[8];
         strftime(b,sizeof b,"%H:%M",localtime(&t)); lv_label_set_text(clock_lbl,b);} }
     if(now-lp>=300 && (np_pos||np_prog)){ lp=now;
@@ -1877,6 +1924,7 @@ int main(int argc,char**argv){
     g_last_input=r3_tick_ms();
     wifi_start();                  /* Wi-Fi worker: radio + music server, if switched on */
     share_start();                 /* LAN peer discovery for playlist sharing */
+    smartmix_start(MUSIC_ROOT);     /* background index for smart suggestions */
     bt_start();                    /* BT worker: daemons, auto-reconnect remembered speaker */
     printf("r3player UI up\n");
     for(;;){
@@ -1889,7 +1937,7 @@ int main(int argc,char**argv){
         if(g_to_del){ lv_obj_del(g_to_del); g_to_del=NULL; }
         keys_poll();
         pad_poll(); { int a; while(pad_next(&a)) pad_action(a); }
-        if(audio_finished()) pl_next();     /* album auto-advance */
+        if(audio_finished()){ if(g_pln>0&&g_pli>=0) smartmix_note(g_pl[g_pli],1); pl_next(); }  /* finished = a play; auto-advance */
         tick_ui(); idle_poll(); heartbeat(); usleep(15000); }
     return 0;
 }
