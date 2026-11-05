@@ -185,8 +185,9 @@ Reverse-engineered purely for interoperability on hardware you own.
 
 ## License
 
-This project's own source code is released under the **MIT License** (see [`LICENSE`](LICENSE))
-— free to use, modify and redistribute. The bundled third-party libraries keep their own
-licenses (listed above). Note that **faad2** and **doomgeneric** are **GPLv2**, so any compiled
-**binary** that links them (e.g. `r3player` with AAC, `r3doom`) is a combined work governed by the
-GNU GPL v2 when distributed.
+r3ii-player is free software, released under the **GNU General Public License, version 2**
+(see [`LICENSE`](LICENSE)) — you are free to use, study, modify and redistribute it under the
+GPL's terms. Copyright © 2026 Théodore Chabardès.
+
+The bundled third-party libraries (listed above) keep their own, GPL-compatible licenses. GPLv2
+is used for the project as a whole because it links GPLv2 components (faad2, doomgeneric).
