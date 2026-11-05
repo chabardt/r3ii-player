@@ -100,13 +100,13 @@ static void ts_read(lv_indev_drv_t*drv,lv_indev_data_t*d){ (void)drv;
 #define R_BTN     14         /* rounded buttons, tiles and rows */
 
 /* live-updated widgets — NULL when the screen that owns them is gone */
-static lv_obj_t *clock_lbl, *np_pos, *np_play, *np_title, *np_prog;
+static lv_obj_t *clock_lbl, *np_pos, *np_play, *np_title, *np_prog, *np_dur;
 static lv_obj_t *batt_lbl;    /* battery % on Home */
 static lv_obj_t *btbat_lbl;   /* connected headset battery on Home */
 static lv_obj_t *pet_bell;    /* Moko is calling (Home bar) */
 static lv_obj_t *np_cover;    /* the cover container on Now Playing (NULL elsewhere) */
 static lv_obj_t *set_list, *set_status;   /* Settings screen (NULL when not shown) */
-static void null_live(void){ clock_lbl=np_pos=np_play=np_title=np_prog=NULL; set_list=set_status=NULL; np_cover=NULL; batt_lbl=NULL; btbat_lbl=NULL; pet_bell=NULL; null_clock(); }
+static void null_live(void){ clock_lbl=np_pos=np_play=np_title=np_prog=np_dur=NULL; set_list=set_status=NULL; np_cover=NULL; batt_lbl=NULL; btbat_lbl=NULL; pet_bell=NULL; null_clock(); }
 /* persistent volume overlay (lives on the top layer, survives screen changes) */
 static lv_obj_t *g_volov, *g_volbar; static uint32_t g_vol_hide;
 static uint32_t g_prog_hold;   /* don't auto-update the seek bar until this time (after a user seek) */
@@ -211,7 +211,7 @@ static void save_resume(void){
 
 /* ---- album art (see cover.c) ---- */
 #define COVER_W 480
-#define COVER_H 360
+#define COVER_H 436
 static void np_set_cover(void){
     if(!np_cover) return;
     lv_obj_clean(np_cover);
@@ -255,47 +255,64 @@ static void show_player(const char*title,const char*dir){
     lv_obj_t*scr=lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr,lv_color_hex(C_BG),0);
     lv_obj_clear_flag(scr,LV_OBJ_FLAG_SCROLLABLE);
-    /* cover placeholder (full width) */
-    lv_obj_t*cov=lv_obj_create(scr); lv_obj_set_size(cov,COVER_W,COVER_H); lv_obj_set_pos(cov,0,60);
+    /* top bar holds the back button so it never overlaps the cover art */
+    lv_obj_t*tb=lv_obj_create(scr); lv_obj_set_size(tb,480,44); lv_obj_set_pos(tb,0,0);
+    lv_obj_set_style_bg_color(tb,lv_color_hex(C_BAR),0); lv_obj_set_style_radius(tb,0,0);
+    lv_obj_set_style_border_width(tb,0,0); lv_obj_set_style_pad_all(tb,0,0);
+    lv_obj_clear_flag(tb,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t*bk=lv_btn_create(tb); lv_obj_set_size(bk,46,36); lv_obj_align(bk,LV_ALIGN_LEFT_MID,4,0);
+    lv_obj_set_style_bg_color(bk,lv_color_hex(C_PANEL),0); lv_obj_set_style_radius(bk,R_BTN,0);
+    lv_obj_set_style_border_width(bk,2,0); lv_obj_set_style_border_color(bk,lv_color_hex(C_ACCENT),0);
+    lv_obj_add_event_cb(bk,np_back_cb,LV_EVENT_CLICKED,NULL);
+    lv_obj_t*bl=lv_label_create(bk); lv_label_set_text(bl,LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_color(bl,lv_color_hex(C_ACCENT),0); lv_obj_center(bl);
+    /* cover (full width, directly below the bar) */
+    lv_obj_t*cov=lv_obj_create(scr); lv_obj_set_size(cov,COVER_W,COVER_H); lv_obj_set_pos(cov,0,44);
     lv_obj_set_style_radius(cov,0,0); lv_obj_set_style_border_width(cov,0,0);
     lv_obj_set_style_bg_color(cov,lv_color_hex(C_PANEL),0);
     lv_obj_clear_flag(cov,LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(cov,0,0);
     np_cover=cov; np_set_cover();
-    /* back chip over the cover */
-    lv_obj_t*bk=lv_btn_create(scr); lv_obj_set_size(bk,48,40); lv_obj_set_pos(bk,8,8);
-    lv_obj_set_style_bg_color(bk,lv_color_hex(C_BAR),0); lv_obj_set_style_radius(bk,R_BTN,0);
-    lv_obj_set_style_border_width(bk,2,0); lv_obj_set_style_border_color(bk,lv_color_hex(C_ACCENT),0);
-    lv_obj_add_event_cb(bk,np_back_cb,LV_EVENT_CLICKED,NULL);
-    lv_obj_t*bl=lv_label_create(bk); lv_label_set_text(bl,LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_color(bl,lv_color_hex(C_ACCENT),0); lv_obj_center(bl);
     /* title */
     np_title=lv_label_create(scr); lv_label_set_text(np_title,title);
-    lv_label_set_long_mode(np_title,LV_LABEL_LONG_DOT); lv_obj_set_width(np_title,440);
+    lv_label_set_long_mode(np_title,LV_LABEL_LONG_WRAP); lv_obj_set_width(np_title,448);
     lv_obj_set_style_text_align(np_title,LV_TEXT_ALIGN_CENTER,0);
     lv_obj_set_style_text_color(np_title,lv_color_hex(C_FG),0);
     lv_obj_set_style_text_font(np_title,&lv_font_montserrat_20,0);
-    lv_obj_align(np_title,LV_ALIGN_TOP_MID,0,436);
-    /* position */
-    np_pos=lv_label_create(scr); lv_label_set_text(np_pos,"0:00");
+    lv_obj_align(np_title,LV_ALIGN_TOP_MID,0,492);
+    /* compact progress row: elapsed · thin bar · total, on one line */
+    lv_obj_t*pr=lv_obj_create(scr);
+    lv_obj_set_size(pr,452,26); lv_obj_align(pr,LV_ALIGN_TOP_MID,0,584);
+    lv_obj_set_style_bg_opa(pr,LV_OPA_TRANSP,0); lv_obj_set_style_border_width(pr,0,0);
+    lv_obj_set_style_pad_all(pr,0,0); lv_obj_set_style_pad_column(pr,10,0);
+    lv_obj_clear_flag(pr,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(pr,LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(pr,LV_FLEX_ALIGN_CENTER,LV_FLEX_ALIGN_CENTER,LV_FLEX_ALIGN_CENTER);
+    np_pos=lv_label_create(pr); lv_label_set_text(np_pos,"0:00");
     lv_obj_set_style_text_color(np_pos,lv_color_hex(C_DIM),0);
-    lv_obj_align(np_pos,LV_ALIGN_TOP_MID,0,474);
-    /* transport row: prev | play/pause | next  (np_play = the symbol inside play/pause) */
-    mk_tbtn(scr, 90,76,-150,530, C_PANEL,  LV_SYMBOL_PREV, np_prev_cb);
-    lv_obj_t*ppb=mk_tbtn(scr,120,86,0,525, C_ACCENT, LV_SYMBOL_PAUSE, np_playpause_cb);
-    np_play=lv_obj_get_child(ppb,0);   /* the label mk_tbtn created inside it */
-    if(!audio_is_playing()||audio_is_paused()) lv_label_set_text(np_play,LV_SYMBOL_PLAY);   /* resume-ready / paused */
-    mk_tbtn(scr, 90,76, 150,530, C_PANEL,  LV_SYMBOL_NEXT, np_next_cb);
-    /* progress / seek bar (volume lives in the top overlay now) */
-    np_prog=lv_slider_create(scr); lv_obj_set_size(np_prog,440,14); lv_obj_align(np_prog,LV_ALIGN_TOP_MID,0,660);
+    lv_obj_set_style_text_font(np_pos,&lv_font_montserrat_14,0);
+    lv_obj_set_width(np_pos,42); lv_obj_set_style_text_align(np_pos,LV_TEXT_ALIGN_RIGHT,0);
+    np_prog=lv_slider_create(pr); lv_obj_set_height(np_prog,6); lv_obj_set_flex_grow(np_prog,1);
     lv_slider_set_range(np_prog,0,1000); lv_slider_set_value(np_prog,0,LV_ANIM_OFF);
     lv_obj_set_style_bg_color(np_prog,lv_color_hex(C_PANEL),LV_PART_MAIN);
+    lv_obj_set_style_radius(np_prog,3,LV_PART_MAIN);
     lv_obj_set_style_bg_color(np_prog,lv_color_hex(C_ACCENT),LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(np_prog,lv_color_hex(C_FG),LV_PART_KNOB);
-    lv_obj_set_style_pad_all(np_prog,8,LV_PART_KNOB);      /* bigger knob hit area */
-    lv_obj_set_ext_click_area(np_prog,16);                 /* easier to grab the bar */
+    lv_obj_set_style_pad_all(np_prog,5,LV_PART_KNOB);   /* small knob, bigger hit area */
+    lv_obj_set_ext_click_area(np_prog,14);
     lv_obj_add_event_cb(np_prog,np_prog_cb,LV_EVENT_RELEASED,NULL);
     lv_obj_add_event_cb(np_prog,np_prog_cb,LV_EVENT_PRESS_LOST,NULL);
+    np_dur=lv_label_create(pr); lv_label_set_text(np_dur,"0:00");
+    lv_obj_set_style_text_color(np_dur,lv_color_hex(C_DIM),0);
+    lv_obj_set_style_text_font(np_dur,&lv_font_montserrat_14,0);
+    lv_obj_set_width(np_dur,42); lv_obj_set_style_text_align(np_dur,LV_TEXT_ALIGN_LEFT,0);
+    /* transport row: prev | play/pause | next  (np_play = the symbol inside play/pause) */
+    mk_tbtn(scr, 90,76,-150,622, C_PANEL,  LV_SYMBOL_PREV, np_prev_cb);
+    lv_obj_t*ppb=mk_tbtn(scr,120,86,0,617, C_ACCENT, LV_SYMBOL_PAUSE, np_playpause_cb);
+    np_play=lv_obj_get_child(ppb,0);   /* the label mk_tbtn created inside it */
+    if(!audio_is_playing()||audio_is_paused()) lv_label_set_text(np_play,LV_SYMBOL_PLAY);   /* resume-ready / paused */
+    mk_tbtn(scr, 90,76, 150,622, C_PANEL,  LV_SYMBOL_NEXT, np_next_cb);
+    /* (progress/seek bar is now the compact inline row under the title; volume is the top overlay) */
     g_scr=SCR_PLAYER;
     load_screen(scr);
 }
@@ -1450,8 +1467,9 @@ static void tick_ui(void){
         strftime(b,sizeof b,"%H:%M",localtime(&t)); lv_label_set_text(clock_lbl,b);} }
     if(now-lp>=300 && (np_pos||np_prog)){ lp=now;
         long pos=audio_pos_ms(), dur=audio_dur_ms();
-        if(np_pos){ char p[16],d[16]; fmt_ms(pos,p,sizeof p); fmt_ms(dur,d,sizeof d);
-            char line[40]; snprintf(line,sizeof line,"%s / %s",p,d); lv_label_set_text(np_pos,line); }
+        char p[16],d[16]; fmt_ms(pos,p,sizeof p); fmt_ms(dur,d,sizeof d);
+        if(np_pos) lv_label_set_text(np_pos,p);
+        if(np_dur) lv_label_set_text(np_dur,d);
         if(np_prog && dur>0 && !lv_obj_has_state(np_prog,LV_STATE_PRESSED) && now>g_prog_hold)
             lv_slider_set_value(np_prog,(int32_t)((long long)pos*1000/dur),LV_ANIM_OFF);
     }
