@@ -176,10 +176,18 @@ static int ensure_uhid(void){
 }
 static void do_init(void){
     set_status("Starting Bluetooth...");
-    /* The stock kernel already has Bluetooth HID (a paired Joy-Con shows up as eventN),
-     * so ensure_uhid() is kept only as a fallback for kernels without it. */
-    if(0 && ensure_uhid()) g_jobs|=J_RX;
-    sh("bt-adapter --set Powered On >/dev/null 2>&1",0,0);
+    /* Bluetooth game controllers (Joy-Con, Pro Controller, DS4) only attach as /dev/input/
+     * when BlueZ routes HID through userspace (uhid). Without UserspaceHID a controller links
+     * at the ACL level but no event device is created and it drops after ~2s (bluetoothd:
+     * "input-hid ... connecting -> disconnected"). Set it up on every boot — bonds in
+     * /usr/data are untouched. (Required for the Joy-Con to work at all after a reboot.) */
+    ensure_uhid();
+    /* Power the adapter on. AutoEnable is off, so it boots powered DOWN, and at cold boot
+     * bluetoothd may not answer the first request — retry until the controller is really UP,
+     * else nothing (phone, speaker or controller) can ever connect. */
+    for(int i=0;i<12;i++){ char st[256]; sh("hciconfig hci0 2>/dev/null",st,sizeof st);
+        if(strstr(st,"UP RUNNING")) break;
+        sh("bt-adapter --set Powered On >/dev/null 2>&1",0,0); usleep(400000); }
     char ps[4096]; sh("ps",ps,sizeof ps);
     /* stock runs source-only with --a2dp-volume ("native": volume is only reported over
      * AVRCP, never applied). We need the sink role too, and bluealsa's soft-volume so the
