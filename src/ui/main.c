@@ -13,6 +13,8 @@
 #include "wifi.h"
 #include "pet.h"
 #include "pad.h"
+#include "share.h"
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -100,13 +102,14 @@ static void ts_read(lv_indev_drv_t*drv,lv_indev_data_t*d){ (void)drv;
 #define R_BTN     14         /* rounded buttons, tiles and rows */
 
 /* live-updated widgets — NULL when the screen that owns them is gone */
-static lv_obj_t *clock_lbl, *np_pos, *np_play, *np_title, *np_prog, *np_dur, *np_fav;
+extern const lv_img_dsc_t heart_img;   /* recolorable heart for the favorite toggle */
+static lv_obj_t *clock_lbl, *np_pos, *np_play, *np_title, *np_prog, *np_dur, *np_fav, *g_dl_lbl;
 static lv_obj_t *batt_lbl;    /* battery % on Home */
 static lv_obj_t *btbat_lbl;   /* connected headset battery on Home */
 static lv_obj_t *pet_bell;    /* Moko is calling (Home bar) */
 static lv_obj_t *np_cover;    /* the cover container on Now Playing (NULL elsewhere) */
 static lv_obj_t *set_list, *set_status;   /* Settings screen (NULL when not shown) */
-static void null_live(void){ clock_lbl=np_pos=np_play=np_title=np_prog=np_dur=np_fav=NULL; set_list=set_status=NULL; np_cover=NULL; batt_lbl=NULL; btbat_lbl=NULL; pet_bell=NULL; null_clock(); }
+static void null_live(void){ clock_lbl=np_pos=np_play=np_title=np_prog=np_dur=np_fav=NULL; g_dl_lbl=NULL; set_list=set_status=NULL; np_cover=NULL; batt_lbl=NULL; btbat_lbl=NULL; pet_bell=NULL; null_clock(); }
 /* persistent volume overlay (lives on the top layer, survives screen changes) */
 static lv_obj_t *g_volov, *g_volbar; static uint32_t g_vol_hide;
 static uint32_t g_prog_hold;   /* don't auto-update the seek bar until this time (after a user seek) */
@@ -294,7 +297,7 @@ static void np_back_cb(lv_event_t*e){ (void)e; show_browser(g_pldir[0]?g_pldir:M
 static void np_fav_cb(lv_event_t*e){ (void)e;
     if(!(g_pln>0&&g_pli>=0)) return;
     fav_toggle(g_pl[g_pli],g_pltitle);
-    if(np_fav) lv_obj_set_style_text_color(np_fav,lv_color_hex(fav_has(g_pl[g_pli])?C_ACCENT:C_DIM),0); }
+    if(np_fav) lv_obj_set_style_img_recolor(np_fav,lv_color_hex(fav_has(g_pl[g_pli])?C_ACCENT:C_DIM),0); }
 static void np_add_cb(lv_event_t*e){ (void)e; show_add_to_playlist(); }
 static void np_playpause_cb(lv_event_t*e){ (void)e;
     if(!audio_is_playing() && g_pln>0){ pl_resume(); return; }   /* resume-ready: continue where it stopped */
@@ -342,8 +345,9 @@ static void show_player(const char*title,const char*dir){
       lv_obj_set_style_bg_color(fb,lv_color_hex(C_PANEL),0); lv_obj_set_style_radius(fb,R_BTN,0);
       lv_obj_set_style_border_width(fb,2,0); lv_obj_set_style_border_color(fb,lv_color_hex(C_ACCENT),0);
       lv_obj_add_event_cb(fb,np_fav_cb,LV_EVENT_CLICKED,NULL);
-      np_fav=lv_label_create(fb); lv_label_set_text(np_fav,LV_SYMBOL_OK);
-      lv_obj_set_style_text_color(np_fav,lv_color_hex(isfav?C_ACCENT:C_DIM),0); lv_obj_center(np_fav);
+      np_fav=lv_img_create(fb); lv_img_set_src(np_fav,&heart_img);
+      lv_obj_set_style_img_recolor_opa(np_fav,LV_OPA_COVER,0);
+      lv_obj_set_style_img_recolor(np_fav,lv_color_hex(isfav?C_ACCENT:C_DIM),0); lv_obj_center(np_fav);
       lv_obj_t*ab=lv_btn_create(tb); lv_obj_set_size(ab,46,36); lv_obj_align(ab,LV_ALIGN_RIGHT_MID,-56,0);
       lv_obj_set_style_bg_color(ab,lv_color_hex(C_PANEL),0); lv_obj_set_style_radius(ab,R_BTN,0);
       lv_obj_set_style_border_width(ab,2,0); lv_obj_set_style_border_color(ab,lv_color_hex(C_ACCENT),0);
@@ -1184,6 +1188,103 @@ static void pl_add_file_rows(lv_obj_t*l, lv_event_cb_t cb){
         lv_obj_add_event_cb(b,cb,LV_EVENT_CLICKED,fm);
         lv_obj_add_event_cb(b,free_cb,LV_EVENT_DELETE,fm); }
 }
+/* ---- peer (LAN) playlist sharing ---- */
+static peer_t g_peer; static char g_peer_pl[128];
+static char g_dl_local_m3u[1024];
+static pthread_t g_dlth; static volatile int g_dl_run=0,g_dl_total=0,g_dl_done=0;
+static void show_peer_playlists(void);
+static void show_peer_tracks(const char*plname);
+static void show_import_confirm(int missing);
+
+static void urlenc(const char*s,char*o,int cap){ const char*hx="0123456789ABCDEF"; int j=0;
+    for(;*s&&j<cap-4;s++){ unsigned char c=*s;
+        if(c=='/'||(c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='.'||c=='-'||c=='_') o[j++]=c;
+        else { o[j++]='%'; o[j++]=hx[c>>4]; o[j++]=hx[c&15]; } }
+    o[j]=0; }
+static int m3u_missing(const char*m3u){ FILE*f=fopen(m3u,"r"); if(!f)return 0; int miss=0; char l[1024]; struct stat st;
+    while(fgets(l,sizeof l,f)){ l[strcspn(l,"\r\n")]=0; if(!l[0]||l[0]=='#')continue;
+        char full[1600]; snprintf(full,sizeof full,"%s/%s",SD_ROOT,l); if(stat(full,&st)!=0)miss++; } fclose(f); return miss; }
+static void* dl_thread(void*a){ (void)a;
+    FILE*f=fopen(g_dl_local_m3u,"r"); if(!f){ g_dl_run=0; return 0; } char l[1024]; struct stat st;
+    while(fgets(l,sizeof l,f)){ l[strcspn(l,"\r\n")]=0; if(!l[0]||l[0]=='#')continue;
+        char full[1600]; snprintf(full,sizeof full,"%s/%s",SD_ROOT,l); if(stat(full,&st)==0)continue;
+        char enc[1400],path[1500]; urlenc(l,enc,sizeof enc); snprintf(path,sizeof path,"/f/%s",enc);
+        if(share_download(g_peer.ip,g_peer.port,path,full)==0) g_dl_done++; }
+    fclose(f); sync(); g_dl_run=0; return 0; }
+static void dl_start_cb(lv_event_t*e){ (void)e; if(g_dl_run) return; g_dl_done=0; g_dl_run=1;
+    pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setstacksize(&at,160*1024);
+    pthread_create(&g_dlth,&at,dl_thread,0); pthread_attr_destroy(&at); pthread_detach(g_dlth); }
+
+static void peers_back_cb(lv_event_t*e){ (void)e; show_playlists(); }
+static void peer_row_cb(lv_event_t*e){ peer_t*p=lv_event_get_user_data(e); g_peer=*p; show_peer_playlists(); }
+static void peer_pl_row_cb(lv_event_t*e){ char*nm=lv_event_get_user_data(e); snprintf(g_peer_pl,sizeof g_peer_pl,"%s",nm); show_peer_tracks(nm); }
+static void peer_tracks_back_cb(lv_event_t*e){ (void)e; show_peer_playlists(); }
+static void import_done_cb(lv_event_t*e){ (void)e; show_playlists(); }
+
+static void show_peer_playlists(void){
+    lv_obj_t*scr,*l=page_new(g_peer.name[0]?g_peer.name:g_peer.ip,peers_back_cb,&scr);
+    static char resp[8192]; int n=share_get(g_peer.ip,g_peer.port,"/playlists",resp,sizeof resp-1);
+    if(n<=0){ lv_obj_t*m=lv_label_create(l); lv_label_set_text(m,"Could not reach this device.");
+        lv_obj_set_style_text_color(m,lv_color_hex(C_DIM),0); lv_obj_set_style_pad_all(m,12,0); }
+    else { char*p=resp; int any=0;
+        while(p&&*p){ char*nl=strchr(p,'\n'); if(nl)*nl=0; int cnt=0; char*tab=strchr(p,'\t');
+            if(tab){ *tab=0; cnt=atoi(tab+1); }
+            if(p[0]){ char sub[24]; snprintf(sub,sizeof sub,"%d song%s",cnt,cnt==1?"":"s");
+                lv_obj_t*b=set_row(l,LV_SYMBOL_LIST,p,sub,0); char*d=strdup(p);
+                lv_obj_add_event_cb(b,peer_pl_row_cb,LV_EVENT_CLICKED,d);
+                lv_obj_add_event_cb(b,free_cb,LV_EVENT_DELETE,d); any=1; }
+            p=nl?nl+1:0; }
+        if(!any){ lv_obj_t*m=lv_label_create(l); lv_label_set_text(m,"No playlists shared here.");
+            lv_obj_set_style_text_color(m,lv_color_hex(C_DIM),0); lv_obj_set_style_pad_all(m,12,0); } }
+    g_scr=SCR_PLAYLISTS; load_screen(scr);
+}
+static void peer_import_cb(lv_event_t*e){ (void)e;
+    char enc[160],path[200]; urlenc(g_peer_pl,enc,sizeof enc); snprintf(path,sizeof path,"/pl/%s",enc);
+    static char m3u[16384]; int n=share_get(g_peer.ip,g_peer.port,path,m3u,sizeof m3u-1);
+    if(n<=0){ show_peer_tracks(g_peer_pl); return; }
+    mkdir(PL_DIR,0777);
+    char nm[160]; snprintf(nm,sizeof nm,"%s - %s",g_peer.name[0]?g_peer.name:"shared",g_peer_pl);
+    for(char*p=nm;*p;p++) if(strchr("/:*?\"<>|\\",*p))*p='_';
+    char local[1024]; snprintf(local,sizeof local,"%s/%s.m3u",PL_DIR,nm);
+    FILE*f=fopen(local,"w"); if(f){ fwrite(m3u,1,n,f); fclose(f); sync(); }
+    snprintf(g_dl_local_m3u,sizeof g_dl_local_m3u,"%s",local);
+    int miss=m3u_missing(local);
+    if(miss>0) show_import_confirm(miss); else show_playlists();
+}
+static void show_peer_tracks(const char*plname){
+    lv_obj_t*scr,*l=page_new(plname,peer_tracks_back_cb,&scr);
+    char enc[160],path[200]; urlenc(plname,enc,sizeof enc); snprintf(path,sizeof path,"/pl/%s",enc);
+    static char m3u[16384]; int n=share_get(g_peer.ip,g_peer.port,path,m3u,sizeof m3u-1);
+    int have=0,missing=0;
+    if(n>0){ char*p=m3u; char t2[256]="";
+        while(p&&*p){ char*nl=strchr(p,'\n'); if(nl)*nl=0;
+            if(!strncmp(p,"#EXTINF",7)){ char*c=strchr(p,','); if(c) snprintf(t2,sizeof t2,"%s",c+1); }
+            else if(p[0]&&p[0]!='#'){ char full[1600]; snprintf(full,sizeof full,"%s/%s",SD_ROOT,p);
+                struct stat st; int h=(stat(full,&st)==0); if(h)have++; else missing++;
+                char d2[256]; if(t2[0]) snprintf(d2,sizeof d2,"%s",t2); else pretty(pl_base(p),d2,sizeof d2); t2[0]=0;
+                lv_obj_t*b=set_row(l,h?LV_SYMBOL_OK:LV_SYMBOL_DOWNLOAD,d2,h?NULL:"not on this device",0);
+                lv_obj_clear_flag(b,LV_OBJ_FLAG_CLICKABLE); }
+            p=nl?nl+1:0; } }
+    char sub[64]; snprintf(sub,sizeof sub,"%d here, %d to fetch",have,missing);
+    lv_obj_t*ib=set_row(l,LV_SYMBOL_SAVE,"Import to my playlists",sub,1);
+    lv_obj_add_event_cb(ib,peer_import_cb,LV_EVENT_CLICKED,NULL);
+    g_scr=SCR_PLAYLISTS; load_screen(scr);
+}
+static void show_import_confirm(int missing){
+    g_dl_total=missing; g_dl_done=0;
+    lv_obj_t*scr,*l=page_new("Import",pl_home_cb,&scr);
+    char msg[96]; snprintf(msg,sizeof msg,"Playlist saved. %d song%s not on this device.",missing,missing==1?"":"s");
+    lv_obj_t*m=lv_label_create(l); lv_label_set_text(m,msg);
+    lv_obj_set_style_text_color(m,lv_color_hex(C_FG),0); lv_obj_set_style_pad_all(m,12,0);
+    lv_obj_t*b=set_row(l,LV_SYMBOL_DOWNLOAD,"Download them from this device",NULL,1);
+    lv_obj_add_event_cb(b,dl_start_cb,LV_EVENT_CLICKED,NULL);
+    g_dl_lbl=lv_label_create(l); lv_label_set_text(g_dl_lbl,"");
+    lv_obj_set_style_text_color(g_dl_lbl,lv_color_hex(C_ACCENT),0); lv_obj_set_style_pad_all(g_dl_lbl,12,0);
+    lv_obj_t*d=set_row(l,LV_SYMBOL_OK,"Done",NULL,0);
+    lv_obj_add_event_cb(d,import_done_cb,LV_EVENT_CLICKED,NULL);
+    g_scr=SCR_PLAYLISTS; load_screen(scr);
+}
+
 static void show_playlists(void){
     lv_obj_t*scr,*l=page_new("Playlists",pl_home_cb,&scr);
     int fc=m3u_count(FAV_M3U); char fsub[24]; snprintf(fsub,sizeof fsub,"%d song%s",fc,fc==1?"":"s");
@@ -1193,6 +1294,15 @@ static void show_playlists(void){
     pl_add_file_rows(l,pl_file_cb);
     lv_obj_t*nb=set_row(l,LV_SYMBOL_PLUS,"New playlist",NULL,0);
     lv_obj_add_event_cb(nb,pl_new_cb,LV_EVENT_CLICKED,NULL);
+    /* nearby devices sharing playlists (discovered on the LAN) */
+    peer_t pr[8]; int npr=share_peers(pr,8); char myip[20]=""; wifi_ip(myip,sizeof myip); int shown=0;
+    for(int i=0;i<npr;i++){ if(myip[0]&&!strcmp(pr[i].ip,myip)) continue;   /* skip ourselves */
+        if(!shown){ lv_obj_t*h=lv_label_create(l); lv_label_set_text(h,"Nearby devices");
+            lv_obj_set_style_text_color(h,lv_color_hex(C_DIM),0); lv_obj_set_style_pad_all(h,12,0); shown=1; }
+        lv_obj_t*b=set_row(l,LV_SYMBOL_WIFI,pr[i].name[0]?pr[i].name:pr[i].ip,pr[i].ip,0);
+        peer_t*pp=malloc(sizeof(peer_t)); *pp=pr[i];
+        lv_obj_add_event_cb(b,peer_row_cb,LV_EVENT_CLICKED,pp);
+        lv_obj_add_event_cb(b,free_cb,LV_EVENT_DELETE,pp); }
     g_scr=SCR_PLAYLISTS; load_screen(scr);
 }
 static void pl_tracks_back_cb(lv_event_t*e){ (void)e; show_playlists(); }
@@ -1678,6 +1788,10 @@ static void tick_ui(void){
         if(np_prog && dur>0 && !lv_obj_has_state(np_prog,LV_STATE_PRESSED) && now>g_prog_hold)
             lv_slider_set_value(np_prog,(int32_t)((long long)pos*1000/dur),LV_ANIM_OFF);
     }
+    if(g_dl_lbl){ char t[48];
+        if(g_dl_run) snprintf(t,sizeof t,"Downloading %d / %d...",g_dl_done,g_dl_total);
+        else if(g_dl_total) snprintf(t,sizeof t,LV_SYMBOL_OK " %d downloaded",g_dl_done);
+        else t[0]=0; lv_label_set_text(g_dl_lbl,t); }
     if(set_list && bt_version()!=set_ver) settings_fill();
     if(wf_list && wifi_version()!=wf_ver) wifi_fill();
     static uint32_t lpet=0;
@@ -1762,6 +1876,7 @@ int main(int argc,char**argv){
     }
     g_last_input=r3_tick_ms();
     wifi_start();                  /* Wi-Fi worker: radio + music server, if switched on */
+    share_start();                 /* LAN peer discovery for playlist sharing */
     bt_start();                    /* BT worker: daemons, auto-reconnect remembered speaker */
     printf("r3player UI up\n");
     for(;;){

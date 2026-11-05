@@ -539,6 +539,37 @@ static const char *header(const char *req, const char *name, char *out, size_t c
             size_t n = strcspn(p, "\r\n"); if (n >= cap) n = cap - 1; memcpy(out, p, n); out[n] = 0; return out; } }
     return NULL;
 }
+/* ---- R3-to-R3 playlist sharing ---- */
+static void page_playlists(conn_t *c) {
+    buf_t b = { 0 };
+    char dir[1024]; snprintf(dir, sizeof dir, "%s/Playlists", ROOT);
+    DIR *d = opendir(dir);
+    if (d) { struct dirent *e;
+        while ((e = readdir(d))) {
+            const char *dot = strrchr(e->d_name, '.');
+            if (!dot || strcasecmp(dot, ".m3u")) continue;
+            char p[1200]; snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+            int cnt = 0; FILE *f = fopen(p, "r");
+            if (f) { char ln[1024]; while (fgets(ln, sizeof ln, f)) if (ln[0] && ln[0] != '#') cnt++; fclose(f); }
+            bprintf(&b, "%.*s\t%d\n", (int)(dot - e->d_name), e->d_name, cnt);
+        }
+        closedir(d);
+    }
+    respond_buf(c, 200, "text/plain; charset=utf-8", &b);
+}
+static void serve_playlist(conn_t *c, const char *name) {
+    char nm[256]; snprintf(nm, sizeof nm, "%s", name);
+    char *dot = strrchr(nm, '.'); if (dot && !strcasecmp(dot, ".m3u")) *dot = 0;
+    if (!nm[0] || strstr(nm, "..") || strchr(nm, '/')) { respond(c, 403, "text/plain", "no\n", 3, NULL); return; }
+    char p[1200]; snprintf(p, sizeof p, "%s/Playlists/%s.m3u", ROOT, nm);
+    FILE *f = fopen(p, "r");
+    if (!f) { respond(c, 404, "text/plain", "not found\n", 10, NULL); return; }
+    buf_t b = { 0 }; char ln[1024];
+    while (fgets(ln, sizeof ln, f)) bput(&b, ln, strlen(ln));
+    fclose(f);
+    respond_buf(c, 200, "text/plain; charset=utf-8", &b);
+}
+
 static void handle(conn_t *c) {
     char method[8] = "", path[4096] = "";
     if (sscanf(c->req, "%7s %4095s", method, path) != 2) { respond(c, 400, "text/plain", "bad request\n", 12, NULL); return; }
@@ -553,6 +584,8 @@ static void handle(conn_t *c) {
     if (!strcmp(path, "/ctl/cms")) { cms_control(c, header(c->req, "SOAPACTION", sa, sizeof sa) ? sa : ""); return; }
     if (!strncmp(path, "/evt/", 5)) {   /* no eventing: accept subscriptions so clients stay happy */
         char ex[128]; snprintf(ex, sizeof ex, "SID: uuid:%s-evt\r\nTIMEOUT: Second-1800\r\n", UUID); respond(c, 200, "text/plain", "", 0, ex); return; }
+    if (!strcmp(path, "/playlists")) { page_playlists(c); return; }
+    if (!strncmp(path, "/pl/", 4)) { serve_playlist(c, path + 4); return; }
     const char *rel = NULL; int kind = 0;
     if (!strcmp(path, "/") || !strcmp(path, "/browse") || !strcmp(path, "/browse/")) { rel = ""; kind = 1; }
     else if (!strncmp(path, "/browse/", 8)) { rel = path + 8; kind = 1; }
@@ -638,9 +671,11 @@ int main(int argc, char **argv) {
     struct ip_mreq mr; inet_pton(AF_INET, "239.255.255.250", &mr.imr_multiaddr); mr.imr_interface.s_addr = htonl(INADDR_ANY);
     if (setsockopt(ssdp_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mr, sizeof mr) < 0) perror("multicast join");
     unsigned char ttl = 4; setsockopt(ssdp_fd, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof ttl);
+    int disc_fd = socket(AF_INET, SOCK_DGRAM, 0);   /* R3-to-R3 discovery beacon (UDP broadcast :8201) */
+    { int bc = 1; setsockopt(disc_fd, SOL_SOCKET, SO_BROADCAST, &bc, sizeof bc); }
     fprintf(stderr, "[r3srv] '%s' on :%d, root %s, max %d streams, uuid %s\n", NAME, PORT, ROOT, MAXSTREAMS, UUID);
     status_write();
-    ssdp_notify("ssdp:alive"); long long last_notify = now_ms();
+    ssdp_notify("ssdp:alive"); long long last_notify = now_ms(), last_beacon = 0;
     while (!quit) {
         struct pollfd pf[MAXC + 2]; int map[MAXC + 2], np = 0;
         pf[np].fd = ls; pf[np].events = POLLIN; map[np++] = -1;
@@ -649,6 +684,11 @@ int main(int argc, char **argv) {
             pf[np].fd = C[i].fd; pf[np].events = C[i].state == C_READ ? POLLIN : POLLOUT; map[np++] = i; }
         if (poll(pf, np, 1000) < 0) { if (errno == EINTR) continue; break; }
         long long t = now_ms();
+        if (t - last_beacon > 5000 && disc_fd >= 0) { last_beacon = t;   /* announce ourselves to R3 peers */
+            char msg[160]; int ml = snprintf(msg, sizeof msg, "R3PLAY\t%s\t%d", NAME, PORT);
+            struct sockaddr_in ba = { 0 }; ba.sin_family = AF_INET; ba.sin_port = htons(8201);
+            ba.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+            sendto(disc_fd, msg, ml, 0, (struct sockaddr *)&ba, sizeof ba); }
         if (t - last_notify > 10 * 60 * 1000) { ssdp_notify("ssdp:alive"); last_notify = t; }
         for (int k = 0; k < np; k++) {
             if (!pf[k].revents) continue;
