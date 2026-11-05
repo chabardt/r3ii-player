@@ -106,6 +106,10 @@ static int read_info(const char*adir,const char*mac,bt_dev_t*d){
     return 1;
 }
 static void do_refresh(void){
+    /* self-heal: keep the adapter powered (cold boot can leave it down if the power-on in
+     * do_init raced bluetoothd). Cheap check; only acts when it's actually off. */
+    char pw[256]; sh("bt-adapter --info 2>/dev/null",pw,sizeof pw);
+    if(!strstr(pw,"Powered: 1")) sh("bt-adapter --set Powered On >/dev/null 2>&1",0,0);
     bt_dev_t tmp[BT_MAX]; int n=0;
     DIR*ad=opendir(BT_STORE);
     if(ad){ struct dirent*a;
@@ -165,8 +169,13 @@ static int ensure_uhid(void){
     if(access("/dev/uhid",F_OK)!=0) return 0;
     char cur[512]=""; sh("cat /etc/bluetooth/input.conf 2>/dev/null",cur,sizeof cur);
     if(strstr(cur,"UserspaceHID=true")) return 0;          /* already set up this boot */
+    /* input.conf: UserspaceHID (controllers attach as /dev/input).
+     * main.conf: AutoEnable=true so bluetoothd powers the adapter on itself at startup and
+     * keeps it on (AutoEnable is off in the stock config, so it boots powered down). */
     sh("mkdir -p /tmp/r3bt_etc && cp -a /etc/bluetooth/. /tmp/r3bt_etc/ && "
        "printf '[General]\\nUserspaceHID=true\\n' > /tmp/r3bt_etc/input.conf && "
+       "sed -i 's/^#*AutoEnable=.*/AutoEnable=true/' /tmp/r3bt_etc/main.conf && "
+       "grep -q '^AutoEnable=true' /tmp/r3bt_etc/main.conf || printf '\\n[Policy]\\nAutoEnable=true\\n' >> /tmp/r3bt_etc/main.conf && "
        "mount --bind /tmp/r3bt_etc /etc/bluetooth",0,0);
     sh("cat /etc/bluetooth/input.conf 2>/dev/null",cur,sizeof cur);
     if(!strstr(cur,"UserspaceHID=true")) return 0;
@@ -182,12 +191,14 @@ static void do_init(void){
      * "input-hid ... connecting -> disconnected"). Set it up on every boot — bonds in
      * /usr/data are untouched. (Required for the Joy-Con to work at all after a reboot.) */
     ensure_uhid();
-    /* Power the adapter on. AutoEnable is off, so it boots powered DOWN, and at cold boot
-     * bluetoothd may not answer the first request — retry until the controller is really UP,
-     * else nothing (phone, speaker or controller) can ever connect. */
-    for(int i=0;i<12;i++){ char st[256]; sh("hciconfig hci0 2>/dev/null",st,sizeof st);
-        if(strstr(st,"UP RUNNING")) break;
-        sh("bt-adapter --set Powered On >/dev/null 2>&1",0,0); usleep(400000); }
+    /* Power the adapter on and make sure it STAYS on. ensure_uhid() restarts bluetoothd, and
+     * for a moment hciconfig still shows the pre-restart "UP" before the fresh daemon resets
+     * the controller — so confirm BlueZ's own Powered state twice before trusting it. Without
+     * this nothing (phone, speaker or controller) can ever connect. */
+    for(int i=0;i<16;i++){ char st[256]; sh("bt-adapter --info 2>/dev/null",st,sizeof st);
+        if(strstr(st,"Powered: 1")){ usleep(300000); sh("bt-adapter --info 2>/dev/null",st,sizeof st);
+            if(strstr(st,"Powered: 1")) break; }
+        sh("bt-adapter --set Powered On >/dev/null 2>&1",0,0); usleep(500000); }
     char ps[4096]; sh("ps",ps,sizeof ps);
     /* stock runs source-only with --a2dp-volume ("native": volume is only reported over
      * AVRCP, never applied). We need the sink role too, and bluealsa's soft-volume so the
@@ -338,7 +349,7 @@ static void do_forget(const char*mac){
 }
 
 static void* worker(void*arg){ (void)arg;
-    uint64_t last_ref=0, last_rx=0;
+    uint64_t last_ref=0, last_rx=0, last_pad=0;
     for(;;){
         pthread_mutex_lock(&mu);
         if(!g_jobs){ struct timespec ts; clock_gettime(CLOCK_REALTIME,&ts); ts.tv_sec+=4;
@@ -362,6 +373,13 @@ static void* worker(void*arg){ (void)arg;
             bt_dev_t d[BT_MAX]; int n=bt_devices(d,BT_MAX), any=0;
             for(int i=0;i<n;i++) if(d[i].phone && d[i].connected) any=1;
             if(!any) do_rx_connect(); }
+        /* controllers don't page us back after a deep sleep — the host must dial them. Keep
+         * dialing a bonded-but-disconnected pad so pressing a Joy-Con button reconnects it
+         * automatically (a dial to an asleep pad just fails fast). One per cycle to bound the
+         * worker; skip while a BT speaker is streaming so paging never stutters the audio. */
+        if(now-last_pad>=7 && !(bt_output()[0] && audio_is_playing())){ last_pad=now;
+            bt_dev_t d[BT_MAX]; int n=bt_devices(d,BT_MAX);
+            for(int i=0;i<n;i++) if(d[i].pad && !d[i].connected){ dbus_connect(d[i].mac); do_refresh(); break; } }
         g_busy=0;
     }
     return 0;
