@@ -23,6 +23,8 @@ for this one model.
 | <img src="docs/screenshots/home.png" width="220"> | <img src="docs/screenshots/nowplaying.png" width="220"> | <img src="docs/screenshots/library.png" width="220"> |
 | **Settings** | **Watch face (idle)** | |
 | <img src="docs/screenshots/settings.png" width="220"> | <img src="docs/screenshots/watchface.png" width="220"> | |
+| **Playlists & nearby devices** | **Import a shared playlist** | **New playlist** |
+| <img src="docs/screenshots/playlists.png" width="220"> | <img src="docs/screenshots/sharing.png" width="220"> | <img src="docs/screenshots/newplaylist.png" width="220"> |
 
 ---
 
@@ -51,6 +53,13 @@ for this one model.
 - **Game controllers** over Bluetooth (Joy-Con, Pro Controller, DS4, 8BitDo…) via UserspaceHID;
   a paired controller auto-reconnects when you press a button.
 - Battery of connected BT devices shown in the status bar / settings.
+
+**Playlists & favorites**
+- One-tap **♥ favorite** on Now Playing, plus user **playlists** created with an on-screen keyboard.
+- Stored as portable **extended `.m3u`** files in `Playlists/` on the card (edit them on a PC too).
+- **Share over the LAN:** nearby R3s are discovered automatically; browse another device's
+  playlists and **import** one — songs you already have resolve locally, and the ones you're
+  missing are copied from the peer **after you confirm**.
 
 **Wi-Fi & music server**
 - Wi-Fi settings; **r3srv**, a UPnP/DLNA + HTTP server that serves your library (incl. album art)
