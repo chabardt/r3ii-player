@@ -1,4 +1,6 @@
 /* wifi.c — see wifi.h */
+#include "fonts.h"
+#include "i18n.h"
 #include "wifi.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -109,7 +111,7 @@ static void srv_sync(void){                 /* run it exactly while: switch on +
 /* ---- radio ---- */
 static int wpa_running(void){ char o[16]; cli(o,sizeof o,"ping",0,0,0); return !strncmp(o,"PONG",4); }
 static void do_on(void){
-    msg("Starting Wi-Fi...");
+    msg(N_("Starting Wi-Fi..."));
     mkdir("/var/run/wpa_supplicant",0755);
     RUN(0,0,"ifconfig",IFACE,"up");
     if(!wpa_running()) RUN(0,0,"wpa_supplicant","-B","-i",IFACE,"-c",CONF,"-P","/tmp/r3wpa.pid");
@@ -125,7 +127,7 @@ static void do_off(void){
     pthread_mutex_lock(&mu); g_state[0]=g_ssid[0]=g_ip[0]=0; g_nnet=0; bump(); pthread_mutex_unlock(&mu);
 }
 static void do_dhcp(void){
-    msg("Getting an address...");
+    msg(N_("Getting an address..."));
     RUN(0,0,"udhcpc","-i",IFACE,"-n","-q","-t","4","-T","2");
     msg(""); }
 /* saved networks (list_networks) + scan results into g_net */
@@ -190,18 +192,18 @@ static void do_connect(const char*ssid,const char*psk){
     char ids[12]; int id=find_id(ssid);
     if(id>=0 && psk[0]){ snprintf(ids,sizeof ids,"%d",id); cli_ok("remove_network",ids,0,0); id=-1; }   /* new password */
     if(id<0){
-        char o[32]; cli(o,sizeof o,"add_network",0,0,0); if(!isdigit((unsigned char)o[0])){ msg("Could not add the network"); return; }
+        char o[32]; cli(o,sizeof o,"add_network",0,0,0); if(!isdigit((unsigned char)o[0])){ msg(N_("Could not add the network")); return; }
         id=atoi(o); snprintf(ids,sizeof ids,"%d",id);
         char h[80]; hex(ssid,h,sizeof h); cli_ok("set_network",ids,"ssid",h);
         cli_ok("set_network",ids,"scan_ssid","1");
         if(psk[0]){ char q[80]; snprintf(q,sizeof q,"\"%s\"",psk); cli_ok("set_network",ids,"psk",q); }
         else cli_ok("set_network",ids,"key_mgmt","NONE");
     } else snprintf(ids,sizeof ids,"%d",id);
-    msg("Connecting...");
+    msg(N_("Connecting..."));
     cli_ok("select_network",ids,0,0);
     for(int i=0;i<30;i++){ char o[512]; usleep(500000); cli(o,sizeof o,"status",0,0,0);
         if(strstr(o,"wpa_state=COMPLETED")) break;
-        if(i==29){ msg("Could not connect - wrong password?"); } }
+        if(i==29){ msg(N_("Could not connect - wrong password?")); } }
     cli_ok("enable_network","all",0,0);     /* select_network disabled the others: keep them for auto-join */
     cli_ok("save_config",0,0,0);
     if(!strstr(g_msg,"Could")) msg("");
@@ -227,7 +229,7 @@ static void* worker(void*arg){ (void)arg;
         if(g_on && wpa_running()){
             if(j&J_FORGET) do_forget(fs);
             if(j&J_CONNECT) do_connect(cs,cp);
-            if(j&J_SCAN){ msg("Scanning..."); cli_ok("scan",0,0,0); sleep(4); do_list(1); msg(""); }
+            if(j&J_SCAN){ msg(N_("Scanning...")); cli_ok("scan",0,0,0); sleep(4); do_list(1); msg(""); }
             time_t now=time(0); if((j&(J_POLL|J_ON)) || now-last_poll>=3){ last_poll=now; do_poll(); if(j&J_ON){ sleep(3); do_list(1); } }
         }
         memset(cp,0,sizeof cp);
@@ -250,11 +252,11 @@ int  wifi_busy(void){ return g_busy; }
 void wifi_set_enabled(int on){ g_on=on?1:0; prefs_save(); bump(); post(on?J_ON:J_OFF); }
 void wifi_status(char*out,int cap){
     pthread_mutex_lock(&mu);
-    if(!g_on) snprintf(out,cap,"Off");
-    else if(g_msg[0]) snprintf(out,cap,"%s",g_msg);
-    else if(!strcmp(g_state,"COMPLETED")) snprintf(out,cap,g_ip[0]?"Connected to %s":"Connected to %s - no address yet",g_ssid);
-    else if(!strcmp(g_state,"SCANNING")||!strcmp(g_state,"DISCONNECTED")||!strcmp(g_state,"INACTIVE")||!g_state[0]) snprintf(out,cap,"Not connected");
-    else snprintf(out,cap,"Connecting...");
+    if(!g_on) snprintf(out,cap,"%s",_("Off"));
+    else if(g_msg[0]) snprintf(out,cap,"%s",_(g_msg));   /* stored in English (N_), shown translated */
+    else if(!strcmp(g_state,"COMPLETED")) snprintf(out,cap,g_ip[0]?_("Connected to %s"):_("Connected to %s - no address yet"),g_ssid);
+    else if(!strcmp(g_state,"SCANNING")||!strcmp(g_state,"DISCONNECTED")||!strcmp(g_state,"INACTIVE")||!g_state[0]) snprintf(out,cap,"%s",_("Not connected"));
+    else snprintf(out,cap,"%s",_("Connecting..."));
     pthread_mutex_unlock(&mu); }
 void wifi_ip(char*out,int cap){ pthread_mutex_lock(&mu); snprintf(out,cap,"%s",g_on?g_ip:""); pthread_mutex_unlock(&mu); }
 int  wifi_nets(wifi_net_t*out,int cap){ pthread_mutex_lock(&mu); int n=g_on?g_nnet:0; if(n>cap) n=cap;

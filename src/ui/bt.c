@@ -4,6 +4,8 @@
  * Stock daemons on the R3 Pro II: bluetoothd, bt-agent (NoInputNoOutput, just-works),
  * bluealsa -p a2dp-source. We (re)start bluealsa with a2dp-sink too, so the same daemon
  * serves both roles. Bonds live in /usr/data/bluetooth/<adapter>/<peer>/info (persistent). */
+#include "fonts.h"
+#include "i18n.h"
 #include "bt.h"
 #include "audio.h"
 #include <pthread.h>
@@ -184,7 +186,7 @@ static int ensure_uhid(void){
     return 1;
 }
 static void do_init(void){
-    set_status("Starting Bluetooth...");
+    set_status(_("Starting Bluetooth..."));
     /* Bluetooth game controllers (Joy-Con, Pro Controller, DS4) only attach as /dev/input/
      * when BlueZ routes HID through userspace (uhid). Without UserspaceHID a controller links
      * at the ACL level but no event device is created and it drops after ~2s (bluetoothd:
@@ -221,14 +223,14 @@ static void do_rx_connect(void){
     bt_dev_t d[BT_MAX]; int n=bt_devices(d,BT_MAX);
     char m[128]; int linked=0;
     for(int i=0;i<n && !linked;i++) if(d[i].phone){
-        if(d[i].connected){ linked=1; snprintf(m,sizeof m,"Receiver on - %s connected",d[i].name); break; }
-        snprintf(m,sizeof m,"Receiver on - connecting %s...",d[i].name); set_status(m);
-        if(dbus_connect(d[i].mac)){ linked=1; snprintf(m,sizeof m,"Receiver on - %s connected",d[i].name); }
+        if(d[i].connected){ linked=1; snprintf(m,sizeof m,_("Receiver on - %s connected"),d[i].name); break; }
+        snprintf(m,sizeof m,_("Receiver on - connecting %s..."),d[i].name); set_status(m);
+        if(dbus_connect(d[i].mac)){ linked=1; snprintf(m,sizeof m,_("Receiver on - %s connected"),d[i].name); }
     }
     if(!linked){
         char al[256],*q; sh("printf 'show\\n' | bluetoothctl 2>/dev/null | grep Alias:",al,sizeof al);
         q=strstr(al,"Alias: "); if(q) q+=7; else { strcpy(al,"R3"); q=al; } q[strcspn(q,"\n")]=0;
-        snprintf(m,sizeof m,"Receiver on - pick \"%s\" on your phone",q);
+        snprintf(m,sizeof m,_("Receiver on - pick \"%s\" on your phone"),q);
     }
     set_status(m);
     do_refresh();
@@ -243,7 +245,7 @@ void bt_preempt_receiver(void){
         snprintf(cmd,sizeof cmd,"dbus-send --system --print-reply --reply-timeout=2000 --dest=org.bluez "
                  "/org/bluez/hci0/dev_%s org.bluez.MediaControl1.Pause >/dev/null 2>&1",mp); sh(cmd,0,0); }
     sh("killall bluealsa-aplay 2>/dev/null",0,0);
-    set_status("Phone paused - R3 has the jack");
+    set_status(_("Phone paused - R3 has the jack"));
 }
 /* receiver on, R3 not holding the DAC, bluealsa-aplay gone (preempted) => bring it back */
 static void rx_keepalive(void){
@@ -271,8 +273,8 @@ static void do_out(void){
         g_out[0]=0; mac[0]=0; save_state(); bump(); }
     pthread_mutex_unlock(&mu);
     write_alsa_conf(mac);
-    if(!mac[0]){ audio_reroute(0); set_status("Output: headphone jack"); return; }
-    char m[96]; snprintf(m,sizeof m,"Connecting %s...",name_of(mac)); set_status(m);
+    if(!mac[0]){ audio_reroute(0); set_status(_("Output: headphone jack")); return; }
+    char m[96]; snprintf(m,sizeof m,_("Connecting %s..."),name_of(mac)); set_status(m);
     int ok=dbus_connect(mac);
     if(ok){   /* wait for bluealsa to expose the speaker's PCM before aplay opens it */
         char mp[24],want[64],pcms[2048]; mac_path(mac,mp,sizeof mp);
@@ -283,7 +285,7 @@ static void do_out(void){
     /* switch the running track over (or stay where we are if the speaker isn't there) */
     if(ok) audio_reroute(1);
     do_refresh();
-    snprintf(m,sizeof m,ok?"Output: %s":"%s unreachable (switched off?)",name_of(mac)); set_status(m);
+    snprintf(m,sizeof m,ok?_("Output: %s"):_("%s unreachable (switched off?)"),name_of(mac)); set_status(m);
 }
 static void parse_found(const char*buf){
     bt_dev_t tmp[BT_MAX]; int n=0;
@@ -314,16 +316,16 @@ static void parse_found(const char*buf){
     pthread_mutex_lock(&mu); memcpy(g_fnd,tmp,sizeof(bt_dev_t)*k); g_nfnd=k; bump(); pthread_mutex_unlock(&mu);
 }
 static void do_scan(void){
-    set_status("Scanning... (put the speaker in pairing mode)");
+    set_status(_("Scanning... (put the speaker in pairing mode)"));
     static char buf[16384];
     sh("bluetoothctl --timeout 12 scan on 2>/dev/null; bluetoothctl devices 2>/dev/null",buf,sizeof buf);
     parse_found(buf);
     char m[64]; int n; pthread_mutex_lock(&mu); n=g_nfnd; pthread_mutex_unlock(&mu);
-    snprintf(m,sizeof m,n?"Found %d - tap one to pair":"Nothing found",n); set_status(m);
+    snprintf(m,sizeof m,n?_("Found %d - tap one to pair"):_("Nothing found"),n); set_status(m);
 }
 static void do_pair(const char*mac){
     char m[128],cmd[256],out[2048];
-    snprintf(m,sizeof m,"Pairing %s...",name_of(mac)); set_status(m);
+    snprintf(m,sizeof m,_("Pairing %s..."),name_of(mac)); set_status(m);
     snprintf(cmd,sizeof cmd,"bluetoothctl --agent NoInputNoOutput --timeout 20 pair %s 2>&1",mac);
     sh(cmd,out,sizeof out);
     int ok=strstr(out,"Pairing successful")||strstr(out,"AlreadyExists");
@@ -338,7 +340,7 @@ static void do_pair(const char*mac){
     for(int i=0;i<g_nfnd;i++) if(!strcmp(g_fnd[i].mac,mac)){ g_fnd[i]=g_fnd[--g_nfnd]; break; }
     if(ok&&spk){ snprintf(g_out,sizeof g_out,"%s",mac); save_state(); g_jobs|=J_OUT; }
     bump(); pthread_mutex_unlock(&mu);
-    snprintf(m,sizeof m,ok?"Paired %s":"Pairing %s failed",name_of(mac)); set_status(m);
+    snprintf(m,sizeof m,ok?_("Paired %s"):_("Pairing %s failed"),name_of(mac)); set_status(m);
 }
 static void do_forget(const char*mac){
     char cmd[96]; snprintf(cmd,sizeof cmd,"bluetoothctl remove %s >/dev/null 2>&1; sync",mac); sh(cmd,0,0);

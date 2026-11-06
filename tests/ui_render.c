@@ -6,6 +6,9 @@
 #include "pet_core.h"
 #include "brick.h"
 #include "coil.h"
+#include "sapper.h"
+#include "fonts.h"
+#include "i18n.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,12 +41,14 @@ static void noexit(void){}
 
 int main(int argc,char**argv){
     const char*scene=argc>1?argv[1]:"day", *out=argc>2?argv[2]:"shot.png";
-    lv_init();
+    lv_init(); fonts_init();
+    { const char*lg=getenv("R3_LANG"); if(lg) for(int i=1;i<i18n_count();i++) if(!strcmp(lg,i18n_code(i))) i18n_set(i); }   /* R3_LANG=fr */
     static lv_disp_draw_buf_t db; static lv_color_t buf[480*120]; lv_disp_draw_buf_init(&db,buf,NULL,480*120);
     static lv_disp_drv_t dd; lv_disp_drv_init(&dd); dd.draw_buf=&db; dd.flush_cb=flush; dd.hor_res=480; dd.ver_res=720;
     lv_disp_drv_register(&dd);
     if(!strncmp(scene,"brick",5)){ lv_scr_load(brick_create(noexit,0)); run(400); png(out); return 0; }
     if(!strncmp(scene,"coil",4)){ lv_scr_load(coil_create(noexit,0)); run(900); png(out); return 0; }
+    if(!strncmp(scene,"sapper",6)){ lv_scr_load(sapper_create(noexit,0)); run(200); png(out); return 0; }
     /* pet scenes: write a save file, then open the screen */
     struct tm tm={0}; tm.tm_year=126; tm.tm_mon=10; tm.tm_mday=4; tm.tm_isdst=-1;
     pet_t p; pet_new(&p,0,3);
