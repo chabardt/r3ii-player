@@ -3,6 +3,8 @@
  * Drag anywhere on the field: the paddle follows your finger. Tap: launch the ball.
  * Keys: prev/next = paddle left/right, play = launch / pause (new game after game over).
  * Only the areas around moving things are redrawn each frame (smooth on the X1600). */
+#include "fonts.h"
+#include "i18n.h"
 #include "brick.h"
 #include "brick_core.h"
 #include "hiscore.h"
@@ -36,7 +38,7 @@ static void field_draw_cb(lv_event_t*e){
     /* bricks (skip the whole band when the clip doesn't touch it) */
     if(clip->y1 <= oy+BK_Y0+BK_NR*BK_DY && clip->y2 >= oy+BK_Y0){
         lv_draw_label_dsc_t ld; lv_draw_label_dsc_init(&ld);
-        ld.font=&lv_font_montserrat_14; ld.color=lv_color_hex(0x0A0A0A); ld.align=LV_TEXT_ALIGN_CENTER;
+        ld.font=&r3_font_14; ld.color=lv_color_hex(0x0A0A0A); ld.align=LV_TEXT_ALIGN_CENTER;
         for(int r=0;r<BK_NR;r++) for(int k=0;k<BK_NC;k++){ bk_brick_t*b=&G.br[r][k]; if(b->hp<=0) continue;
             int x=ox+(int)bk_brick_x(k), y=oy+(int)bk_brick_y(r);
             uint32_t col = b->type!=BT_NORMAL ? 0xF4E4D0 : ROWC[b->col%7];
@@ -72,7 +74,7 @@ static void invalidate_moving(void){
 /* ---- HUD ---- */
 static void hud(void){ char b[32];
     snprintf(b,sizeof b,"%d",G.score); lv_label_set_text(s_score,b);
-    snprintf(b,sizeof b,"LEVEL %d",G.level); lv_label_set_text(s_level,b); }
+    snprintf(b,sizeof b,_("LEVEL %d"),G.level); lv_label_set_text(s_level,b); }
 static void toast(const char*t){ lv_label_set_text(s_toast,t); lv_obj_clear_flag(s_toast,LV_OBJ_FLAG_HIDDEN);
     s_toast_until=r3_tick_ms()+1300; }
 static void game_over(void){
@@ -84,7 +86,7 @@ static void new_game(void){
     bk_new_game(&G,(unsigned)time(0)^r3_tick_ms()); paused=0;
     lv_label_set_text(s_pause,""); lv_obj_add_flag(s_over,LV_OBJ_FLAG_HIDDEN);
     memset(prev_ball_on,0,sizeof prev_ball_on); prev_pad=pad_area();
-    hud(); toast("TAP TO LAUNCH"); lv_obj_invalidate(s_field); s_last=r3_tick_ms();
+    hud(); toast(_("TAP TO LAUNCH")); lv_obj_invalidate(s_field); s_last=r3_tick_ms();
 }
 
 static void tick_cb(lv_timer_t*t){ (void)t;
@@ -97,8 +99,8 @@ static void tick_cb(lv_timer_t*t){ (void)t;
         if(sx!=0) bk_set_paddle(&G,G.px+G.pw/2.0f+sx*620.0f*dt); }
     bk_step(&G,dt);
     if(G.toast){ int k=G.toast; G.toast=0;
-        toast(k==BT_MULTI?"MULTI BALL!":k==BT_BOMB?"EXPLOSIVE BALL!":k==BT_FAST?"FASTER!":
-              k==BT_SLOW?"SLOWER":k==BT_WIDE?"WIDE PADDLE!":k==BT_TINY?"TINY PADDLE":k==100?"LEVEL CLEAR!":""); }
+        toast(k==BT_MULTI?_("MULTI BALL!"):k==BT_BOMB?_("EXPLOSIVE BALL!"):k==BT_FAST?_("FASTER!"):
+              k==BT_SLOW?_("SLOWER"):k==BT_WIDE?_("WIDE PADDLE!"):k==BT_TINY?_("TINY PADDLE"):k==100?_("LEVEL CLEAR!"):""); }
     if(G.score!=sc||G.level!=lv) hud();
     invalidate_moving();
     if(G.over) game_over();
@@ -119,7 +121,7 @@ int brick_key(int code){
     if(G.over){ if(code==164) new_game(); return 1; }
     if(code==164){
         if(bk_any_stuck(&G) && !paused){ bk_launch(&G); return 1; }
-        paused=!paused; lv_label_set_text(s_pause,paused?"PAUSED":""); s_last=r3_tick_ms(); return 1; }
+        paused=!paused; lv_label_set_text(s_pause,paused?_("PAUSED"):""); s_last=r3_tick_ms(); return 1; }
     if(paused) return 1;
     if(code==165) bk_set_paddle(&G,G.px+G.pw/2.0f-48);
     else if(code==163) bk_set_paddle(&G,G.px+G.pw/2.0f+48);
@@ -132,7 +134,7 @@ int brick_pad(int a){
     if(!s_scr) return 0;
     if(a==PA_A||a==PA_B) return brick_key(164);
     if(a==PA_PLUS||a==PA_MINUS){ if(G.over) return 1;
-        paused=!paused; lv_label_set_text(s_pause,paused?"PAUSED":""); s_last=r3_tick_ms(); return 1; }
+        paused=!paused; lv_label_set_text(s_pause,paused?_("PAUSED"):""); s_last=r3_tick_ms(); return 1; }
     return a==PA_LEFT||a==PA_RIGHT||a==PA_UP||a==PA_DOWN;
 }
 
@@ -166,9 +168,9 @@ lv_obj_t* brick_create(void (*on_exit)(void),int resume){
     lv_obj_add_event_cb(bk,back_cb,LV_EVENT_CLICKED,NULL);
     lv_obj_t*bl=lv_label_create(bk); lv_label_set_text(bl,LV_SYMBOL_LEFT);
     lv_obj_set_style_text_color(bl,lv_color_hex(0xE8731C),0); lv_obj_center(bl);
-    lv_obj_t*t=label(scr,&lv_font_montserrat_20,0xE8731C); lv_label_set_text(t,"BRICKSTORM"); lv_obj_set_pos(t,64,16);
-    s_level=label(scr,&lv_font_montserrat_14,0x8A6A4A); lv_obj_align(s_level,LV_ALIGN_TOP_RIGHT,-110,20);
-    s_score=label(scr,&lv_font_montserrat_28,0xF4E4D0); lv_obj_align(s_score,LV_ALIGN_TOP_RIGHT,-12,10);
+    lv_obj_t*t=label(scr,&r3_font_20,0xE8731C); lv_label_set_text(t,"BRICKSTORM"); lv_obj_set_pos(t,64,16);
+    s_level=label(scr,&r3_font_14,0x8A6A4A); lv_obj_align(s_level,LV_ALIGN_TOP_RIGHT,-110,20);
+    s_score=label(scr,&r3_font_28,0xF4E4D0); lv_obj_align(s_score,LV_ALIGN_TOP_RIGHT,-12,10);
     lv_obj_set_style_text_align(s_score,LV_TEXT_ALIGN_RIGHT,0);
     /* field */
     s_field=lv_obj_create(scr); lv_obj_set_size(s_field,BK_W,BK_H); lv_obj_set_pos(s_field,0,FY);
@@ -181,23 +183,23 @@ lv_obj_t* brick_create(void (*on_exit)(void),int resume){
     lv_obj_add_event_cb(s_field,field_input_cb,LV_EVENT_RELEASED,NULL);
     lv_obj_add_event_cb(s_field,field_input_cb,LV_EVENT_CLICKED,NULL);
     /* toast + pause (on the screen, over the lower field) */
-    s_toast=label(scr,&lv_font_montserrat_28,0xE8731C); lv_obj_set_width(s_toast,480);
+    s_toast=label(scr,&r3_font_28,0xE8731C); lv_obj_set_width(s_toast,480);
     lv_obj_set_style_text_align(s_toast,LV_TEXT_ALIGN_CENTER,0); lv_obj_set_pos(s_toast,0,FY+380);
     lv_obj_add_flag(s_toast,LV_OBJ_FLAG_HIDDEN); lv_obj_clear_flag(s_toast,LV_OBJ_FLAG_CLICKABLE);
-    s_pause=label(scr,&lv_font_montserrat_28,0xF4E4D0); lv_obj_set_width(s_pause,480);
+    s_pause=label(scr,&r3_font_28,0xF4E4D0); lv_obj_set_width(s_pause,480);
     lv_obj_set_style_text_align(s_pause,LV_TEXT_ALIGN_CENTER,0); lv_obj_set_pos(s_pause,0,FY+300);
     /* game over */
     s_over=lv_obj_create(scr); lv_obj_set_size(s_over,400,340); lv_obj_set_pos(s_over,40,FY+170);
     lv_obj_set_style_bg_color(s_over,lv_color_hex(0x000000),0); lv_obj_set_style_bg_opa(s_over,LV_OPA_80,0);
     lv_obj_set_style_border_color(s_over,lv_color_hex(0xE8731C),0); lv_obj_set_style_border_width(s_over,2,0);
     lv_obj_set_style_radius(s_over,18,0); lv_obj_clear_flag(s_over,LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_CLICKABLE);
-    s_over_lbl=label(s_over,&lv_font_montserrat_16,0xF4E4D0); lv_label_set_recolor(s_over_lbl,true);
+    s_over_lbl=label(s_over,&r3_font_16,0xF4E4D0); lv_label_set_recolor(s_over_lbl,true);
     lv_obj_set_style_text_align(s_over_lbl,LV_TEXT_ALIGN_CENTER,0); lv_obj_set_style_text_line_space(s_over_lbl,4,0);
     lv_obj_center(s_over_lbl);
     new_game();
     struct { uint32_t magic; bk_t g; } sv;
     if(resume && load_save(&sv.magic,&sv.g)){   /* continue where we left off, paused until a tap */
-        G=sv.g; paused=1; lv_label_set_text(s_pause,"PAUSED - tap to go on");
+        G=sv.g; paused=1; lv_label_set_text(s_pause,_("PAUSED - tap to go on"));
         lv_obj_add_flag(s_toast,LV_OBJ_FLAG_HIDDEN); s_toast_until=0;
         hud(); prev_pad=pad_area(); lv_obj_invalidate(s_field); }
     unlink(BK_SAVE);              /* the live game owns the state now (saved again on leave) */

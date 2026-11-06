@@ -65,9 +65,16 @@ for this one model.
 - Wi-Fi settings; **r3srv**, a UPnP/DLNA + HTTP server that serves your library (incl. album art)
   over the network.
 
+**Languages**
+- **English** and **Français** (Settings → Language); accents and non-ASCII names display
+  properly (Montserrat with a TTF fallback for Latin, Cyrillic, Vietnamese).
+- Translations are plain gettext `.po` files in `lang/` — adding a language is one file:
+  see [docs/TRANSLATING.md](docs/TRANSLATING.md).
+
 **Games** (bring your own data files)
 - **Doom** (`doomgeneric`) — supply your own `doom.wad` / `doom2.wad`.
-- **Blockfall** (Tetris-style), **Brickstorm** (breakout), both from scratch.
+- **Blockfall** (Tetris-style), **Brickstorm** (breakout), **Coil** (snake-style),
+  **Sapper** (minesweeper-style), all from scratch.
 - **Game Boy** emulator (`Peanut-GB`) — supply your own ROMs.
 - Portrait on-screen controls + full Bluetooth-controller support; per-game **high scores**.
 
@@ -178,7 +185,8 @@ vendor/      third-party libraries (see Credits)
 This project bundles the following open-source libraries under `vendor/` (each keeps its own
 license):
 
-- [LVGL](https://lvgl.io/) — UI toolkit (MIT)
+- [LVGL](https://lvgl.io/) — UI toolkit (MIT), incl. tiny_ttf / stb_truetype and the
+  Montserrat font it ships (SIL Open Font License)
 - [minimp3](https://github.com/lieff/minimp3), [dr_libs](https://github.com/mackron/dr_libs)
   (dr_flac/dr_wav), [stb_image](https://github.com/nothings/stb) — decoders (public domain / MIT)
 - [faad2](https://github.com/knik0/faad2) + [minimp4](https://github.com/lieff/minimp4) —
