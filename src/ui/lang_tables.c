@@ -57,6 +57,7 @@ static const lang_entry_t L_fr[] = {
     { "Connecting %s...", "Connexion \303\240 %s..." },
     { "Connecting...", "Connexion..." },
     { "Copy your .gb ROMs to Games/GameBoy\non the SD card.", "Copiez vos ROM .gb dans Games/GameBoy\nsur la carte SD." },
+    { "Copy your .gba ROMs to Games/GBA on the\nSD card (gba_bios.bin there too, optional).", "Copiez vos ROM .gba dans Games/GBA sur la\ncarte SD (gba_bios.bin aussi, facultatif)." },
     { "Could not add the network", "Impossible d\342\200\231ajouter le r\303\251seau" },
     { "Could not connect - wrong password?", "Connexion impossible - mauvais mot de passe ?" },
     { "Could not reach this device.", "Impossible de joindre cet appareil." },
@@ -88,6 +89,7 @@ static const lang_entry_t L_fr[] = {
     { "GAME OVER", "PARTIE TERMIN\303\211E" },
     { "GOLDEN! +2", "DOR\303\211 ! +2" },
     { "Game Boy", "Game Boy" },
+    { "Game Boy Advance", "Game Boy Advance" },
     { "Games", "Jeux" },
     { "Getting an address...", "Obtention d\342\200\231une adresse..." },
     { "HIGH SCORES", "MEILLEURS SCORES" },
@@ -96,6 +98,7 @@ static const lang_entry_t L_fr[] = {
     { "Headphone jack", "Prise casque" },
     { "High scores", "Meilleurs scores" },
     { "Hold power to save and quit a game.\nPower: pause. Controllers work too.", "Maintenez power pour sauver et quitter.\nPower : pause. Les manettes marchent aussi." },
+    { "Hold power to save and quit: the game\nresumes there next time. Power: pause.\nController: play in landscape.", "Maintenez power pour sauver et quitter :\nle jeu reprendra l\303\240. Power : pause.\nManette : jeu \303\240 l'horizontale." },
     { "Home", "Home" },
     { "Hour", "Heure" },
     { "Import", "Importer" },
@@ -176,6 +179,8 @@ static const lang_entry_t L_fr[] = {
     { "Remove from %s", "Retirer de %s" },
     { "Rescan library", "R\303\251indexer la biblioth\303\250que" },
     { "Reset all scores", "Effacer tous les scores" },
+    { "Restart (keeps game saves)", "Recommencer (sauvegardes gard\303\251es)" },
+    { "Resume", "Reprendre" },
     { "Resume  (score %d)", "Reprendre  (score %d)" },
     { "Right", "Droite" },
     { "SAPPER\nclear the field without\ndigging up a mine\n\ntap: dig   hold: flag\ntap a number to open around it\n\nchoose a field:", "SAPPER\nd\303\251minez le terrain sans\nfaire sauter de mine\n\ntoucher : creuser   maintenir : drapeau\ntouchez un chiffre pour ouvrir autour\n\nchoisissez un terrain :" },
@@ -243,6 +248,7 @@ static const lang_entry_t L_fr[] = {
     { "connected - battery %d%%", "connect\303\251 - batterie %d%%" },
     { "connected - battery %d%%%s", "connect\303\251e - batterie %d%%%s" },
     { "connected%s%s", "connect\303\251%s%s" },
+    { "copy your ROMs to Games/GBA", "copiez vos ROM dans Games/GBA" },
     { "copy your ROMs to Games/GameBoy", "copiez vos ROM dans Games/GameBoy" },
     { "eat, grow, don't bite yourself", "mangez, grandissez, sans vous mordre" },
     { "egg", "\305\223uf" },
@@ -275,6 +281,7 @@ static const lang_entry_t L_fr[] = {
     { "phone -> R3 -> jack", "t\303\251l\303\251phone -> R3 -> prise" },
     { "popped %d  -  %ds", "\303\251clat\303\251es %d  -  %ds" },
     { "press a button on it to reconnect", "appuyez sur un bouton pour la reconnecter" },
+    { "resume where you left", "reprendre o\303\271 vous en \303\251tiez" },
     { "saved - %s - hold to forget", "enregistr\303\251 - %s - maintenir pour oublier" },
     { "saved game", "partie sauvegard\303\251e" },
     { "selected - not connected", "choisi - non connect\303\251" },
@@ -291,6 +298,6 @@ static const lang_entry_t L_fr[] = {
     { "went back to the stars", "est reparti vers les \303\251toiles" },
 };
 const lang_t LANGS[] = {
-    { "fr", "Fran\303\247ais", 287, L_fr },
+    { "fr", "Fran\303\247ais", 294, L_fr },
 };
 const int LANG_N = 1;
