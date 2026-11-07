@@ -13,6 +13,9 @@
  * (at the camp: quit). Joy-Con: A DUM, B KA, X TOK, Y CHI. */
 #include "drum_core.h"
 #include "drum_game.h"
+#include "drum_music.h"
+#include "drum_decode.h"
+#include <dirent.h>
 #include "pad.h"
 #include "volbar.h"
 #include "tinyalsa/pcm.h"
@@ -192,6 +195,10 @@ static int32_t voice_sample(voice_t*v){
 }
 static const float BASSLINE[8]={55,55,82.4f,73.4f,55,65.4f,73.4f,82.4f};
 static volatile int32_t soft_gain=32768;   /* Bluetooth: software volume, like r3player (0.25 dB a step) */
+/* MY MUSIC: a decoder thread fills this ring at 48 kHz; the mixer reads frame (s - song_w0) for
+ * mixer sample s, so a song frame always plays at a known sample: the beat grid stays exact */
+#define RING (48000*2)
+static int16_t mring[RING*2]; static volatile int64_t ring_w; static volatile int64_t song_w0=-1; static volatile int music_live;
 static void mix_block(int16_t*out,int n){
     int64_t w0=written;
     while(qt!=qh){ sev_t e=Q[qt&511]; start_voice(e.type,e.start?e.start:w0,e.vol,e.pitch); __sync_synchronize(); qt++; }
@@ -203,7 +210,9 @@ static void mix_block(int16_t*out,int n){
                 if(bk_fever){ start_voice(S_BASS,at,1,BASSLINE[beatno%8]); if(beatno%2==1) start_voice(S_CLAP,at,1,0); } }
             else start_voice(S_HAT,at,bk_fever?1.3f:1,0); } }
     int act[NV], na=0; for(int k=0;k<NV;k++) if(V[k].on) act[na++]=k;
+    int64_t sw0=song_w0; int ml=music_live;
     for(int i=0;i<n;i++){ int32_t l=0; int64_t s=w0+i;
+        if(ml && sw0>=0 && s>=sw0){ int64_t f=s-sw0; if(f<ring_w && f>ring_w-RING){ int k=(int)(f%RING); l+=(mring[2*k]+mring[2*k+1])*11/32; } }
         for(int j=0;j<na;j++){ voice_t*v=&V[act[j]]; if(!v->on || v->start>s) continue; l+=voice_sample(v); }
         l=l*13/32; if(soft_gain<32768) l=(int32_t)(((int64_t)l*soft_gain)>>15);
         if(l>30000) l=30000; if(l<-30000) l=-30000; out[2*i]=out[2*i+1]=(int16_t)l; }
@@ -233,6 +242,18 @@ static int bt_open(void){
     snprintf(out_name,sizeof out_name,"BLUETOOTH %s",mac); fprintf(stderr,"[r3drum] audio -> %s (aplay %d)\n",out_name,(int)bt_pid);
     return fds[1];
 }
+static void dac_route(void); static void hw_volume(void);
+static void open_dac(void){                 /* lowest latency first; the codec driver decides what it takes */
+    static const int TRY[][2]={{256,4},{512,2},{512,3},{1024,2},{1024,4}};
+    for(unsigned i=0;i<sizeof TRY/sizeof TRY[0] && !pcm;i++){
+        struct pcm_config cfg; memset(&cfg,0,sizeof cfg);
+        cfg.channels=2; cfg.rate=DR_RATE; cfg.period_size=TRY[i][0]; cfg.period_count=TRY[i][1]; cfg.format=PCM_FORMAT_S16_LE;
+        cfg.start_threshold=TRY[i][0]; cfg.stop_threshold=TRY[i][0]*TRY[i][1]; cfg.avail_min=TRY[i][0];
+        pcm=pcm_open(0,0,PCM_OUT,&cfg);
+        if(pcm && !pcm_is_ready(pcm)){ pcm_close(pcm); pcm=NULL; }
+        else if(pcm){ PERIOD=TRY[i][0]; NPER=TRY[i][1]; fprintf(stderr,"[r3drum] audio %dx%d (%d ms)\n",PERIOD,NPER,PERIOD*NPER*1000/DR_RATE); } }
+    if(pcm){ snprintf(out_name,sizeof out_name,"HEADPHONES"); dac_route(); hw_volume(); }
+}
 static void bt_close(void){ if(bt_fd>=0) close(bt_fd); bt_fd=-1; if(bt_pid>0){ kill(bt_pid,SIGTERM); waitpid(bt_pid,0,0); } bt_pid=-1; }
 static void*audio_thread(void*arg){ (void)arg;
     static int16_t buf[1024*2]; int64_t stuck_since=0;
@@ -240,7 +261,8 @@ static void*audio_thread(void*arg){ (void)arg;
         mix_block(buf,PERIOD);
         int buffered=0;
         if(bt_fd>=0){ const char*q=(const char*)buf; size_t left=(size_t)PERIOD*4;
-            while(left){ ssize_t w=write(bt_fd,q,left); if(w<0){ if(errno==EINTR) continue; fprintf(stderr,"[r3drum] bluetooth gone\n"); bt_close(); break; } q+=w; left-=(size_t)w; }
+            while(left){ ssize_t w=write(bt_fd,q,left); if(w<0){ if(errno==EINTR) continue;
+                    fprintf(stderr,"[r3drum] bluetooth gone: wired output\n"); bt_close(); open_dac(); break; } q+=w; left-=(size_t)w; }
             buffered=bt_lat; }
         else if(pcm){
             int r=pcm_wait(pcm,100);                                     /* never block forever */
@@ -266,16 +288,19 @@ static void dac_route(void){ if(!mx) return;
     if(mo) mixer_ctl_set_value(mo,0,0); if(sm) mixer_ctl_set_value(sm,0,0); if(op) mixer_ctl_set_value(op,0,1); }
 
 /* ======================================================================= state */
-enum { ST_CAMP, ST_EDIT, ST_BATTLE, ST_RESULT };
+enum { ST_CAMP, ST_EDIT, ST_BATTLE, ST_RESULT, ST_LISTEN };
 static int st=ST_CAMP, sel=0, slot=0, offset_ms=30, paused, quit;
 static armory_t A;
 static uint32_t vb_until;
-typedef struct { uint32_t magic, ver; armory_t a; int offset, sel; } save_t;
+typedef struct { uint32_t magic, ver; armory_t a; int offset, sel, music; } save_t;   /* v1 had no music */
+static int music_opt;
 #define MAGIC 0x44524D46u
-static void save_game(void){ save_t s={MAGIC,1,A,offset_ms,sel}; FILE*f=fopen(SAVE ".tmp","wb"); if(!f) return;
+static void save_game(void){ save_t s={MAGIC,2,A,offset_ms,sel,music_opt}; FILE*f=fopen(SAVE ".tmp","wb"); if(!f) return;
     int ok=fwrite(&s,sizeof s,1,f)==1; fflush(f); fsync(fileno(f)); fclose(f); if(ok) rename(SAVE ".tmp",SAVE); }
 static void load_game(void){ dg_armory_default(&A); save_t s; FILE*f=fopen(SAVE,"rb");
-    if(f){ if(fread(&s,sizeof s,1,f)==1 && s.magic==MAGIC && s.ver==1){ A=s.a; offset_ms=s.offset; sel=s.sel; } fclose(f); }
+    if(f){ memset(&s,0,sizeof s); size_t n=fread(&s,1,sizeof s,f);
+        if(n>=offsetof(save_t,music) && s.magic==MAGIC && (s.ver==1||s.ver==2)){ A=s.a; offset_ms=s.offset; sel=s.sel; music_opt=s.ver>=2?s.music:0; }
+        fclose(f); }
     if(A.nsquad<1||A.nsquad>DG_MAXU) dg_armory_default(&A);
     if(sel<0||sel>=DG_NMISSION||sel>A.cleared) sel=0; }
 static int owned(int code){ return code>=100 ? (A.shields>>(code-100))&1 : (A.weapons>>code)&1; }
@@ -295,11 +320,13 @@ static void burst(float x,float y,int n,uint32_t c,float spd,float size,int worl
         float a=(float)(rand()%628)/100, v=spd*(0.4f+(rand()%60)/100.0f);
         *p=(part_t){x,y,cosf(a)*v,sinf(a)*v-spd*0.5f,0.5f+(rand()%50)/100.0f,size,c,world}; } }
 
+static int music_start(void); static void music_stop(void); static int listen_fallback; static float listen_msg_t;
 static void start_battle(void){
+    if(music_opt && st!=ST_LISTEN && !listen_fallback){ if(music_start()){ st=ST_LISTEN; listen_msg_t=0; return; } }   /* listen first, then fight */
     dg_start(&G,sel,&A,(uint32_t)now_us());
     int64_t t=now_sample()+DR_RATE;                /* first beat in a second */
     rc_init(&rc,120,t); last_beat=-1;
-    bk_t0=t; bk_beat=rc.beat; bk_fever=0; bk_on=1;
+    bk_t0=t; bk_beat=rc.beat; bk_fever=0; bk_on=!music_live;
     ngot=0; nnew=0; shake=0; judge_t=0; cmd_t=0; end_t=0; shown_cmd=CMD_NONE; victory=0;
     memset(P,0,sizeof P); memset(BB,0,sizeof BB); say_cool=3; st=ST_BATTLE; paused=0;
 }
@@ -307,7 +334,7 @@ static void unlock(int code){ if(owned(code)) return;
     if(code>=100) A.shields|=1u<<(code-100); else A.weapons|=1u<<code;
     if(nnew<24) newly[nnew++]=code; }
 static void end_battle(int won){
-    victory=won; bk_on=0;
+    victory=won; bk_on=0; music_stop();
     for(int i=0;i<ngot;i++) unlock(got[i]);                       /* finds are kept either way */
     if(won){ const mission_t*m=&DG_MISSION[sel]; for(int i=0;i<m->nreward;i++) unlock(m->reward[i]);
         if(sel==A.cleared && A.cleared<DG_NMISSION) A.cleared++; }
@@ -315,6 +342,128 @@ static void end_battle(int won){
     if(won){ const float mel[6]={523,659,784,1047,784,1047}; for(int i=0;i<6;i++) snd_at(S_TONE,now_sample()+DR_RATE/8*i+800,1,mel[i]); }
     else { const float mel[4]={392,330,262,196}; for(int i=0;i<4;i++) snd_at(S_TONE,now_sample()+DR_RATE/5*i+800,1,mel[i]); }
     st=ST_RESULT;
+}
+
+/* ======================================================================= MY MUSIC */
+static char song_path[640], song_title[64];
+static dm_t DM; static dm_beat_t BEAT; static volatile int beat_ver, an_frames, an_rate, an_end, pb_rate;
+static volatile int an_quit, pb_quit; static volatile int64_t pass_frame;   /* ring frame where the song (re)started */
+static pthread_t an_th, pb_th; static int an_run, pb_run, music_failed;
+static pthread_mutex_t beat_mu=PTHREAD_MUTEX_INITIALIZER;
+#define SDR "/usr/data/mnt/sd_0"
+static int pick_from_dir(const char*dir,int depth){       /* random walk: artist -> album -> track */
+    static char names[512][256]; static char songs_[64][256]; int nd=0, ns=0;
+    DIR*d=opendir(dir); if(!d) return 0; struct dirent*e;
+    while((e=readdir(d))){ if(e->d_name[0]=='.') continue;
+        if(e->d_type==DT_DIR && nd<512) snprintf(names[nd++],256,"%s",e->d_name);
+        else if(dec_is_song(e->d_name) && ns<64) snprintf(songs_[ns++],256,"%s",e->d_name); }
+    closedir(d);
+    if(ns){ snprintf(song_path,sizeof song_path,"%s/%s",dir,songs_[rand()%ns]); return 1; }
+    if(!nd || depth>4) return 0;
+    char sub[640]; snprintf(sub,sizeof sub,"%s/%s",dir,names[rand()%nd]); return pick_from_dir(sub,depth+1);
+}
+static int pick_song(void){
+    FILE*f=fopen(SDR "/Playlists/Favorites.m3u","r"); static char c[200][640]; int n=0; char l[700];
+    if(f){ while(fgets(l,sizeof l,f) && n<200){ l[strcspn(l,"\r\n")]=0; if(!l[0]||l[0]=='#'||!dec_is_song(l)) continue;
+            if(l[0]=='/') snprintf(c[n],640,"%s",l); else snprintf(c[n],640,SDR "/Playlists/%s",l);
+            if(access(c[n],R_OK)){ char*m=strstr(l,"Music/"); if(m) snprintf(c[n],640,SDR "/%s",m); }
+            if(!access(c[n],R_OK)) n++; }
+        fclose(f); }
+    if(n) snprintf(song_path,sizeof song_path,"%s",c[rand()%n]);
+    else for(int t=0;t<6;t++) if(pick_from_dir(SDR "/Music",0)){ n=1; break; }
+    if(!n) return 0;
+    /* "ARTIST - TITLE" in the 5x7 font's alphabet */
+    char a[200]="", t[200]; const char*b=strrchr(song_path,'/'); snprintf(t,sizeof t,"%s",b?b+1:song_path);
+    char*x=strrchr(t,'.'); if(x) *x=0;
+    { char tmp[640]; snprintf(tmp,sizeof tmp,"%s",song_path); char*s1=strrchr(tmp,'/');
+      if(s1){ *s1=0; char*s2=strrchr(tmp,'/'); if(s2){ *s2=0; char*s3=strrchr(tmp,'/'); snprintf(a,sizeof a,"%s",s3?s3+1:tmp); } } }
+    char raw[420]; snprintf(raw,sizeof raw,"%s - %s",a,t); int j=0;
+    for(int i=0;raw[i]&&j<(int)sizeof song_title-1;i++){ unsigned char ch=(unsigned char)raw[i];
+        if(ch>=0x80){ if((ch&0xC0)!=0x80) song_title[j++]='?'; } else song_title[j++]=(char)ch; }
+    song_title[j]=0; return 1;
+}
+static void*an_thread(void*arg){ (void)arg;                /* listens to the whole song, ahead of play */
+    dec_t d; if(dec_open(&d,song_path)){ an_end=1; return 0; }
+    dm_init(&DM,d.rate); an_rate=d.rate; static int16_t st[4096*2], mono[4096]; int last=0;
+    while(!an_quit){ int n=dec_read(&d,st,4096); if(n<=0) break;
+        for(int i=0;i<n;i++) mono[i]=(int16_t)((st[2*i]+st[2*i+1])/2);
+        dm_feed(&DM,mono,n); an_frames+=n;
+        int secs=an_frames/d.rate;
+        if((secs>=20 && last==0) || secs>=last+20){ last=secs; dm_beat_t b=dm_estimate(&DM);
+            pthread_mutex_lock(&beat_mu); BEAT=b; beat_ver++; pthread_mutex_unlock(&beat_mu); }
+        if(secs>=20) usleep(15000);                          /* the first 20 s fast, then gently */
+    }
+    if(!an_quit){ dm_beat_t b=dm_estimate(&DM); pthread_mutex_lock(&beat_mu); if(b.ok||!BEAT.ok) BEAT=b; beat_ver++; pthread_mutex_unlock(&beat_mu); }
+    dec_close(&d); an_end=1; return 0;
+}
+static void*pb_thread(void*arg){ (void)arg;                /* plays it into the ring, resampled to 48 kHz */
+    dec_t d; static int16_t st[4096*2]; int n=0, pos=0; uint32_t frac=0; int16_t pl=0,pr=0;
+    while(!pb_quit){
+        if(dec_open(&d,song_path)) break;
+        pb_rate=d.rate; uint32_t step=(uint32_t)(((uint64_t)d.rate<<16)/DR_RATE); n=pos=0; frac=0;
+        pass_frame=ring_w; __sync_synchronize(); beat_ver++;   /* the song (re)starts here: re-anchor */
+        for(;;){ if(pb_quit) break;
+            if(pos>=n){ n=dec_read(&d,st,4096); pos=0; if(n<=0) break; }
+            for(;;){ int64_t played = song_w0>=0 && written>song_w0 ? written-song_w0 : 0;
+                if(ring_w-played<RING-2048 || pb_quit) break; usleep(5000); }
+            int k=(int)(ring_w%RING); int l=st[2*pos], r=st[2*pos+1];
+            mring[2*k]=(int16_t)(pl+(((l-pl)*(int32_t)(frac>>4))>>12)); mring[2*k+1]=(int16_t)(pr+(((r-pr)*(int32_t)(frac>>4))>>12));
+            __sync_synchronize(); ring_w++;
+            frac+=step;
+            while(frac>=65536){ frac-=65536; pl=st[2*pos]; pr=st[2*pos+1]; pos++;
+                if(pos>=n){ n=dec_read(&d,st,4096); pos=0; if(n<=0) break; } }
+            if(n<=0) break; }
+        dec_close(&d);
+    }
+    return 0;
+}
+static void music_stop(void){
+    music_live=0; an_quit=pb_quit=1;
+    if(an_run){ pthread_join(an_th,0); an_run=0; } if(pb_run){ pthread_join(pb_th,0); pb_run=0; }
+    song_w0=-1; ring_w=0;
+}
+static int music_start(void){                              /* -> listening; 0 if no song */
+    music_stop(); music_failed=0;
+    if(!pick_song()){ music_failed=1; return 0; }
+    an_quit=pb_quit=0; an_frames=0; an_end=0; beat_ver=0; memset(&BEAT,0,sizeof BEAT);
+    pthread_create(&an_th,0,an_thread,0); an_run=1;
+    fprintf(stderr,"[r3drum] my music: %s\n",song_path);
+    return 1;
+}
+/* the song's beat grid in mixer samples, around time T: beat length and the time of a beat near T */
+static int song_grid(int64_t T,int64_t*beat,int64_t*tk){
+    dm_beat_t b; pthread_mutex_lock(&beat_mu); b=BEAT; pthread_mutex_unlock(&beat_mu);
+    if(!b.ok || an_rate<=0 || song_w0<0) return 0;
+    int64_t pass_w0=song_w0+pass_frame;                    /* mixer sample where this pass began */
+    double per48=b.period_x100/100.0*DR_RATE/an_rate, ph48=(double)b.phase*DR_RATE/an_rate;
+    double k=floor(((double)(T-pass_w0)-ph48)/per48+0.5);
+    *beat=(int64_t)(per48+0.5); *tk=pass_w0+(int64_t)(ph48+k*per48); return 1;
+}
+
+static void listen_tick(float dt){
+    if(listen_msg_t>0){ listen_msg_t-=dt; if(listen_msg_t<=0){ listen_fallback=1; st=ST_CAMP; start_battle(); listen_fallback=0; } return; }
+    int ver=beat_ver; dm_beat_t b; pthread_mutex_lock(&beat_mu); b=BEAT; pthread_mutex_unlock(&beat_mu);
+    if(!ver && !an_end) return;
+    if(!b.ok){ fprintf(stderr,"[r3drum] no steady beat (conf %d): drums\n",b.confidence); music_stop(); listen_msg_t=2.5f; return; }
+    fprintf(stderr,"[r3drum] beat %d.%d BPM, conf %d\n",b.bpm_x10/10,b.bpm_x10%10,b.confidence);
+    ring_w=0; pass_frame=0; song_w0=now_sample()+DR_RATE*6/10;   /* the song starts in 0.6 s */
+    pb_quit=0; pthread_create(&pb_th,0,pb_thread,0); pb_run=1; music_live=1;
+    start_battle();                                       /* st is ST_LISTEN: no new listening */
+    int64_t bl,tk; if(song_grid(now_sample()+DR_RATE,&bl,&tk)){ while(tk<now_sample()+DR_RATE/2) tk+=bl;
+        rc.beat=bl; rc.t0=tk; G.beat_s=(float)bl/DR_RATE; }
+}
+static void draw_listen(void){
+    rect(0,TOP,SW,SH-TOP,0x120E0C);
+    textcs(SW/2,TOP+150,listen_msg_t>0?"NO STEADY BEAT":"LISTENING...",4,0xE8731C);
+    textc(SW/2,TOP+210,song_title,1,0xF4E4D0);
+    if(listen_msg_t>0) textc(SW/2,TOP+250,"MARCHING TO THE DRUMS INSTEAD",2,0xC0A080);
+    else { int w=an_rate>0? (int)((int64_t)an_frames*360/((int64_t)an_rate*20)) : 0; if(w>360) w=360;
+        rect(60,TOP+250,360,10,0x2A221A); rect(60,TOP+250,w,10,0xE8731C);
+        textc(SW/2,TOP+280,"FINDING THE BEAT OF YOUR SONG",1,0xC0A080); }
+}
+static void music_reanchor(void){                          /* lock the rhythm on the refined grid, keeping beat numbers */
+    int64_t bl,tk; if(!song_grid(now_sample(),&bl,&tk)) return;
+    int64_t bk=rc_nearest_beat(&rc,tk); rc.beat=bl; rc.t0=tk-bk*bl; G.beat_s=(float)bl/DR_RATE;
 }
 
 /* ======================================================================= world drawing */
@@ -619,6 +768,7 @@ static void draw_battle(void){
     if(banner_t>0 && !mv_banner_busy()){ int a=banner_t>2.4f?(int)((2.8f-banner_t)/0.4f*255):255; (void)a;
         textcs(SW/2,PF_Y+120,banner,4,0xFFE0A0); if(banner2) textcs(SW/2,PF_Y+160,banner2,2,0xF4E4D0); }
     if(G.time<10 || paused) legend(PF_Y+40);
+    if(music_live && G.time<12){ char b[80]; snprintf(b,sizeof b,"MUSIC: %s",song_title); textcs(SW/2,PF_Y+396,b,1,0xF4E4D0); }
     hud(); draw_pads();
     if(paused){ dim(0,TOP,SW,SH-TOP); legend(PF_Y+92); textcs(SW/2,PF_Y+260,"PAUSED",4,0xF4E4D0);
         textc(SW/2,PF_Y+310,"POWER: RESUME   HOLD POWER: CAMP",1,0xC0A080); }
@@ -732,6 +882,7 @@ static void drum(int d,int64_t t){
 static void battle_tick(float dt){
     if(paused) return;
     int64_t ns=now_sample();
+    { static int seen; if(music_live && beat_ver!=seen && rc.nseq==0 && rc_responding(&rc,ns,0)==CMD_NONE){ seen=beat_ver; music_reanchor(); } }
     rc_tick(&rc,ns-(int64_t)offset_ms*DR_RATE/1000);
     if(rc.ev_break||rc.ev_fever_off){ rc.ev_break=0; rc.ev_fever_off=0; bk_fever=0; }
     int64_t cb=(ns-rc.t0)>=0 ? (ns-rc.t0)/rc.beat : -1;
@@ -763,7 +914,8 @@ static void draw_camp(void){
     rect(0,TOP,SW,SH-TOP,0x120E0C);
     for(int y=TOP;y<TOP+70;y++){ uint16_t k=rgb(lerpc(0x3A1A10,0x120E0C,(float)(y-TOP)/70)); for(int x=0;x<SW;x++) cv[y][x]=k; }
     textcs(SW/2,TOP+10,"DRUMFOLK",5,0xE8731C);
-    textc(SW/2,TOP+52,"HOLD POWER TO LEAVE",1,0x8A6A4A);
+    rbox(120,TOP+48,240,20,10,music_opt?0x3A2A1A:0x1E1814); frame(120,TOP+48,240,20,1,music_opt?0xE8731C:0x4A3A2A);
+    textc(SW/2,TOP+54,music_opt?"BEAT: MY MUSIC":"BEAT: DRUMS",1,music_opt?0xFFE0A0:0xC0A080);
     for(int i=0;i<DG_NMISSION;i++){ int y=TOP+70+i*50; int locked=i>A.cleared, on=i==sel;
         rbox(12,y,456,44,10,on?0x3A2A1A:0x1E1814); if(on) frame(12,y,456,44,2,0xE8731C);
         char t[48]; snprintf(t,sizeof t,"%d. %s",i+1,DG_MISSION[i].name);
@@ -837,6 +989,7 @@ static void draw_result(void){
 }
 static void tap(int x,int y){
     if(st==ST_CAMP){
+        if(y>=TOP+40 && y<TOP+70 && x>=110 && x<370){ music_opt=!music_opt; save_game(); snd(S_TOK,0.7f,0); return; }
         for(int i=0;i<DG_NMISSION;i++){ int yy=TOP+70+i*50; if(y>=yy&&y<yy+44&&i<=A.cleared){ sel=i; snd(S_TOK,0.7f,0); return; } }
         int sy=TOP+462; for(int i=0;i<DG_MAXU;i++){ int xx=12+(i%2)*232, yy=sy+(i/2)*84;
             if(x>=xx&&x<xx+224&&y>=yy&&y<yy+78){ if(i>=A.nsquad){ i=A.nsquad++; A.squad[i]=(loadout_t){CL_LANCER,-1,0}; fix_loadout(&A.squad[i]); }
@@ -894,7 +1047,7 @@ static void poll_keys(void){
                 else if(st==ST_EDIT){ st=ST_CAMP; save_game(); } } } }
         else if(e.code==165 && e.value==1) drum(DR_DUM,ev_sample(&e)); }
     if(pwr_down && now_us()-pwr_t>=1200000){ pwr_down=0;
-        if(st==ST_BATTLE){ bk_on=0; end_battle(0); } else if(st==ST_CAMP) quit=1; else st=ST_CAMP; }
+        if(st==ST_BATTLE){ bk_on=0; end_battle(0); } else if(st==ST_CAMP) quit=1; else { if(st==ST_LISTEN) music_stop(); st=ST_CAMP; } }
     while(km_fd>=0 && read(km_fd,&e,sizeof e)==sizeof e){ if(e.type!=EV_KEY || e.value!=1) continue;
         if(e.code==163) drum(DR_KA,ev_sample(&e));
         else if(e.code==164) drum(DR_TOK,ev_sample(&e));
@@ -962,21 +1115,12 @@ int main(int argc,char**argv){
     ts_fd=open("/dev/input/event1",O_RDONLY|O_NONBLOCK); kp_fd=open("/dev/input/event0",O_RDONLY|O_NONBLOCK); km_fd=open("/dev/input/event2",O_RDONLY|O_NONBLOCK);
     if(ts_fd>=0) ioctl(ts_fd,EVIOCSCLOCKID,&clk); if(kp_fd>=0) ioctl(kp_fd,EVIOCSCLOCKID,&clk); if(km_fd>=0) ioctl(km_fd,EVIOCSCLOCKID,&clk);
     vol=vb_load();
-    /* lowest latency first: rhythm wants a short buffer; the codec driver decides what it takes */
-    bt_fd=bt_open();
-    static const int TRY[][2]={{256,4},{512,2},{512,3},{1024,2},{1024,4}};
-    for(unsigned i=0;i<sizeof TRY/sizeof TRY[0] && !pcm && bt_fd<0;i++){
-        struct pcm_config cfg; memset(&cfg,0,sizeof cfg);
-        cfg.channels=2; cfg.rate=DR_RATE; cfg.period_size=TRY[i][0]; cfg.period_count=TRY[i][1]; cfg.format=PCM_FORMAT_S16_LE;
-        cfg.start_threshold=TRY[i][0]; cfg.stop_threshold=TRY[i][0]*TRY[i][1]; cfg.avail_min=TRY[i][0];
-        pcm=pcm_open(0,0,PCM_OUT,&cfg);
-        if(pcm && !pcm_is_ready(pcm)){ fprintf(stderr,"[r3drum] %dx%d refused: %s\n",TRY[i][0],TRY[i][1],pcm_get_error(pcm)); pcm_close(pcm); pcm=NULL; }
-        else if(pcm){ PERIOD=TRY[i][0]; NPER=TRY[i][1]; fprintf(stderr,"[r3drum] audio %dx%d (%d ms)\n",PERIOD,NPER,PERIOD*NPER*1000/DR_RATE); } }
-    mx=mixer_open(0); dac_route(); hw_volume();
+    mx=mixer_open(0);
+    bt_fd=bt_open(); if(bt_fd<0) open_dac();
+
     anchor_us=now_us();
     pthread_t at; pthread_create(&at,NULL,audio_thread,NULL);
     /* no real-time priority: a misbehaving audio loop must never be able to starve the device */
-    if(pcm) snprintf(out_name,sizeof out_name,"HEADPHONES");
     fprintf(stderr,"[r3drum] start, sound %s, cleared %d\n",pcm||bt_fd>=0?out_name:"off",A.cleared);
     if(argc>2 && !strcmp(argv[1],"--battle")){ sel=atoi(argv[2]); if(sel<0||sel>=DG_NMISSION) sel=0; start_battle(); }   /* testing */
     int64_t last=now_us(); uint32_t vt=0;
@@ -984,14 +1128,16 @@ int main(int argc,char**argv){
         int64_t t0=now_us(); float dt=(float)(t0-last)/1e6f; if(dt>0.1f) dt=0.1f; last=t0;
         poll_touch(); poll_keys(); poll_pads();
         if(st==ST_BATTLE) battle_tick(dt);
-        if(st==ST_BATTLE) draw_battle(); else if(st==ST_CAMP) draw_camp(); else if(st==ST_EDIT) draw_edit(); else draw_result();
+        if(st==ST_LISTEN) listen_tick(dt);
+        if(st==ST_BATTLE) draw_battle(); else if(st==ST_CAMP) draw_camp(); else if(st==ST_EDIT) draw_edit();
+        else if(st==ST_LISTEN) draw_listen(); else draw_result();
         present();
         if(r3_tick_ms()<vb_until) vb_draw(fb,fbstride,0,vol);
         if(++vt%60==0) hw_volume();
         int64_t used=now_us()-t0, budget=1000000/40;              /* ~40 fps; input is timestamped */
         if(used<budget) usleep((useconds_t)(budget-used));
     }
-    save_game();
+    save_game(); music_stop();
     audio_run=0; pthread_join(at,NULL);
     if(pcm) pcm_close(pcm); if(mx) mixer_close(mx); bt_close();
     memset(cv,0,sizeof cv); present();
