@@ -1678,27 +1678,34 @@ static void run_doom(int i){
 #define GB_BIN "/usr/data/r3gb"
 static const char*GB_DIRS[]={"/usr/data/mnt/sd_0/Games/GameBoy","/usr/data/Games/GameBoy"};
 static char gb_roms[64][320]; static int gb_nroms;
-static void gb_scan(void){
-    gb_nroms=0;
-    for(int d=0;d<2;d++){ DIR*dp=opendir(GB_DIRS[d]); if(!dp) continue; struct dirent*e;
-        while((e=readdir(dp)) && gb_nroms<64){ const char*x=strrchr(e->d_name,'.');
-            if(e->d_name[0]=='.' || !x || strcasecmp(x,".gb")) continue;
-            /* same game in both places: one entry — the copy with a save, else the SD one */
-            int dup=-1; for(int k=0;k<gb_nroms;k++){ const char*b=strrchr(gb_roms[k],'/'); if(b&&!strcmp(b+1,e->d_name)) dup=k; }
-            char path[320]; snprintf(path,sizeof path,"%s/%s",GB_DIRS[d],e->d_name);
+/* ROMs with extension ext in dirs[0..1] (SD first), sorted by name. The same game in
+ * both places is listed once: the copy with a save, else the SD one. */
+static int rom_scan(const char*const*dirs,const char*ext,char(*roms)[320],int max){
+    int n=0;
+    for(int d=0;d<2;d++){ DIR*dp=opendir(dirs[d]); if(!dp) continue; struct dirent*e;
+        while((e=readdir(dp)) && n<max){ const char*x=strrchr(e->d_name,'.');
+            if(e->d_name[0]=='.' || !x || strcasecmp(x,ext)) continue;
+            int dup=-1; for(int k=0;k<n;k++){ const char*b=strrchr(roms[k],'/'); if(b&&!strcmp(b+1,e->d_name)) dup=k; }
+            char path[320]; snprintf(path,sizeof path,"%s/%s",dirs[d],e->d_name);
             if(dup>=0){ char sav[330]; snprintf(sav,sizeof sav,"%s",path); char*dt=strrchr(sav,'.'); if(dt) strcpy(dt,".sav");
-                struct stat st; if(stat(sav,&st)==0) snprintf(gb_roms[dup],320,"%s",path);
+                struct stat st; if(stat(sav,&st)==0) snprintf(roms[dup],320,"%s",path);
                 continue; }
-            snprintf(gb_roms[gb_nroms++],320,"%s",path); }
+            snprintf(roms[n++],320,"%s",path); }
         closedir(dp); }
-    for(int i=0;i<gb_nroms;i++) for(int j=i+1;j<gb_nroms;j++){ const char*a=strrchr(gb_roms[i],'/'),*b=strrchr(gb_roms[j],'/');
-        if(strcasecmp(a,b)>0){ char t[320]; memcpy(t,gb_roms[i],320); memcpy(gb_roms[i],gb_roms[j],320); memcpy(gb_roms[j],t,320); } }
+    for(int i=0;i<n;i++) for(int j=i+1;j<n;j++){ const char*a=strrchr(roms[i],'/'),*b=strrchr(roms[j],'/');
+        if(strcasecmp(a,b)>0){ char t[320]; memcpy(t,roms[i],320); memcpy(roms[i],roms[j],320); memcpy(roms[j],t,320); } }
+    return n;
 }
-/* "Legend of Zelda, The - Link's Awakening (U) (V1.2) [!].gb" -> "Legend of Zelda, The - Link's Awakening" */
+static void gb_scan(void){ gb_nroms=rom_scan(GB_DIRS,".gb",gb_roms,64); }
+/* "Legend of Zelda, The - Link's Awakening (U) (V1.2) [!].gb" -> "Legend of Zelda, The - Link's Awakening"
+ * "1840 - Metal Slug Advance (E)(TRSI).gba" -> "Metal Slug Advance" (scene release number dropped) */
 static void gb_title(const char*path,char*out,int cap){
     const char*b=strrchr(path,'/'); snprintf(out,cap,"%s",b?b+1:path);
-    char*cut=out; for(char*p=out;*p;p++){ if(*p=='('||*p=='['||*p=='.'){ cut=p; break; } cut=p+1; }
-    *cut=0; while(cut>out && cut[-1]==' ') *--cut=0; fold(out); }
+    char*x=strrchr(out,'.'); if(x) *x=0;                       /* extension only: "WarioWare, Inc." */
+    char*cut=strpbrk(out,"(["); if(cut) *cut=0;
+    { char*p=out; while(*p>='0'&&*p<='9') p++;
+      if(p>out && p-out<=4 && !strncmp(p," - ",3)) memmove(out,p+3,strlen(p+3)+1); }
+    size_t n=strlen(out); while(n && out[n-1]==' ') out[--n]=0; fold(out); }
 static void run_gb(int i){
     if(i<0||i>=gb_nroms) return;
     if(audio_is_playing()){ g_resume_ms=audio_pos_ms(); save_resume(); audio_stop();   /* free the DAC */
@@ -1732,6 +1739,52 @@ static void show_gb_list(void){
     lv_obj_set_style_text_color(n,lv_color_hex(C_DIM),0); lv_obj_set_style_pad_all(n,12,0);
     g_scr=SCR_SETTINGS; load_screen(scr);
 }
+/* ---- Game Boy Advance: r3gba (gpSP) on the player's own ROMs ----
+ * <rom>.sav = cartridge save, <rom>.ss = snapshot taken on quit (Resume / Restart). */
+#define GBA_BIN "/usr/data/r3gba"
+#define GBA_CHOICE_BASE (-1000L)         /* ask_resume id for ROM i: GBA_CHOICE_BASE - i */
+static const char*GBA_DIRS[]={"/usr/data/mnt/sd_0/Games/GBA","/usr/data/Games/GBA"};
+static char gba_roms[128][320]; static int gba_nroms;
+static void show_gba_list(void);
+static void gba_scan(void){ gba_nroms=rom_scan(GBA_DIRS,".gba",gba_roms,128); }
+static int gba_side(int i,const char*ext){      /* does <rom>.ext exist */
+    char p[340]; snprintf(p,sizeof p,"%s",gba_roms[i]); char*d=strrchr(p,'.'); if(d) strcpy(d,ext);
+    struct stat st; return stat(p,&st)==0; }
+static void run_gba(int i,int fresh){
+    if(i<0||i>=gba_nroms) return;
+    if(audio_is_playing()){ g_resume_ms=audio_pos_ms(); save_resume(); audio_stop();   /* free the DAC */
+        if(np_play) lv_label_set_text(np_play,LV_SYMBOL_PLAY); }
+    char*argv[]={"r3gba",gba_roms[i],fresh?"--fresh":NULL,NULL}; char*envp[]={"PATH=/usr/bin:/bin",0};
+    posix_spawn_file_actions_t fa; posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa,1,"/tmp/r3gba.log",O_WRONLY|O_CREAT|O_TRUNC,0644);
+    posix_spawn_file_actions_adddup2(&fa,1,2);
+    pid_t pid; int rc=posix_spawn(&pid,GBA_BIN,&fa,0,argv,envp);
+    posix_spawn_file_actions_destroy(&fa);
+    if(rc!=0){ DBG("r3gba spawn failed %d\n",rc); return; }
+    waitpid(pid,0,0);
+    { FILE*vf=fopen(VOL_FILE,"r"); int v; if(vf){ if(fscanf(vf,"%d",&v)==1) audio_set_volume(v); fclose(vf); } }   /* volume set in the game */
+    drain_input(); bl_set(p_bright); g_last_input=r3_tick_ms();
+    show_gba_list();
+}
+static void ask_resume(long id,const char*name,const char*resume_label);
+static void gba_go_cb(lv_event_t*e){ long i=(long)lv_event_get_user_data(e); char t[160];
+    if(!gba_side((int)i,".ss")){ run_gba((int)i,0); return; }
+    gb_title(gba_roms[i],t,sizeof t); ask_resume(GBA_CHOICE_BASE-i,t,"Resume"); }
+static void gba_back_cb(lv_event_t*e){ (void)e; show_games(); }
+static void show_gba_list(void){
+    lv_obj_t*scr,*l=page_new("Game Boy Advance",gba_back_cb,&scr); gba_scan();
+    lv_obj_t*pad=lv_obj_create(l); lv_obj_set_size(pad,10,8);
+    lv_obj_set_style_bg_opa(pad,LV_OPA_TRANSP,0); lv_obj_set_style_border_width(pad,0,0);
+    for(long i=0;i<gba_nroms;i++){ char t[160]; gb_title(gba_roms[i],t,sizeof t);
+        const char*sub = gba_side((int)i,".ss") ? "resume where you left" : gba_side((int)i,".sav") ? "saved game" : NULL;
+        lv_obj_t*r=set_row(l,LV_SYMBOL_PLAY,t,sub,0);
+        lv_obj_add_event_cb(r,gba_go_cb,LV_EVENT_CLICKED,(void*)i); }
+    lv_obj_t*n=lv_label_create(l);
+    lv_label_set_text(n,gba_nroms?"Hold power to save and quit: the game\nresumes there next time. Power: pause.\nController: play in landscape."
+                                :"Copy your .gba ROMs to Games/GBA on the\nSD card (gba_bios.bin there too, optional).");
+    lv_obj_set_style_text_color(n,lv_color_hex(C_DIM),0); lv_obj_set_style_pad_all(n,12,0);
+    g_scr=SCR_SETTINGS; load_screen(scr);
+}
 /* built-in games: -1 Blockfall, -2 Brickstorm, -5 Coil. A saved unfinished game offers Resume / New. */
 static void start_builtin(long id,int resume){
     null_live();
@@ -1740,7 +1793,9 @@ static void start_builtin(long id,int resume){
 static lv_obj_t*g_choice; static long g_choice_id;
 static void choice_close(void){ if(g_choice){ lv_obj_del_async(g_choice); g_choice=NULL; } }
 static void choice_cb(lv_event_t*e){ long act=(long)lv_event_get_user_data(e); long id=g_choice_id;
-    choice_close(); if(act>=0) start_builtin(id,act==1); }
+    choice_close(); if(act<0) return;
+    if(id<=GBA_CHOICE_BASE){ run_gba((int)(GBA_CHOICE_BASE-id),act==0); return; }   /* 1 resume, 0 restart */
+    start_builtin(id,act==1); }
 static lv_obj_t* choice_btn(lv_obj_t*p,const char*txt,int primary,long act){
     lv_obj_t*b=lv_btn_create(p); lv_obj_set_size(b,LV_PCT(100),64);
     lv_obj_set_style_radius(b,R_BTN,0); lv_obj_set_style_shadow_width(b,0,0);
@@ -1749,7 +1804,7 @@ static lv_obj_t* choice_btn(lv_obj_t*p,const char*txt,int primary,long act){
     lv_obj_t*l=lv_label_create(b); lv_label_set_text(l,txt); lv_obj_center(l);
     lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0);
     lv_obj_set_style_text_color(l,lv_color_hex(primary?C_BG:C_FG),0); return b; }
-static void ask_resume(long id,const char*name,int score){
+static void ask_resume(long id,const char*name,const char*resume_label){
     g_choice_id=id;
     g_choice=lv_obj_create(lv_scr_act()); lv_obj_set_size(g_choice,480,720); lv_obj_set_pos(g_choice,0,0);
     lv_obj_set_style_bg_color(g_choice,lv_color_hex(0x000000),0); lv_obj_set_style_bg_opa(g_choice,LV_OPA_70,0);
@@ -1762,15 +1817,18 @@ static void ask_resume(long id,const char*name,int score){
     lv_obj_set_style_pad_all(p,16,0); lv_obj_set_style_pad_row(p,12,0);
     lv_obj_set_flex_flow(p,LV_FLEX_FLOW_COLUMN); lv_obj_clear_flag(p,LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t*t=lv_label_create(p); lv_label_set_text(t,name);
+    lv_label_set_long_mode(t,LV_LABEL_LONG_WRAP); lv_obj_set_width(t,LV_PCT(100));   /* long game names */
     lv_obj_set_style_text_color(t,lv_color_hex(C_ACCENT),0); lv_obj_set_style_text_font(t,&lv_font_montserrat_20,0);
-    char b[48]; snprintf(b,sizeof b,"Resume  (score %d)",score);
-    choice_btn(p,b,1,1); choice_btn(p,"New game",0,0); }
+    choice_btn(p,resume_label,1,1); choice_btn(p,id<=GBA_CHOICE_BASE?"Restart (keeps game saves)":"New game",0,0); }
+static void ask_resume_score(long id,const char*name,int score){
+    char b[48]; snprintf(b,sizeof b,"Resume  (score %d)",score); ask_resume(id,name,b); }
 static void games_go_cb(lv_event_t*e){ long i=(long)lv_event_get_user_data(e); int sc=0;
-    if(i==-1){ if(game_has_save(&sc)) ask_resume(i,"BLOCKFALL",sc); else start_builtin(i,0); }
+    if(i==-1){ if(game_has_save(&sc)) ask_resume_score(i,"BLOCKFALL",sc); else start_builtin(i,0); }
     else if(i==-3){ null_live(); lv_obj_t*ps=pet_create(show_games); g_scr=SCR_GAME; load_screen(ps); }
     else if(i==-4) show_gb_list();
-    else if(i==-2){ if(brick_has_save(&sc)) ask_resume(i,"BRICKSTORM",sc); else start_builtin(i,0); }
-    else if(i==-5){ if(coil_has_save(&sc)) ask_resume(i,"COIL",sc); else start_builtin(i,0); }
+    else if(i==-6) show_gba_list();
+    else if(i==-2){ if(brick_has_save(&sc)) ask_resume_score(i,"BRICKSTORM",sc); else start_builtin(i,0); }
+    else if(i==-5){ if(coil_has_save(&sc)) ask_resume_score(i,"COIL",sc); else start_builtin(i,0); }
     else run_doom((int)i); }
 /* ---- high scores: best in each Games row + a page with every top 5 ---- */
 static const struct { const char*name; const char*file; } SCORES[]={
@@ -1843,7 +1901,10 @@ static void show_games(void){
     { struct stat gst; gb_scan(); char sub[48];
       if(stat(GB_BIN,&gst)==0){ snprintf(sub,sizeof sub,gb_nroms?"%d games":"copy your ROMs to Games/GameBoy",gb_nroms);
         r=set_row(l,LV_SYMBOL_IMAGE,"Game Boy",sub,0);
-        lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-4L); } }
+        lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-4L); }
+      if(stat(GBA_BIN,&gst)==0){ gba_scan(); snprintf(sub,sizeof sub,gba_nroms?"%d games":"copy your ROMs to Games/GBA",gba_nroms);
+        r=set_row(l,LV_SYMBOL_IMAGE,"Game Boy Advance",sub,0);
+        lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-6L); } }
     struct stat st; int have_bin = stat(DOOM_BIN,&st)==0, any=0;
     for(long i=0;i<NDOOM;i++){
         if(!file_ok(DOOM_DIR,DOOMS[i].iwad) || (DOOMS[i].pwad && !file_ok(DOOM_DIR,DOOMS[i].pwad))) continue;
