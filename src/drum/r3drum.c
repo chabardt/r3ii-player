@@ -26,6 +26,9 @@
 #include <time.h>
 #include <signal.h>
 #include <pthread.h>
+#include <errno.h>
+#include <spawn.h>
+#include <sys/wait.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <linux/fb.h>
@@ -52,8 +55,10 @@ static void rect(int x,int y,int w,int h,uint32_t c){ uint16_t k=rgb(c);
     for(int j=y;j<y+h;j++) for(int i=x;i<x+w;i++) cv[j][i]=k; }
 static void dim(int x,int y,int w,int h){ if(x<0){ w+=x; x=0; } if(y<0){ h+=y; y=0; } if(x+w>SW) w=SW-x; if(y+h>SH) h=SH-y;
     for(int j=y;j<y+h;j++) for(int i=x;i<x+w;i++) cv[j][i]=(uint16_t)((cv[j][i]>>1)&0x7BEF); }
+static int isqrt(int64_t v){ if(v<=0) return 0; int64_t r=(int64_t)1<<30; while(r>v) r>>=2; int64_t x=0;   /* no FPU here */
+    while(r){ if(v>=x+r){ v-=x+r; x=(x>>1)+r; } else x>>=1; r>>=2; } return (int)x; }
 static void ellipse(int cx,int cy,int rx,int ry,uint32_t c){ if(rx<1)rx=1; if(ry<1)ry=1; uint16_t k=rgb(c);
-    for(int y=-ry;y<=ry;y++){ float f=1-(float)(y*y)/(float)(ry*ry); if(f<0) continue; int w=(int)(rx*sqrtf(f)+0.5f);
+    for(int y=-ry;y<=ry;y++){ int w=isqrt((int64_t)rx*rx*((int64_t)ry*ry-(int64_t)y*y)/((int64_t)ry*ry));
         int yy=cy+y; if((unsigned)yy>=SH) continue; int x0=cx-w<0?0:cx-w, x1=cx+w>=SW?SW-1:cx+w;
         for(int x=x0;x<=x1;x++) cv[yy][x]=k; } }
 static void circle(int cx,int cy,int r,uint32_t c){ ellipse(cx,cy,r,r,c); }
@@ -66,10 +71,11 @@ static void line(int x0,int y0,int x1,int y1,int w,uint32_t c){ uint16_t k=rgb(c
 static void tri(int x0,int y0,int x1,int y1,int x2,int y2,uint32_t c){ uint16_t k=rgb(c);
     int miny=y0<y1?(y0<y2?y0:y2):(y1<y2?y1:y2), maxy=y0>y1?(y0>y2?y0:y2):(y1>y2?y1:y2);
     if(miny<0)miny=0; if(maxy>=SH)maxy=SH-1;
-    for(int y=miny;y<=maxy;y++){ float xs[3]; int n=0; int X[3]={x0,x1,x2},Y[3]={y0,y1,y2};
-        for(int e=0;e<3;e++){ int a=e,b=(e+1)%3; if((Y[a]<=y&&Y[b]>y)||(Y[b]<=y&&Y[a]>y)) xs[n++]=X[a]+(float)(y-Y[a])*(X[b]-X[a])/(float)(Y[b]-Y[a]); }
-        if(n<2) continue; float l=xs[0]<xs[1]?xs[0]:xs[1], r=xs[0]<xs[1]?xs[1]:xs[0];
-        for(int x=(int)l;x<=(int)r;x++) px(x,y,k); } }
+    int X[3]={x0,x1,x2},Y[3]={y0,y1,y2};
+    for(int y=miny;y<=maxy;y++){ int xs[3]; int n=0;
+        for(int e=0;e<3;e++){ int a=e,b=(e+1)%3; if((Y[a]<=y&&Y[b]>y)||(Y[b]<=y&&Y[a]>y)) xs[n++]=X[a]+(y-Y[a])*(X[b]-X[a])/(Y[b]-Y[a]); }
+        if(n<2) continue; int l=xs[0]<xs[1]?xs[0]:xs[1], r=xs[0]<xs[1]?xs[1]:xs[0]; if(l<0) l=0; if(r>=SW) r=SW-1;
+        for(int x=l;x<=r;x++) cv[y][x]=k; } }
 static void frame(int x,int y,int w,int h,int t,uint32_t c){ rect(x,y,w,t,c); rect(x,y+h-t,w,t,c); rect(x,y,t,h,c); rect(x+w-t,y,t,h,c); }
 static void rbox(int x,int y,int w,int h,int r,uint32_t c){
     rect(x+r,y,w-2*r,h,c); rect(x,y+r,r,h-2*r,c); rect(x+w-r,y+r,r,h-2*r,c);
@@ -100,7 +106,11 @@ static void present(void){ for(int y=TOP;y<SH;y++) memcpy(fb+y*fbstride,cv[y],SW
 enum { S_DUM, S_KA, S_TOK, S_CHI, S_KICK, S_HAT, S_CLAP, S_BASS, S_CHANT, S_HIT, S_KILL, S_HURT, S_WARN,
        S_ROAR, S_QUAKE, S_HEAL, S_TONE, S_MISS };
 typedef struct { int type; int64_t start; float vol, pitch; } sev_t;
-typedef struct { int on, type; int64_t start; int n; float vol, pitch, ph, ph2, lp; uint32_t ns; } voice_t;
+/* The X1600 has no FPU (the kernel emulates every float instruction): the synth is fixed-point.
+ * Phases are 32-bit accumulators into a 1024-entry sine table, envelopes Q15 with a per-sample
+ * multiplier; floats are only used once per note to set coefficients. */
+typedef struct { int on, type; int64_t start; int n, att, dur;
+                 uint32_t ph, ph2, step, sweep; int32_t env, edec, senv, sdec, cenv, cdec, vol, lp, lp2; uint32_t ns; } voice_t;
 #define NV 32
 static voice_t V[NV];
 static sev_t Q[512]; static volatile unsigned qh, qt;          /* main thread -> mixer */
@@ -113,39 +123,75 @@ static void snd_at(int type,int64_t start,float v,float pitch){ unsigned h=qh; i
 static int64_t now_sample(void){ pthread_mutex_lock(&clk_mu);
     int64_t s=anchor_played+(now_us()-anchor_us)*DR_RATE/1000000, w=written; pthread_mutex_unlock(&clk_mu); return s<w?s:w; }
 static void snd(int type,float v,float pitch){ snd_at(type,0,v,pitch); }   /* 0 = as soon as possible */
-static void start_voice(int type,int64_t at,float v,float p){
+static int16_t SINT[1024];
+static void synth_init(void){ for(int i=0;i<1024;i++) SINT[i]=(int16_t)(32767*sinf(i*6.2831853f/1024)); }
+static uint32_t hz(float f){ return (uint32_t)(f*(4294967296.0f/DR_RATE)); }
+static int32_t dec(float k){ return (int32_t)(32768.0f*expf(-k/DR_RATE)); }            /* per-sample decay, Q15 */
+static inline int32_t SINP(uint32_t ph){ return SINT[ph>>22]; }
+static inline int32_t noise(voice_t*v){ v->ns=v->ns*1664525u+1013904223u; return (int32_t)(v->ns>>16)-32768; }
+static void start_voice(int type,int64_t at,float vol,float p){
     int k=0; for(int i=0;i<NV;i++){ if(!V[i].on){ k=i; break; } if(V[i].start<V[k].start) k=i; }
-    V[k]=(voice_t){1,type,at,0,v,p,0,0,0,0x1234567u+(uint32_t)at}; }
-static float nrand(voice_t*v){ v->ns=v->ns*1664525u+1013904223u; return (float)(int32_t)v->ns/2147483648.0f; }
-#define TAU 6.2831853f
-static float voice_sample(voice_t*v){
-    float t=v->n/(float)DR_RATE, s=0, a=0, f;
-    switch(v->type){
-    case S_DUM:  f=58+95*expf(-t*18); a=expf(-t*8);  v->ph+=TAU*f/DR_RATE; s=sinf(v->ph)+0.35f*nrand(v)*expf(-t*150); break;
-    case S_KA:   f=200+170*expf(-t*28); a=expf(-t*13); v->ph+=TAU*f/DR_RATE; s=sinf(v->ph)*0.9f+0.4f*nrand(v)*expf(-t*200); break;
-    case S_TOK:  f=880; a=expf(-t*42); v->ph+=TAU*f/DR_RATE; s=sinf(v->ph)+0.5f*sinf(v->ph*2.7f); break;
-    case S_CHI:  { float n=nrand(v); s=n-v->lp; v->lp=n; a=expf(-t*12)*0.7f; } break;
-    case S_KICK: f=44+70*expf(-t*30); a=expf(-t*11)*0.8f; v->ph+=TAU*f/DR_RATE; s=sinf(v->ph); break;
-    case S_HAT:  { float n=nrand(v); s=n-v->lp; v->lp=n; a=expf(-t*55)*0.22f; } break;
-    case S_CLAP: { float n=nrand(v); v->lp+=0.4f*(n-v->lp); s=n-v->lp; a=expf(-t*22)*0.45f*(t<0.01f||t>0.02f?1:0.4f); } break;
-    case S_BASS: f=v->pitch; v->ph+=f/DR_RATE; { float x=v->ph-floorf(v->ph); s=4*fabsf(x-0.5f)-1; } a=(t<0.005f?t/0.005f:expf(-(t-0.005f)*4))*0.55f; if(t>0.42f) a*=expf(-(t-0.42f)*60); break;
-    case S_CHANT:f=v->pitch*(1-0.18f*t); v->ph+=TAU*f/DR_RATE; s=sinf(v->ph)+0.45f*sinf(3*v->ph)+0.2f*sinf(5*v->ph);
-                 a=(t<0.012f?t/0.012f:expf(-(t-0.012f)*11))*0.5f; break;
-    case S_HIT:  { float n=nrand(v); v->lp+=0.15f*(n-v->lp); s=v->lp*3; a=expf(-t*30)*0.8f; } break;
-    case S_KILL: f=620*expf(-t*5)+120; v->ph+=TAU*f/DR_RATE; s=sinf(v->ph); a=expf(-t*6)*0.45f; break;
-    case S_HURT: f=95; v->ph+=f/DR_RATE; s=(v->ph-floorf(v->ph))<0.5f?0.6f:-0.6f; a=expf(-t*12)*0.5f; break;
-    case S_WARN: f=440+440*fmodf(t*3,1); v->ph+=TAU*f/DR_RATE; s=sinf(v->ph); a=(t<0.6f?0.35f:0)*(0.6f+0.4f*sinf(t*40)); break;
-    case S_ROAR: { float n=nrand(v); v->lp+=0.05f*(n-v->lp); v->ph+=60.0f/DR_RATE; float saw=2*(v->ph-floorf(v->ph))-1;
-                 s=v->lp*4+saw*0.5f; a=(t<0.15f?t/0.15f:expf(-(t-0.15f)*2.2f))*0.9f; } break;
-    case S_QUAKE:{ float n=nrand(v); v->lp+=0.02f*(n-v->lp); s=v->lp*9; a=expf(-t*2.8f); } break;
-    case S_HEAL: f=t<0.08f?660:t<0.16f?880:1100; v->ph+=TAU*f/DR_RATE; s=sinf(v->ph); a=expf(-t*5)*0.3f; break;
-    case S_TONE: f=v->pitch; v->ph+=TAU*f/DR_RATE; s=sinf(v->ph)+0.3f*sinf(2*v->ph); a=(t<0.01f?t/0.01f:expf(-(t-0.01f)*3.5f))*0.4f; break;
-    case S_MISS: f=180*expf(-t*4); v->ph+=f/DR_RATE; s=(v->ph-floorf(v->ph))*2-1; a=expf(-t*14)*0.35f; break;
+    voice_t*v=&V[k]; memset(v,0,sizeof *v);
+    v->on=1; v->type=type; v->start=at; v->env=32767; v->senv=32767; v->cenv=32767; v->ns=0x1234567u+(uint32_t)at;
+    float vv=vol, ek=10, sk=0, ck=0;
+    switch(type){
+    case S_DUM:  v->step=hz(58);  v->sweep=hz(95);  sk=18; ek=8;  ck=150; break;
+    case S_KA:   v->step=hz(200); v->sweep=hz(170); sk=28; ek=13; ck=200; vv*=0.9f; break;
+    case S_TOK:  v->step=hz(880); ek=42; break;
+    case S_CHI:  ek=12; vv*=0.7f; break;
+    case S_KICK: v->step=hz(44);  v->sweep=hz(70);  sk=30; ek=11; vv*=0.8f; break;
+    case S_HAT:  ek=55; vv*=0.22f; break;
+    case S_CLAP: ek=22; vv*=0.45f; break;
+    case S_BASS: v->step=hz(p); ek=4; v->att=DR_RATE/200; v->dur=DR_RATE*42/100; vv*=0.55f; break;
+    case S_CHANT:v->step=hz(p); sk=3; ek=11; v->att=DR_RATE*12/1000; vv*=0.5f; break;
+    case S_HIT:  ek=30; vv*=0.8f; break;
+    case S_KILL: v->step=hz(120); v->sweep=hz(620); sk=5; ek=6; vv*=0.45f; break;
+    case S_HURT: v->step=hz(95); ek=12; vv*=0.5f; break;
+    case S_WARN: v->step=hz(440); ek=0; v->dur=DR_RATE*6/10; vv*=0.35f; break;
+    case S_ROAR: v->step=hz(60); ek=2.2f; v->att=DR_RATE*15/100; vv*=0.9f; break;
+    case S_QUAKE:ek=2.8f; break;
+    case S_HEAL: ek=5; vv*=0.3f; break;
+    case S_TONE: v->step=hz(p); ek=3.5f; v->att=DR_RATE/100; vv*=0.4f; break;
+    case S_MISS: v->step=hz(30); v->sweep=hz(150); sk=4; ek=14; vv*=0.35f; break;
     }
-    v->n++; if(t>2.5f || (t>0.05f && a<0.0005f)) v->on=0;
-    return s*a*v->vol;
+    v->edec=ek>0?dec(ek):32768; v->sdec=sk>0?dec(sk):32768; v->cdec=ck>0?dec(ck):0;
+    v->vol=(int32_t)(vv*32767);
+}
+/* one sample of a voice, Q15-ish int; advances its state */
+static int32_t voice_sample(voice_t*v){
+    int32_t s=0; uint32_t st;
+    switch(v->type){
+    case S_DUM: case S_KA: case S_KICK:
+        st=v->step+(uint32_t)(((int64_t)v->sweep*v->senv)>>15); v->ph+=st; s=SINP(v->ph);
+        if(v->cdec) s+=(int32_t)(((int64_t)noise(v)*v->cenv)>>16);
+        break;
+    case S_TOK:  v->ph+=v->step; v->ph2+=v->step/10*27; s=(SINP(v->ph)*2+SINP(v->ph2))/3; break;
+    case S_CHI: case S_HAT: { int32_t n=noise(v); s=n-v->lp; v->lp=n; s/=2; } break;
+    case S_CLAP: { int32_t n=noise(v); v->lp+=(n-v->lp)*2/5; s=n-v->lp; if(v->n>DR_RATE/100 && v->n<DR_RATE/50) s=s*2/5; } break;
+    case S_BASS: { v->ph+=v->step; int32_t x=(int32_t)(v->ph>>16)-32768; s=(x<0?-x:x)*2-32768; } break;
+    case S_CHANT: st=(uint32_t)(((int64_t)v->step*(26870+(((int64_t)5898*v->senv)>>15)))>>15); v->ph+=st;
+        s=(SINP(v->ph)*10+SINP(v->ph*3)*5+SINP(v->ph*5)*2)/17; break;
+    case S_HIT:  { int32_t n=noise(v); v->lp+=(n-v->lp)*3/20; s=v->lp*2; } break;
+    case S_KILL: case S_MISS:
+        st=v->step+(uint32_t)(((int64_t)v->sweep*v->senv)>>15); v->ph+=st;
+        s = v->type==S_KILL ? SINP(v->ph) : (int32_t)(v->ph>>16)-32768; break;
+    case S_HURT: v->ph+=v->step; s=(v->ph>>31)?-20000:20000; break;
+    case S_WARN: { int frac=(int)((int64_t)(v->n*3)%DR_RATE*1024/DR_RATE); v->ph+=v->step+(uint32_t)(((uint64_t)v->step*frac)>>10); s=SINP(v->ph); } break;
+    case S_ROAR: { int32_t n=noise(v); v->lp+=(n-v->lp)/20; v->ph+=v->step; s=v->lp*3+((int32_t)(v->ph>>16)-32768)/2; } break;
+    case S_QUAKE:{ int32_t n=noise(v); v->lp+=(n-v->lp)/50; s=v->lp*7; } break;
+    case S_HEAL: { uint32_t f= v->n<DR_RATE*8/100?hz(660): v->n<DR_RATE*16/100?hz(880):hz(1100); v->ph+=f; s=SINP(v->ph); } break;
+    case S_TONE: v->ph+=v->step; v->ph2+=v->step*2; s=(SINP(v->ph)*10+SINP(v->ph2)*3)/13; break;
+    }
+    int32_t a=v->env; if(v->att && v->n<v->att) a=(int32_t)((int64_t)a*v->n/v->att);
+    s=(int32_t)(((int64_t)s*a)>>15);
+    if(!v->att || v->n>=v->att) v->env=(int32_t)(((int64_t)v->env*v->edec)>>15);
+    v->senv=(int32_t)(((int64_t)v->senv*v->sdec)>>15); if(v->cdec) v->cenv=(int32_t)(((int64_t)v->cenv*v->cdec)>>15);
+    v->n++;
+    if((v->dur && v->n>=v->dur) || v->n>DR_RATE*5/2 || (v->n>DR_RATE/20 && v->env<8)) v->on=0;
+    return (int32_t)(((int64_t)s*v->vol)>>15);
 }
 static const float BASSLINE[8]={55,55,82.4f,73.4f,55,65.4f,73.4f,82.4f};
+static volatile int32_t soft_gain=32768;   /* Bluetooth: software volume, like r3player (0.25 dB a step) */
 static void mix_block(int16_t*out,int n){
     int64_t w0=written;
     while(qt!=qh){ sev_t e=Q[qt&511]; start_voice(e.type,e.start?e.start:w0,e.vol,e.pitch); __sync_synchronize(); qt++; }
@@ -156,25 +202,63 @@ static void mix_block(int16_t*out,int n){
             if(b%2==0){ start_voice(S_KICK,at,beatno%4==0?1.0f:0.75f,0);
                 if(bk_fever){ start_voice(S_BASS,at,1,BASSLINE[beatno%8]); if(beatno%2==1) start_voice(S_CLAP,at,1,0); } }
             else start_voice(S_HAT,at,bk_fever?1.3f:1,0); } }
-    for(int i=0;i<n;i++){ float l=0; int64_t s=w0+i;
-        for(int k=0;k<NV;k++){ voice_t*v=&V[k]; if(!v->on || v->start>s) continue; l+=voice_sample(v); }
-        float g=l*0.42f; if(g>1)g=1; if(g<-1)g=-1; int16_t q=(int16_t)(g*30000); out[2*i]=q; out[2*i+1]=q; }
+    int act[NV], na=0; for(int k=0;k<NV;k++) if(V[k].on) act[na++]=k;
+    for(int i=0;i<n;i++){ int32_t l=0; int64_t s=w0+i;
+        for(int j=0;j<na;j++){ voice_t*v=&V[act[j]]; if(!v->on || v->start>s) continue; l+=voice_sample(v); }
+        l=l*13/32; if(soft_gain<32768) l=(int32_t)(((int64_t)l*soft_gain)>>15);
+        if(l>30000) l=30000; if(l<-30000) l=-30000; out[2*i]=out[2*i+1]=(int16_t)l; }
 }
-#define PERIOD 256
-#define NPER 3
+static int PERIOD=256, NPER=3;          /* the smallest the DAC driver accepts (see main) */
+/* Output follows r3player: the wired DAC, or the Bluetooth device it uses (aplay -D r3bt through a
+ * small pipe, like audio.c). A DAC that takes nothing for 0.6 s (it stops clocking while a BT
+ * output is active) is dropped: the game then runs on the clock alone instead of hanging. */
+static int bt_fd=-1, bt_lat; static pid_t bt_pid=-1; static char out_name[48]="";
+#define BT_CONF "/tmp/r3bt_alsa.conf"
+static int bt_open(void){
+    char mac[24]=""; FILE*f=fopen("/usr/data/r3_bt","r"); char l[64];
+    if(f){ while(fgets(l,sizeof l,f)) if(!strncmp(l,"out=",4)){ snprintf(mac,sizeof mac,"%s",l+4); mac[strcspn(mac,"\r\n")]=0; } fclose(f); }
+    if(!mac[0] || access(BT_CONF,R_OK)) return -1;
+    int fds[2]; if(pipe(fds)) return -1;
+    fcntl(fds[1],1031 /*F_SETPIPE_SZ*/,4096);                    /* ~21 ms of pipe, not 340 */
+    char*argv[]={"aplay","-q","-D","r3bt","-t","raw","-f","S16_LE","-r","48000","-c","2","--buffer-time=100000",0};
+    char*envp[]={"ALSA_CONFIG_PATH=" BT_CONF,"PATH=/usr/bin:/bin:/usr/sbin:/sbin",0};
+    posix_spawn_file_actions_t fa; posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_adddup2(&fa,fds[0],0); posix_spawn_file_actions_addclose(&fa,fds[1]);
+    posix_spawn_file_actions_addopen(&fa,1,"/tmp/r3drum_aplay.log",O_WRONLY|O_CREAT|O_TRUNC,0644);
+    posix_spawn_file_actions_adddup2(&fa,1,2);
+    int e=posix_spawn(&bt_pid,"/usr/bin/aplay",&fa,0,argv,envp);
+    posix_spawn_file_actions_destroy(&fa); close(fds[0]);
+    if(e){ close(fds[1]); bt_pid=-1; return -1; }
+    bt_lat=DR_RATE*230/1000;                                       /* pipe + aplay + A2DP, estimated */
+    snprintf(out_name,sizeof out_name,"BLUETOOTH %s",mac); fprintf(stderr,"[r3drum] audio -> %s (aplay %d)\n",out_name,(int)bt_pid);
+    return fds[1];
+}
+static void bt_close(void){ if(bt_fd>=0) close(bt_fd); bt_fd=-1; if(bt_pid>0){ kill(bt_pid,SIGTERM); waitpid(bt_pid,0,0); } bt_pid=-1; }
 static void*audio_thread(void*arg){ (void)arg;
-    static int16_t buf[PERIOD*2];
+    static int16_t buf[1024*2]; int64_t stuck_since=0;
     while(audio_run){
         mix_block(buf,PERIOD);
-        if(pcm){ if(pcm_write(pcm,buf,PERIOD*4)) pcm_prepare(pcm); }
+        int buffered=0;
+        if(bt_fd>=0){ const char*q=(const char*)buf; size_t left=(size_t)PERIOD*4;
+            while(left){ ssize_t w=write(bt_fd,q,left); if(w<0){ if(errno==EINTR) continue; fprintf(stderr,"[r3drum] bluetooth gone\n"); bt_close(); break; } q+=w; left-=(size_t)w; }
+            buffered=bt_lat; }
+        else if(pcm){
+            int r=pcm_wait(pcm,100);                                     /* never block forever */
+            if(r<=0){ if(!stuck_since) stuck_since=now_us();
+                if(now_us()-stuck_since>600000){ fprintf(stderr,"[r3drum] DAC not consuming: sound off\n"); pcm_close(pcm); pcm=NULL; }
+                continue; }
+            stuck_since=0;
+            if(pcm_write(pcm,buf,PERIOD*4)) pcm_prepare(pcm);
+            unsigned avail=0; struct timespec ts;
+            if(pcm_get_htimestamp(pcm,&avail,&ts)==0){ buffered=PERIOD*NPER-(int)avail; if(buffered<0) buffered=0; } }
         else usleep(PERIOD*1000000/DR_RATE);
-        unsigned avail=0; struct timespec ts; int buffered=0;
-        if(pcm && pcm_get_htimestamp(pcm,&avail,&ts)==0){ buffered=PERIOD*NPER-(int)avail; if(buffered<0) buffered=0; }
         pthread_mutex_lock(&clk_mu); written+=PERIOD; anchor_played=written-buffered; anchor_us=now_us(); pthread_mutex_unlock(&clk_mu);
     }
     return 0;
 }
-static void hw_volume(void){ if(!mx) return; int hw=255-(vol<0?0:vol>255?255:vol);
+static void hw_volume(void){
+    { int v=vol<0?0:vol>255?255:vol; soft_gain = bt_fd<0||v>=255 ? 32768 : v==0 ? 0 : (int32_t)(32768.0*pow(10.0,-(255-v)*0.25/20.0)); }
+    if(!mx) return; int hw=255-(vol<0?0:vol>255?255:vol);
     struct mixer_ctl*l=mixer_get_ctl_by_name(mx,"Left Playback Volume"),*r=mixer_get_ctl_by_name(mx,"Right Playback Volume");
     if(l) mixer_ctl_set_value(l,0,hw); if(r) mixer_ctl_set_value(r,0,hw); }
 static void dac_route(void){ if(!mx) return;
@@ -241,6 +325,10 @@ static int sxw(float wx){ return (int)(wx-cam); }
 /* ---- biomes: forest + jungle, desert, snow mountain, volcano ---- */
 static const uint32_t SKY[4][2]={{0xB8E0C0,0x3A6A5A},{0xF8D890,0xE08850},{0xD8ECF8,0x6A90B8},{0xE0602A,0x2A0E0E}};
 static float hsh(float x){ float s=sinf(x*12.9898f)*43758.5453f; return s-floorf(s); }   /* stable noise per world spot */
+/* integer helpers for per-column work (no FPU): isin over 1024 steps -> Q15, ih -> 0..255 */
+static inline int isin(int a){ return SINT[a&1023]; }
+static inline int ih(int x){ uint32_t h=(uint32_t)x*2654435761u; h^=h>>15; return (int)(h&255); }
+static uint16_t SKYROW[4][SH]; static int sky_ok[4];
 static void pine(int x,int base,int h,uint32_t c,int snow){
     rect(x-2,base-h/5,4,h/5,0x3A2A1A);
     for(int k=0;k<3;k++){ int top=base-h+k*h/4, w=h/5+k*h/8; tri(x,top,x-w,top+h/3,x+w,top+h/3,c);
@@ -250,12 +338,13 @@ static void broadleaf(int x,int base,int h,uint32_t c){
     circle(x,base-h*3/4,h/3,c); circle(x-h/4,base-h*2/3,h/4,shade(c,0.85f)); circle(x+h/4,base-h*2/3,h/4,shade(c,1.1f)); }
 static void draw_world_bg(int biome,int sh){
     float t=G.time;
-    for(int y=PF_Y;y<GROUND+40;y++){ uint16_t k=rgb(lerpc(SKY[biome][1],SKY[biome][0],(float)(y-PF_Y)/(GROUND-PF_Y)));
-        for(int x=0;x<SW;x++) cv[y][x]=k; }
+    if(!sky_ok[biome]){ sky_ok[biome]=1; for(int y=PF_Y;y<GROUND+40;y++) SKYROW[biome][y]=rgb(lerpc(SKY[biome][1],SKY[biome][0],(float)(y-PF_Y)/(GROUND-PF_Y))); }
+    for(int y=PF_Y;y<GROUND+40;y++){ uint16_t k=SKYROW[biome][y]; for(int x=0;x<SW;x++) cv[y][x]=k; }
+    int tms=(int)(t*1000), c15=(int)(cam*0.15f), c50=(int)(cam*0.5f), c40=(int)(cam*0.4f), c70=(int)(cam*0.7f);
     switch(biome){
     case BIOME_FOREST:
-        for(int x=0;x<SW;x++){ float wx=x+cam*0.15f; int top=(int)(PF_Y+210-30*hsh(floorf(wx/22))-14*sinf(wx*0.02f))+sh;   /* far tree line */
-            for(int y=top;y<GROUND+40;y++) cv[y][x]=rgb(0x2E5A44); }
+        for(int x=0;x<SW;x++){ int wx=x+c15; int top=PF_Y+210-(30*ih(wx/22)>>8)-(14*isin(wx*13/4)>>15)+sh;   /* far tree line */
+            uint16_t k=rgb(0x2E5A44); for(int y=top;y<GROUND+40;y++) cv[y][x]=k; }
         for(int i=-1;i<8;i++){ float wx=floorf(cam*0.45f/90)*90+i*90; int x=(int)(wx-cam*0.45f); float r=hsh(wx);
             broadleaf(x+(int)(r*40),GROUND+sh,150+(int)(r*90),r<0.5f?0x3A7A3A:0x2A6A40); }
         for(int i=-1;i<10;i++){ float wx=floorf(cam*0.8f/60)*60+i*60; int x=(int)(wx-cam*0.8f); float r=hsh(wx+7);   /* jungle vines */
@@ -266,8 +355,8 @@ static void draw_world_bg(int biome,int sh){
         circle(370,PF_Y+80,40,0xFFF4C0); circle(370,PF_Y+80,32,0xFFFFE8);
         for(int i=-1;i<6;i++){ float wx=floorf(cam*0.15f/160)*160+i*160; int x=(int)(wx-cam*0.15f); float r=hsh(wx);
             if(r<0.7f){ int w=60+(int)(r*80), h=50+(int)(r*60); rect(x,PF_Y+250-h+sh,w,h+60,0xC07850); rect(x-6,PF_Y+250-h+sh,w+12,8,0xB06840); } }
-        for(int layer=0;layer<2;layer++){ float par=layer?0.7f:0.4f; uint16_t k=rgb(layer?0xE8B870:0xD8A060);
-            for(int x=0;x<SW;x++){ float wx=x+cam*par; int top=(int)(PF_Y+(layer?330:300)-22*sinf(wx*0.012f+layer)-10*sinf(wx*0.031f))+sh;
+        for(int layer=0;layer<2;layer++){ int off=layer?c70:c40; uint16_t k=rgb(layer?0xE8B870:0xD8A060);
+            for(int x=0;x<SW;x++){ int wx=x+off; int top=PF_Y+(layer?330:300)-(22*isin(wx*2+layer*163)>>15)-(10*isin(wx*5)>>15)+sh;
                 for(int y=top;y<GROUND+40;y++) cv[y][x]=k; } }
         break;
     case BIOME_SNOW:
@@ -276,15 +365,15 @@ static void draw_world_bg(int biome,int sh){
         rect(0,PF_Y+300+sh,SW,GROUND-PF_Y-300+40,0xB8CCE0);
         for(int i=-1;i<10;i++){ float wx=floorf(cam*0.5f/55)*55+i*55; int x=(int)(wx-cam*0.5f); float r=hsh(wx+3);
             pine(x+(int)(r*20),GROUND+sh,70+(int)(r*60),0x2A4A3A,1); }
-        for(int k=0;k<40;k++){ int x=(int)(fmodf(k*73+t*(18+k%5*6)+cam*0.3f,SW)), y=PF_Y+(int)fmodf(k*41+t*(40+k%7*8),GROUND-PF_Y); px(x,y,0xFFFF); px(x+1,y,0xFFFF); }
+        for(int k=0;k<40;k++){ int x=(k*73+tms*(18+k%5*6)/1000+c15*2)%SW, y=PF_Y+(k*41+tms*(40+k%7*8)/1000)%(GROUND-PF_Y); px(x,y,0xFFFF); px(x+1,y,0xFFFF); }
         break;
     case BIOME_VOLCANO: {
         int vx=(int)(300-cam*0.08f)%700; if(vx<-200) vx+=700;
         tri(vx,PF_Y+120+sh,vx-220,PF_Y+330+sh,vx+220,PF_Y+330+sh,0x3A1A16); rect(vx-28,PF_Y+120+sh,56,8,0xFF6020);
         for(int k=0;k<5;k++){ int r=20+k*12+(int)(sinf(t*1.5f+k)*4); circle(vx+(int)(sinf(t*0.5f+k)*20),PF_Y+100-k*24+sh,r,0x4A3A38); }
-        for(int x=0;x<SW;x++){ float wx=x+cam*0.5f; int top=(int)(PF_Y+320-30*hsh(floorf(wx/40))-12*sinf(wx*0.03f))+sh;
-            for(int y=top;y<GROUND+40;y++) cv[y][x]=rgb(0x2A1410); }
-        for(int k=0;k<30;k++){ int x=(int)fmodf(k*97+t*20*(k%3+1),SW), y=GROUND-(int)fmodf(k*53+t*35*(k%2+1),GROUND-PF_Y); px(x,y,rgb(0xFFB040)); px(x+1,y,rgb(0xFF8020)); }
+        { uint16_t k=rgb(0x2A1410); for(int x=0;x<SW;x++){ int wx=x+c50; int top=PF_Y+320-(30*ih(wx/40)>>8)-(12*isin(wx*5)>>15)+sh;
+            for(int y=top;y<GROUND+40;y++) cv[y][x]=k; } }
+        for(int k=0;k<30;k++){ int x=(k*97+tms*20*(k%3+1)/1000)%SW, y=GROUND-(k*53+tms*35*(k%2+1)/1000)%(GROUND-PF_Y); px(x,y,rgb(0xFFB040)); px(x+1,y,rgb(0xFF8020)); }
         } break;
     }
     uint32_t gtop = biome==0?0x3A6A2A : biome==1?0xE0B070 : biome==2?0xF0F6FA : 0x3A2018,
@@ -842,26 +931,53 @@ static int shot(const char*scene,const char*out){
 }
 int main(int argc,char**argv){
     setvbuf(stderr,NULL,_IONBF,0); signal(SIGSEGV,on_crash); signal(SIGBUS,on_crash); signal(SIGFPE,on_crash);
+    synth_init();
     if(argc>3 && !strcmp(argv[1],"--shot")) return shot(argv[2],argv[3]);
+    if(argc>3 && !strcmp(argv[1],"--audiotest")){        /* r3drum --audiotest PERIOD COUNT: 4 s of beat */
+        struct pcm_config cfg; memset(&cfg,0,sizeof cfg); int P=atoi(argv[2]), N=atoi(argv[3]);
+        cfg.channels=2; cfg.rate=DR_RATE; cfg.period_size=P; cfg.period_count=N; cfg.format=PCM_FORMAT_S16_LE;
+        cfg.start_threshold=P; cfg.stop_threshold=P*N; cfg.avail_min=P;
+        if(P==0){ /* mixing only, no DAC: how much CPU does the synth take */
+            bk_t0=DR_RATE/4; bk_beat=DR_RATE/2; bk_on=1; static int16_t b[1024*2]; struct timespec c0,c1;
+            clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&c0); int64_t t0=now_us();
+            while(written<4*DR_RATE){ mix_block(b,256); written+=256; }
+            clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&c1);
+            printf("mix only: 4 s of audio in %.2f s wall, %.2f s cpu\n",(now_us()-t0)/1e6,(c1.tv_sec-c0.tv_sec)+(c1.tv_nsec-c0.tv_nsec)/1e9); return 0; }
+        pcm=pcm_open(0,0,PCM_OUT,&cfg); if(!pcm||!pcm_is_ready(pcm)){ printf("%dx%d refused: %s\n",P,N,pcm?pcm_get_error(pcm):"?"); return 1; }
+        mx=mixer_open(0); dac_route(); hw_volume();
+        bk_t0=DR_RATE/4; bk_beat=DR_RATE/2; bk_on=1; static int16_t b[4096*2]; int errs=0, writes=0;
+        struct timespec c0,c1; clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&c0); int64_t t0=now_us();
+        while(written<4*DR_RATE){ mix_block(b,P); int r=pcm_write(pcm,b,P*4); writes++; if(r){ errs++; pcm_prepare(pcm); } written+=P; }
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&c1);
+        printf("%dx%d: %d writes, %d failed, %.2f s wall, %.2f s cpu\n",P,N,writes,errs,(now_us()-t0)/1e6,
+               (c1.tv_sec-c0.tv_sec)+(c1.tv_nsec-c0.tv_nsec)/1e9);
+        pcm_close(pcm); return 0; }
     load_game(); for(int i=0;i<A.nsquad;i++) fix_loadout(&A.squad[i]);
     int fd=open("/dev/fb0",O_RDWR); struct fb_var_screeninfo vi; struct fb_fix_screeninfo fi;
     if(fd<0||ioctl(fd,FBIOGET_VSCREENINFO,&vi)||ioctl(fd,FBIOGET_FSCREENINFO,&fi)){ fprintf(stderr,"no fb\n"); return 1; }
     vi.xoffset=0; vi.yoffset=0; ioctl(fd,FBIOPAN_DISPLAY,&vi);
     fb=mmap(0,fi.smem_len,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0); fbstride=fi.line_length/2;
+    for(int y=0;y<TOP;y++) memset(fb+y*fbstride,0,SW*2);    /* rows under the bezel: no leftovers */
     int clk=CLOCK_MONOTONIC;
     ts_fd=open("/dev/input/event1",O_RDONLY|O_NONBLOCK); kp_fd=open("/dev/input/event0",O_RDONLY|O_NONBLOCK); km_fd=open("/dev/input/event2",O_RDONLY|O_NONBLOCK);
     if(ts_fd>=0) ioctl(ts_fd,EVIOCSCLOCKID,&clk); if(kp_fd>=0) ioctl(kp_fd,EVIOCSCLOCKID,&clk); if(km_fd>=0) ioctl(km_fd,EVIOCSCLOCKID,&clk);
     vol=vb_load();
-    struct pcm_config cfg; memset(&cfg,0,sizeof cfg);
-    cfg.channels=2; cfg.rate=DR_RATE; cfg.period_size=PERIOD; cfg.period_count=NPER; cfg.format=PCM_FORMAT_S16_LE;
-    cfg.start_threshold=PERIOD; cfg.stop_threshold=PERIOD*NPER; cfg.avail_min=PERIOD;
-    pcm=pcm_open(0,0,PCM_OUT,&cfg);
-    if(pcm && !pcm_is_ready(pcm)){ fprintf(stderr,"[r3drum] no sound: %s\n",pcm_get_error(pcm)); pcm_close(pcm); pcm=NULL; }
+    /* lowest latency first: rhythm wants a short buffer; the codec driver decides what it takes */
+    bt_fd=bt_open();
+    static const int TRY[][2]={{256,4},{512,2},{512,3},{1024,2},{1024,4}};
+    for(unsigned i=0;i<sizeof TRY/sizeof TRY[0] && !pcm && bt_fd<0;i++){
+        struct pcm_config cfg; memset(&cfg,0,sizeof cfg);
+        cfg.channels=2; cfg.rate=DR_RATE; cfg.period_size=TRY[i][0]; cfg.period_count=TRY[i][1]; cfg.format=PCM_FORMAT_S16_LE;
+        cfg.start_threshold=TRY[i][0]; cfg.stop_threshold=TRY[i][0]*TRY[i][1]; cfg.avail_min=TRY[i][0];
+        pcm=pcm_open(0,0,PCM_OUT,&cfg);
+        if(pcm && !pcm_is_ready(pcm)){ fprintf(stderr,"[r3drum] %dx%d refused: %s\n",TRY[i][0],TRY[i][1],pcm_get_error(pcm)); pcm_close(pcm); pcm=NULL; }
+        else if(pcm){ PERIOD=TRY[i][0]; NPER=TRY[i][1]; fprintf(stderr,"[r3drum] audio %dx%d (%d ms)\n",PERIOD,NPER,PERIOD*NPER*1000/DR_RATE); } }
     mx=mixer_open(0); dac_route(); hw_volume();
     anchor_us=now_us();
     pthread_t at; pthread_create(&at,NULL,audio_thread,NULL);
-    { struct sched_param sp={.sched_priority=10}; pthread_setschedparam(at,SCHED_FIFO,&sp); }
-    fprintf(stderr,"[r3drum] start, sound %s, cleared %d\n",pcm?"on":"off",A.cleared);
+    /* no real-time priority: a misbehaving audio loop must never be able to starve the device */
+    if(pcm) snprintf(out_name,sizeof out_name,"HEADPHONES");
+    fprintf(stderr,"[r3drum] start, sound %s, cleared %d\n",pcm||bt_fd>=0?out_name:"off",A.cleared);
     if(argc>2 && !strcmp(argv[1],"--battle")){ sel=atoi(argv[2]); if(sel<0||sel>=DG_NMISSION) sel=0; start_battle(); }   /* testing */
     int64_t last=now_us(); uint32_t vt=0;
     while(!quit){
@@ -877,7 +993,7 @@ int main(int argc,char**argv){
     }
     save_game();
     audio_run=0; pthread_join(at,NULL);
-    if(pcm) pcm_close(pcm); if(mx) mixer_close(mx);
+    if(pcm) pcm_close(pcm); if(mx) mixer_close(mx); bt_close();
     memset(cv,0,sizeof cv); present();
     fprintf(stderr,"[r3drum] quit\n");
     return 0;

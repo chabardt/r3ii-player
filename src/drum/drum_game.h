@@ -89,6 +89,7 @@ typedef struct {
     int cmd, cmd_beat, fever;     /* command being performed (CMD_* from drum_core) and its beat 0..3 */
     int64_t beat; int guard_until;/* guard holds through this beat */
     int won, lost; float time; uint32_t rng;
+    float beat_s;                 /* seconds per beat (0.5 at 120 BPM; songs set their own) */
     /* events since the frontend last cleared them (sounds, effects) */
     int ev_attack, ev_hit, ev_kill, ev_hurt, ev_block, ev_heal, ev_windup, ev_drop;   /* ev_drop: reward code+1 */
     int ev_boss_move;             /* a boss started telegraphing move index+1 */

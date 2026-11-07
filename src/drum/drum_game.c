@@ -205,7 +205,7 @@ const bmove_t* dg_boss_move(const dg_t*g,int k){
 static uint32_t rnd(dg_t*g){ g->rng=g->rng*1664525u+1013904223u; return g->rng>>8; }
 static const int RANK[CL_N]={2,0,4,3,1};      /* front to back: warden, breaker, lancer, mender, slinger */
 #define SPACING 36.0f
-#define BEAT_S 0.5f                            /* 120 BPM */
+#define BEAT_S (g->beat_s)                     /* the song's tempo; 0.5 s at 120 BPM */
 #define FOE_DMG 0.65f                          /* tuning knobs (tests/drum_game_test.c) */
 #define BOSS_HP 0.75f
 #define BOSS_DMG 0.85f
@@ -227,7 +227,7 @@ static void enemy_init(dg_t*g,int i,int type,float x){
 void dg_start(dg_t*g,int mission,const armory_t*a,uint32_t seed){
     memset(g,0,sizeof *g);
     g->mission=mission; g->m=&DG_MISSION[mission]; g->rng=seed?seed:1; g->cmd=CMD_NONE; g->guard_until=-1000;
-    g->sx=160;
+    g->sx=160; g->beat_s=0.5f;
     for(int i=0;i<a->nsquad && i<DG_MAXU;i++){ unit_t*u=&g->u[i]; const loadout_t*l=&a->squad[i];
         u->on=1; u->cls=l->cls; u->weapon=dg_weapon_ok(l->cls,l->weapon)?l->weapon:-1;
         u->shield=dg_shield_ok(l->cls,l->shield)?l->shield:0;
