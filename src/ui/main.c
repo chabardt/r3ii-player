@@ -431,8 +431,44 @@ typedef struct { char name[256]; int dir; } entry_t;
 static int ecmp(const void*a,const void*b){ const entry_t*x=a,*y=b;
     if(x->dir!=y->dir)return y->dir-x->dir; return strcasecmp(x->name,y->name); }
 
-static void entry_cb(lv_event_t*e){
-    char*full=lv_event_get_user_data(e); /* strdup'd full path */
+/* one browser screen's folder + entries, owned by the screen (freed when it is deleted;
+ * screens are deleted asynchronously, so no globals) — rows only store their index */
+typedef struct { char dir[1024]; int n; lv_obj_t*list; char*built; entry_t e[]; } brdata_t;
+#define ROW_H 44                          /* row pitch in the browser list */
+static void entry_open(const char*full);
+static void br_row_cb(lv_event_t*e){ lv_obj_t*row=lv_event_get_current_target(e);
+    brdata_t*bd=lv_obj_get_user_data(lv_obj_get_screen(row)); long i=(long)lv_event_get_user_data(e);
+    if(!bd || i<0 || i>=bd->n) return;
+    char full[1600]; snprintf(full,sizeof full,"%s/%s",bd->dir,bd->e[i].name); entry_open(full); }
+static void br_data_free_cb(lv_event_t*e){ brdata_t*bd=lv_event_get_user_data(e); free(bd->built); free(bd); }
+/* rows are built on demand (what is on screen, then what scrolls in): a 600-artist Music
+ * root would otherwise create and measure 600 rows before showing anything */
+static lv_style_t st_row, st_row_pr; static int st_ok;
+static void br_disp(const entry_t*en,char*disp,int cap){
+    if(en->dir){ strncpy(disp,en->name,cap-1); disp[cap-1]=0; fold(disp); } else pretty(en->name,disp,cap); }
+static void br_build(brdata_t*bd,int i){
+    if(i<0 || i>=bd->n || bd->built[i]) return; bd->built[i]=1;
+    if(!st_ok){ st_ok=1;                  /* shared row styles: one for all rows, not 5 local props each */
+        lv_style_init(&st_row); lv_style_set_bg_color(&st_row,lv_color_hex(C_PANEL)); lv_style_set_bg_opa(&st_row,LV_OPA_COVER);
+        lv_style_set_radius(&st_row,R_BTN); lv_style_set_border_width(&st_row,1); lv_style_set_border_color(&st_row,lv_color_hex(0x000000));
+        lv_style_set_text_color(&st_row,lv_color_hex(C_FG));
+        lv_style_init(&st_row_pr); lv_style_set_bg_color(&st_row_pr,lv_color_hex(C_PANEL2)); }
+    char disp[256], txt[300]; br_disp(&bd->e[i],disp,sizeof disp);
+    lv_obj_t*b=lv_obj_create(bd->list); lv_obj_remove_style_all(b);
+    lv_obj_add_style(b,&st_row,0); lv_obj_add_style(b,&st_row_pr,LV_STATE_PRESSED);
+    lv_obj_set_size(b,434,ROW_H-6); lv_obj_set_pos(b,8,6+ROW_H*i);
+    lv_obj_clear_flag(b,LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+    lv_obj_t*t=lv_label_create(b);        /* icon glyph + name in one label */
+    snprintf(txt,sizeof txt,"%s   %s",bd->e[i].dir?LV_SYMBOL_DIRECTORY:LV_SYMBOL_AUDIO,disp);
+    lv_label_set_text(t,txt); lv_label_set_long_mode(t,LV_LABEL_LONG_DOT);
+    lv_obj_set_width(t,410); lv_obj_set_pos(t,12,9);
+    lv_obj_add_event_cb(b,br_row_cb,LV_EVENT_CLICKED,(void*)(long)i);
+}
+static void br_build_visible(brdata_t*bd){
+    int a=(lv_obj_get_scroll_y(bd->list)-6)/ROW_H-2, z=a+(720-54)/ROW_H+4;
+    for(int i=a;i<=z;i++) br_build(bd,i); }
+static void br_scroll_cb(lv_event_t*e){ br_build_visible(lv_event_get_user_data(e)); }
+static void entry_open(const char*full){
     struct stat st;
     if(stat(full,&st)==0 && S_ISDIR(st.st_mode)){ show_browser(full); return; }
     /* a song: build the playlist from its folder, play it, open Now Playing */
@@ -451,14 +487,14 @@ static void free_cb(lv_event_t*e){ void*p=lv_event_get_user_data(e); if(p)free(p
  * the list position is interpolated toward the next letter's first entry, so dragging
  * scrolls continuously instead of jumping. */
 #define RAIL_N 27
-static lv_obj_t *g_firstof[27];   /* 0..25 = A..Z, 26 = other/#  (buttons in the current list) */
+static int g_firstof[27];   /* 0..25 = A..Z, 26 = other/#: first entry index in the current list, -1 none */
 static lv_obj_t *g_brlist, *g_bubble, *g_bubble_lbl, *g_rail_lbl[RAIL_N]; static int g_rail_hl=-1;
 static int rail_letter(int pos){ return pos==0?26:pos-1; }
 static const char RAIL_TXT[RAIL_N][2]={"#","A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"};
 static void rail_highlight(int pos){
     if(pos==g_rail_hl) return;
     if(g_rail_hl>=0){ lv_obj_t*o=g_rail_lbl[g_rail_hl];
-        lv_obj_set_style_text_color(o,lv_color_hex(g_firstof[rail_letter(g_rail_hl)]?C_ACCENT:C_DIM),0);
+        lv_obj_set_style_text_color(o,lv_color_hex(g_firstof[rail_letter(g_rail_hl)]>=0?C_ACCENT:C_DIM),0);
         lv_obj_set_style_text_font(o,&lv_font_montserrat_12,0); }
     g_rail_hl=pos;
     if(pos>=0){ lv_obj_set_style_text_color(g_rail_lbl[pos],lv_color_hex(C_FG),0);
@@ -474,18 +510,18 @@ static void rail_cb(lv_event_t*e){
     float f=(p.y-a.y1)*(float)RAIL_N/lv_area_get_height(&a);
     if(f<0)f=0; if(f>RAIL_N-0.001f)f=RAIL_N-0.001f;
     int pos=(int)f; float frac=f-pos;
-    int k=-1; for(int q=pos;q<RAIL_N;q++) if(g_firstof[rail_letter(q)]){ k=q; break; }   /* empty letter: next one */
-    if(k<0) for(int q=pos;q>=0;q--) if(g_firstof[rail_letter(q)]){ k=q; break; }
+    int k=-1; for(int q=pos;q<RAIL_N;q++) if(g_firstof[rail_letter(q)]>=0){ k=q; break; }   /* empty letter: next one */
+    if(k<0) for(int q=pos;q>=0;q--) if(g_firstof[rail_letter(q)]>=0){ k=q; break; }
     if(k<0) return;
     if(k!=pos) frac=0;
     /* scroll target: from this letter's first row toward the next letter's first row */
-    lv_coord_t y0=lv_obj_get_y(g_firstof[rail_letter(k)]), y1=-1;
-    for(int q=k+1;q<RAIL_N && y1<0;q++) if(g_firstof[rail_letter(q)]) y1=lv_obj_get_y(g_firstof[rail_letter(q)]);
-    if(y1<y0){ uint32_t n=lv_obj_get_child_cnt(g_brlist); lv_obj_t*last=n?lv_obj_get_child(g_brlist,n-1):NULL;
-        y1 = last? lv_obj_get_y(last)+lv_obj_get_height(last) : y0; }
+    brdata_t*bd=lv_obj_get_user_data(lv_obj_get_screen(g_brlist)); if(!bd) return;
+    lv_coord_t y0=6+ROW_H*g_firstof[rail_letter(k)], y1=-1;      /* rows sit at fixed positions */
+    for(int q=k+1;q<RAIL_N && y1<0;q++) if(g_firstof[rail_letter(q)]>=0) y1=6+ROW_H*g_firstof[rail_letter(q)];
+    if(y1<y0) y1=6+ROW_H*bd->n;
     lv_coord_t cur=lv_obj_get_scroll_y(g_brlist), maxy=cur+lv_obj_get_scroll_bottom(g_brlist);
     lv_coord_t t=(lv_coord_t)(y0+frac*(y1-y0)); if(t>maxy)t=maxy; if(t<0)t=0;
-    if(t!=cur) lv_obj_scroll_to_y(g_brlist,t,LV_ANIM_OFF);
+    if(t!=cur){ lv_obj_scroll_to_y(g_brlist,t,LV_ANIM_OFF); br_build_visible(bd); }
     /* bubble beside the finger, with the letter we are on */
     lv_label_set_text(g_bubble_lbl,RAIL_TXT[k]);
     lv_coord_t by=p.y-48; if(by<56)by=56; if(by>720-100)by=720-100;
@@ -498,7 +534,7 @@ static int letter_index(const char*disp){ char c=disp[0];
 static void show_browser(const char*path){
     char cur[1024]; strncpy(cur,path,sizeof cur-1); cur[sizeof cur-1]=0; /* own copy */
     null_live();
-    for(int i=0;i<27;i++) g_firstof[i]=NULL;
+    for(int i=0;i<27;i++) g_firstof[i]=-1;
     lv_obj_t*scr=lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr,lv_color_hex(C_BG),0);
     lv_obj_clear_flag(scr,LV_OBJ_FLAG_SCROLLABLE);
@@ -522,12 +558,15 @@ static void show_browser(const char*path){
     lv_label_set_long_mode(ttl,LV_LABEL_LONG_DOT); lv_obj_set_width(ttl,370);
     lv_obj_set_style_text_color(ttl,lv_color_hex(C_ACCENT),0); lv_obj_align(ttl,LV_ALIGN_LEFT_MID,56,0);
     /* list (leave 30px on the right for the A-Z rail) */
-    lv_obj_t*list=lv_list_create(scr); lv_obj_set_size(list,450,720-54); lv_obj_set_pos(list,0,54);
+    /* a plain scrolling container with rows at fixed positions: no flex layout pass (with
+     * 600+ artists, LVGL laid out and measured every lv_list row before the first draw) */
+    lv_obj_t*list=lv_obj_create(scr); lv_obj_set_size(list,450,720-54); lv_obj_set_pos(list,0,54);
     lv_obj_set_style_bg_color(list,lv_color_hex(C_BG),0); lv_obj_set_style_border_width(list,0,0);
-    lv_obj_set_style_pad_all(list,0,0); lv_obj_set_style_pad_hor(list,8,0); lv_obj_set_style_pad_row(list,6,0);
-    lv_obj_set_style_pad_top(list,6,0);
+    lv_obj_set_style_radius(list,0,0); lv_obj_set_style_pad_all(list,0,0);
+    lv_obj_set_scroll_dir(list,LV_DIR_VER);
     /* entries: served from the smart index (instant) when browsing Music and the index
      * is ready; otherwise a live directory read (podcasts, first boot, any non-Music path). */
+    uint32_t T0=r3_tick_ms();   /* timing, logged to r3dbg.log */
     entry_t*es=malloc(sizeof(entry_t)*4096); int ne=0, from_index=0;
     if(!strncmp(cur,MUSIC_ROOT,strlen(MUSIC_ROOT)) && smartmix_ready()){
         char (*nm)[256]=malloc((size_t)4096*256); char*dd=malloc(4096);
@@ -551,25 +590,22 @@ static void show_browser(const char*path){
             closedir(dp);
         }
     }
+    uint32_t T1=r3_tick_ms();
     {
         qsort(es,ne,sizeof(entry_t),ecmp);
-        for(int i=0;i<ne;i++){
-            char disp[256];
-            if(es[i].dir){ strncpy(disp,es[i].name,sizeof disp-1); disp[sizeof disp-1]=0; fold(disp); }
-            else pretty(es[i].name,disp,sizeof disp);
-            lv_obj_t*b=lv_list_add_btn(list, es[i].dir?LV_SYMBOL_DIRECTORY:LV_SYMBOL_AUDIO, disp);
-            lv_obj_set_style_bg_color(b,lv_color_hex(C_PANEL),0);
-            lv_obj_set_style_bg_color(b,lv_color_hex(C_PANEL2),LV_STATE_PRESSED);
-            lv_obj_set_style_text_color(b,lv_color_hex(C_FG),0);
-            lv_obj_set_style_border_color(b,lv_color_hex(0x000000),0);
-            lv_obj_set_style_border_width(b,1,0); lv_obj_set_style_radius(b,R_BTN,0);
-            int li=letter_index(disp); if(!g_firstof[li]) g_firstof[li]=b;
-            char*full=malloc(1600); snprintf(full,1600,"%s/%s",cur,es[i].name);
-            lv_obj_add_event_cb(b,entry_cb,LV_EVENT_CLICKED,full);
-            lv_obj_add_event_cb(b,free_cb,LV_EVENT_DELETE,full);
-        }
+        brdata_t*bd=malloc(sizeof(brdata_t)+sizeof(entry_t)*(size_t)(ne?ne:1));
+        snprintf(bd->dir,sizeof bd->dir,"%s",cur); bd->n=ne; bd->list=list; bd->built=calloc(ne?ne:1,1);
+        memcpy(bd->e,es,sizeof(entry_t)*(size_t)ne);
+        lv_obj_set_user_data(scr,bd); lv_obj_add_event_cb(scr,br_data_free_cb,LV_EVENT_DELETE,bd);
         free(es);
+        for(int i=0;i<ne;i++){ char disp[256]; br_disp(&bd->e[i],disp,sizeof disp);   /* rail letters */
+            int li=letter_index(disp); if(g_firstof[li]<0) g_firstof[li]=i; }
+        if(ne){ lv_obj_t*sp=lv_obj_create(list); lv_obj_remove_style_all(sp);   /* full height + bottom margin */
+            lv_obj_set_size(sp,1,6); lv_obj_set_pos(sp,0,6+ROW_H*ne); }
+        br_build_visible(bd);
+        lv_obj_add_event_cb(list,br_scroll_cb,LV_EVENT_SCROLL,bd);
     }
+    uint32_t T2=r3_tick_ms();
     /* A-Z rail */
     lv_obj_t*rail=lv_obj_create(scr); lv_obj_set_size(rail,30,720-54); lv_obj_set_pos(rail,450,54);
     lv_obj_set_style_bg_color(rail,lv_color_hex(C_BAR),0); lv_obj_set_style_radius(rail,0,0);
@@ -580,7 +616,7 @@ static void show_browser(const char*path){
     g_rail_hl=-1; g_brlist=list;
     for(int k=0;k<RAIL_N;k++){
         lv_obj_t*ll=lv_label_create(rail); lv_label_set_text(ll,RAIL_TXT[k]); g_rail_lbl[k]=ll;
-        lv_obj_set_style_text_color(ll,lv_color_hex(g_firstof[rail_letter(k)]?C_ACCENT:C_DIM),0);
+        lv_obj_set_style_text_color(ll,lv_color_hex(g_firstof[rail_letter(k)]>=0?C_ACCENT:C_DIM),0);
         lv_obj_set_style_text_font(ll,&lv_font_montserrat_12,0);
     }
     lv_obj_add_flag(rail,LV_OBJ_FLAG_CLICKABLE); lv_obj_set_ext_click_area(rail,14);   /* the whole rail is the slider */
@@ -598,6 +634,9 @@ static void show_browser(const char*path){
     lv_obj_add_flag(g_bubble,LV_OBJ_FLAG_HIDDEN);
     g_scr=SCR_BROWSER;
     load_screen(scr);
+    uint32_t T3=r3_tick_ms(); lv_refr_now(NULL); uint32_t T4=r3_tick_ms();
+    DBG("browser %s: %d entries (%s) list %u ms, buttons %u ms, rest %u ms, first draw %u ms\n",
+        cur,ne,from_index?"index":"readdir",T1-T0,T2-T1,T3-T2,T4-T3);
 }
 
 
