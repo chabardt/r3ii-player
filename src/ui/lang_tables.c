@@ -129,6 +129,7 @@ static const lang_entry_t L_fr[] = {
     { "Monday", "lundi" },
     { "Month", "Mois" },
     { "Move to...", "D\303\251placer vers..." },
+    { "Music", "Musique" },
     { "Music keeps playing with the screen off.\nPower key or a touch wakes it.", "La musique continue \303\251cran \303\251teint.\nLe bouton power ou un toucher le rallume." },
     { "NETWORKS", "R\303\211SEAUX" },
     { "NEW BEST  ", "NOUVEAU RECORD  " },
@@ -164,6 +165,7 @@ static const lang_entry_t L_fr[] = {
     { "Playlist saved. %d song not on this device.", "Playlist enregistr\303\251e. %d morceau absent de cet appareil." },
     { "Playlist saved. %d songs not on this device.", "Playlist enregistr\303\251e. %d morceaux absents de cet appareil." },
     { "Playlists", "Playlists" },
+    { "Podcasts", "Podcasts" },
     { "Pop 5 bubbles!", "\303\211clate 5 bulles !" },
     { "Press buttons: the matching action lights up.\nPair a Joy-Con: hold its small sync button\nuntil the lights run, then Scan.", "Appuyez sur les boutons : l\342\200\231action\ncorrespondante s\342\200\231allume.\nAppairer un Joy-Con : maintenez son petit\nbouton de synchro jusqu\342\200\231au d\303\251filement\ndes voyants, puis Rechercher." },
     { "RECEIVE FROM PHONE", "RECEVOIR DU T\303\211L\303\211PHONE" },
@@ -289,6 +291,6 @@ static const lang_entry_t L_fr[] = {
     { "went back to the stars", "est reparti vers les \303\251toiles" },
 };
 const lang_t LANGS[] = {
-    { "fr", "Fran\303\247ais", 285, L_fr },
+    { "fr", "Fran\303\247ais", 287, L_fr },
 };
 const int LANG_N = 1;

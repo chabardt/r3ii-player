@@ -681,6 +681,7 @@ msgstr ""
 "fichiers texte : voir docs/TRANSLATING.md sur GitHub."
 
 #: src/ui/main.c:1216
+#: src/ui/main.c:1603
 msgid "Settings"
 msgstr "Réglages"
 
@@ -784,6 +785,7 @@ msgid "Done"
 msgstr "Terminé"
 
 #: src/ui/main.c:1386
+#: src/ui/main.c:1601
 msgid "Playlists"
 msgstr "Playlists"
 
@@ -866,6 +868,19 @@ msgstr "Nom de la playlist"
 msgid "Tap %s on the keyboard to create."
 msgstr "Touchez %s sur le clavier pour la créer."
 
+#: src/ui/main.c:1599
+msgid "Music"
+msgstr "Musique"
+
+#: src/ui/main.c:1600
+msgid "Podcasts"
+msgstr "Podcasts"
+
+#: src/ui/main.c:1602
+#: src/ui/main.c:1875
+msgid "Games"
+msgstr "Jeux"
+
 #: src/ui/main.c:1766
 #: src/ui/main.c:1893
 msgid "Game Boy"
@@ -925,10 +940,6 @@ msgstr "pas encore de score"
 #: src/ui/main.c:1869
 msgid "Reset all scores"
 msgstr "Effacer tous les scores"
-
-#: src/ui/main.c:1875
-msgid "Games"
-msgstr "Jeux"
 
 #: src/ui/main.c:1879
 msgid "falling-block puzzle"

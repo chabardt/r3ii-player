@@ -649,6 +649,7 @@ msgid ""
 msgstr ""
 
 #: src/ui/main.c:1216
+#: src/ui/main.c:1603
 msgid "Settings"
 msgstr ""
 
@@ -752,6 +753,7 @@ msgid "Done"
 msgstr ""
 
 #: src/ui/main.c:1386
+#: src/ui/main.c:1601
 msgid "Playlists"
 msgstr ""
 
@@ -834,6 +836,19 @@ msgstr ""
 msgid "Tap %s on the keyboard to create."
 msgstr ""
 
+#: src/ui/main.c:1599
+msgid "Music"
+msgstr ""
+
+#: src/ui/main.c:1600
+msgid "Podcasts"
+msgstr ""
+
+#: src/ui/main.c:1602
+#: src/ui/main.c:1875
+msgid "Games"
+msgstr ""
+
 #: src/ui/main.c:1766
 #: src/ui/main.c:1893
 msgid "Game Boy"
@@ -888,10 +903,6 @@ msgstr ""
 
 #: src/ui/main.c:1869
 msgid "Reset all scores"
-msgstr ""
-
-#: src/ui/main.c:1875
-msgid "Games"
 msgstr ""
 
 #: src/ui/main.c:1879

@@ -1596,11 +1596,11 @@ static void show_home(void){
     lv_obj_set_size(g,448,634); lv_obj_align(g,LV_ALIGN_TOP_MID,0,70);
     lv_obj_set_flex_flow(g,LV_FLEX_FLOW_COLUMN); lv_obj_set_style_pad_row(g,14,0);
     lv_obj_clear_flag(g,LV_OBJ_FLAG_SCROLLABLE);
-    make_row(g,"Music",   LV_SYMBOL_AUDIO,   C_ACCENT);
-    make_row(g,"Podcasts",LV_SYMBOL_VIDEO,   C_ACCENT2);
-    make_row(g,"Playlists",LV_SYMBOL_LIST,   C_ACCENT);
-    make_row(g,"Games",   LV_SYMBOL_PLAY,    C_ACCENT2);
-    make_row(g,"Settings",LV_SYMBOL_SETTINGS,C_ACCENT);
+    make_row(g,N_("Music"),   LV_SYMBOL_AUDIO,   C_ACCENT);   /* N_: the English name is also the tile key */
+    make_row(g,N_("Podcasts"),LV_SYMBOL_VIDEO,   C_ACCENT2);
+    make_row(g,N_("Playlists"),LV_SYMBOL_LIST,   C_ACCENT);
+    make_row(g,N_("Games"),   LV_SYMBOL_PLAY,    C_ACCENT2);
+    make_row(g,N_("Settings"),LV_SYMBOL_SETTINGS,C_ACCENT);
     g_scr=SCR_HOME;
     load_screen(scr);
 }
