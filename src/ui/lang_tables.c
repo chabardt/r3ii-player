@@ -250,6 +250,7 @@ static const lang_entry_t L_fr[] = {
     { "connected%s%s", "connect\303\251%s%s" },
     { "copy your ROMs to Games/GBA", "copiez vos ROM dans Games/GBA" },
     { "copy your ROMs to Games/GameBoy", "copiez vos ROM dans Games/GameBoy" },
+    { "drum the beat, lead a tiny army", "battez le rythme, menez une petite arm\303\251e" },
     { "eat, grow, don't bite yourself", "mangez, grandissez, sans vous mordre" },
     { "egg", "\305\223uf" },
     { "elder", "ancien" },
@@ -298,6 +299,6 @@ static const lang_entry_t L_fr[] = {
     { "went back to the stars", "est reparti vers les \303\251toiles" },
 };
 const lang_t LANGS[] = {
-    { "fr", "Fran\303\247ais", 294, L_fr },
+    { "fr", "Fran\303\247ais", 295, L_fr },
 };
 const int LANG_N = 1;

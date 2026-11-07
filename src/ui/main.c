@@ -1855,6 +1855,23 @@ static void run_gba(int i,int fresh){
     drain_input(); bl_set(p_bright); g_last_input=r3_tick_ms();
     show_gba_list();
 }
+/* ---- Drumfolk: r3drum, the rhythm-marching game (own screen, audio and saves) ---- */
+#define DRUM_BIN "/usr/data/r3drum"
+static void run_drum(void){
+    if(audio_is_playing()){ g_resume_ms=audio_pos_ms(); save_resume(); audio_stop();   /* free the DAC */
+        if(np_play) lv_label_set_text(np_play,LV_SYMBOL_PLAY); }
+    char*argv[]={"r3drum",NULL}; char*envp[]={"PATH=/usr/bin:/bin",0};
+    posix_spawn_file_actions_t fa; posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa,1,"/tmp/r3drum.log",O_WRONLY|O_CREAT|O_TRUNC,0644);
+    posix_spawn_file_actions_adddup2(&fa,1,2);
+    pid_t pid; int rc=posix_spawn(&pid,DRUM_BIN,&fa,0,argv,envp);
+    posix_spawn_file_actions_destroy(&fa);
+    if(rc!=0){ DBG("r3drum spawn failed %d\n",rc); return; }
+    waitpid(pid,0,0);
+    { FILE*vf=fopen(VOL_FILE,"r"); int v; if(vf){ if(fscanf(vf,"%d",&v)==1) audio_set_volume(v); fclose(vf); } }
+    drain_input(); bl_set(p_bright); g_last_input=r3_tick_ms();
+    show_games();
+}
 static void ask_resume(long id,const char*name,const char*resume_label);
 static void gba_go_cb(lv_event_t*e){ long i=(long)lv_event_get_user_data(e); char t[160];
     if(!gba_side((int)i,".ss")){ run_gba((int)i,0); return; }
@@ -1916,6 +1933,7 @@ static void games_go_cb(lv_event_t*e){ long i=(long)lv_event_get_user_data(e); i
     else if(i==-3){ null_live(); lv_obj_t*ps=pet_create(show_games); g_scr=SCR_GAME; load_screen(ps); }
     else if(i==-4) show_gb_list();
     else if(i==-7) show_gba_list();
+    else if(i==-8) run_drum();
     else if(i==-2){ if(brick_has_save(&sc)) ask_resume_score(i,"BRICKSTORM",sc); else start_builtin(i,0); }
     else if(i==-5){ if(coil_has_save(&sc)) ask_resume_score(i,"COIL",sc); else start_builtin(i,0); }
     else if(i==-6){ if(sapper_has_save(&sc)) ask_resume_score(i,"SAPPER",sc); else start_builtin(i,0); }
@@ -1988,6 +2006,9 @@ static void show_games(void){
     lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-5L);
     r=set_row(l,LV_SYMBOL_WARNING,"Sapper",game_sub(3,sapper_has_save(&sc),_("clear the minefield")),0);
     lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-6L);
+    { struct stat dst; if(stat(DRUM_BIN,&dst)==0){
+        r=set_row(l,LV_SYMBOL_BELL,"Drumfolk",_("drum the beat, lead a tiny army"),0);
+        lv_obj_add_event_cb(r,games_go_cb,LV_EVENT_CLICKED,(void*)-8L); } }
     r=set_row(l,LV_SYMBOL_LIST,_("High scores"),_("top 5 of every game"),0);
     lv_obj_add_event_cb(r,scores_go_cb,LV_EVENT_CLICKED,NULL);
     { struct stat gst; gb_scan(); char sub[48];
