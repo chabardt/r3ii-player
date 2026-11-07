@@ -99,20 +99,33 @@ static int16_t input_state(unsigned port,unsigned dev,unsigned idx,unsigned id){
 /* ---------- video ---------- */
 static short d3[SW];                    /* px / 3 */
 static uint16_t *shot;                  /* --bench: copy of the last frame, 240x160 */
+static uint32_t blit_us;                /* time spent drawing to the framebuffer */
+static uint32_t us_now(void){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (uint32_t)(t.tv_sec*1000000u+t.tv_nsec/1000u); }
+static void video_draw(const uint16_t*src,int sp,int vbon);
 static void video(const void*data,unsigned w,unsigned h,size_t pitch){ (void)w; (void)h;
     if(!data) return;                   /* duplicate frame */
-    const uint16_t*src=data; int sp=(int)(pitch/2), vbon=now_ms()<vb_until;
+    const uint16_t*src=data; int sp=(int)(pitch/2);
     if(shot){ for(int y=0;y<GH;y++) memcpy(shot+y*GW,src+y*sp,GW*2); return; }
-    if(!landscape){                     /* x2: each pixel doubled as one 32-bit write, row copied */
-        for(int y=vbon?(VB_THICK-TOP+1)/2:0;y<GH;y++){ const uint16_t*s=src+y*sp; uint32_t*d=(uint32_t*)(fb+(TOP+2*y)*fbstride);
-            for(int x=0;x<GW;x++){ uint32_t p=s[x]; d[x]=p|(p<<16); }
-            memcpy(fb+(TOP+2*y+1)*fbstride,d,SW*2); }
+    uint32_t t=us_now(); video_draw(src,sp,now_ms()<vb_until); blit_us+=us_now()-t; }
+/* The framebuffer is slow memory: build each output row in RAM, then only write
+ * (never read back) the framebuffer, one memcpy per row. */
+static void video_draw(const uint16_t*src,int sp,int vbon){
+    static uint32_t row[SW/2];
+    if(!landscape){                     /* x2: each pixel doubled as one 32-bit word */
+        for(int y=vbon?(VB_THICK-TOP+1)/2:0;y<GH;y++){ const uint16_t*s=src+y*sp;
+            for(int x=0;x<GW;x++){ uint32_t p=s[x]; row[x]=p|(p<<16); }
+            memcpy(fb+(TOP+2*y)*fbstride,row,SW*2); memcpy(fb+(TOP+2*y+1)*fbstride,row,SW*2); }
         return; }
-    /* landscape, R3 turned clockwise: game x runs bottom->top, game y left->right, x3 */
-    uint16_t row[SW]; int px0=vbon?VB_THICK:0;
-    for(int gx=0;gx<GW;gx++){
-        for(int px=px0;px<SW;px++) row[px]=src[d3[px]*sp+gx];
-        for(int k=0;k<3;k++) memcpy(fb+(SH-1-3*gx-k)*fbstride+px0,row+px0,(size_t)(SW-px0)*2); }
+    /* landscape, R3 turned clockwise: game x runs bottom->top, game y left->right, x3.
+     * Transpose in 8x8 tiles first (column reads of the source thrash the cache). */
+    static uint16_t tr[GW*GH];          /* tr[gx*GH+gy] */
+    for(int by=0;by<GH;by+=8) for(int bx=0;bx<GW;bx+=8)
+        for(int y=by;y<by+8;y++){ const uint16_t*s=src+y*sp+bx; uint16_t*t=tr+bx*GH+y;
+            for(int x=0;x<8;x++) t[x*GH]=s[x]; }
+    uint16_t*r=(uint16_t*)row; int px0=vbon?VB_THICK:0;
+    for(int gx=0;gx<GW;gx++){ const uint16_t*c=tr+gx*GH;
+        for(int gy=0;gy<GH;gy++){ uint16_t p=c[gy]; r[3*gy]=p; r[3*gy+1]=p; r[3*gy+2]=p; }
+        for(int k=0;k<3;k++) memcpy(fb+(SH-1-3*gx-k)*fbstride+px0,r+px0,(size_t)(SW-px0)*2); }
 }
 
 /* ---------- audio: 32768 -> 48000 Hz (linear) into one buffer per frame ---------- */
@@ -379,8 +392,9 @@ int main(int argc,char**argv){
         retro_run();
         clock_gettime(CLOCK_MONOTONIC,&b); run_us+=(uint32_t)((b.tv_sec-a.tv_sec)*1000000+(b.tv_nsec-a.tv_nsec)/1000);
         if(++frames, now_ms()-t0>=5000){ uint32_t dt=now_ms()-t0;
-            fprintf(stderr,"[r3gba] %.1f fps, emulation %.1f ms/frame, %d drawn frames skipped\n",frames*1000.0f/dt,run_us/1000.0f/frames,skipped);
-            t0=now_ms(); frames=0; run_us=0; skipped=0; }
+            fprintf(stderr,"[r3gba] %.1f fps, emulation %.1f ms/frame (drawing %.1f), %d drawn frames skipped\n",
+                frames*1000.0f/dt,run_us/1000.0f/frames,blit_us/1000.0f/frames,skipped);
+            t0=now_ms(); frames=0; run_us=0; skipped=0; blit_us=0; }
         if(pcm && an){ /* a write stuck for 0.6 s (codec not clocking) is interrupted by SIGALRM:
                         * then play on without sound instead of freezing the game */
             struct itimerval it={{0,0},{0,600000}}, off={{0,0},{0,0}};
