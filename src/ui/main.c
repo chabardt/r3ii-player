@@ -452,9 +452,12 @@ static void show_player(const char*title,const char*dir){
 }
 
 /* ---- Browser ---- */
-typedef struct { char name[256]; int dir; } entry_t;
+typedef struct { char name[256]; char key[64]; int dir; } entry_t;   /* key: folded name, for sorting */
+/* folders first, then by name ignoring case and accents (Édith Piaf among the E's, not after Z);
+ * names in other scripts fold to '?' and so sort with the "#" group of the rail */
 static int ecmp(const void*a,const void*b){ const entry_t*x=a,*y=b;
-    if(x->dir!=y->dir)return y->dir-x->dir; return strcasecmp(x->name,y->name); }
+    if(x->dir!=y->dir)return y->dir-x->dir;
+    int c=strcasecmp(x->key,y->key); return c?c:strcmp(x->name,y->name); }
 
 /* one browser screen's folder + entries, owned by the screen (freed when it is deleted;
  * screens are deleted asynchronously, so no globals) — rows only store their index */
@@ -617,6 +620,8 @@ static void show_browser(const char*path){
     }
     uint32_t T1=r3_tick_ms();
     {
+        for(int i=0;i<ne;i++){ char f[256]; snprintf(f,sizeof f,"%s",es[i].name); ascii_fold(f);   /* fold once, not per compare */
+            snprintf(es[i].key,sizeof es[i].key,"%s",f); }
         qsort(es,ne,sizeof(entry_t),ecmp);
         brdata_t*bd=malloc(sizeof(brdata_t)+sizeof(entry_t)*(size_t)(ne?ne:1));
         snprintf(bd->dir,sizeof bd->dir,"%s",cur); bd->n=ne; bd->list=list; bd->built=calloc(ne?ne:1,1);
@@ -2041,7 +2046,8 @@ static void sd_hotplug(void){
     int present = access("/dev/mmcblk0p1",F_OK)==0, mounted=sd_mounted();
     if(present && !mounted){ mkdir("/usr/data/mnt",0755); mkdir("/usr/data/mnt/sd_0",0755);
         if(mount("/dev/mmcblk0p1","/usr/data/mnt/sd_0","vfat",0,"codepage=936,iocharset=utf8")==0) DBG("sd mounted\n"); }
-    else if(!present && mounted){ umount2("/usr/data/mnt/sd_0",MNT_DETACH); DBG("sd removed\n"); }
+    else if(!present && mounted){ fonts_sd_detach(); umount2("/usr/data/mnt/sd_0",MNT_DETACH); DBG("sd removed\n"); }
+    if(present && sd_mounted() && fonts_sd_attach()) DBG("sd font attached (CJK...)\n");   /* Fonts/<x>.ttf */
 }
 static void tick_ui(void){
     { static uint32_t lsd; uint32_t t=r3_tick_ms(); if(t-lsd>=3000){ lsd=t; sd_hotplug(); } }
@@ -2125,6 +2131,7 @@ int main(int argc,char**argv){
     /* NOTE: no hiby_player DAC-init — the "it makes sound loud" was a volume red herring;
        the codec needs no stock init, so we boot straight into our UI (fast, no stock flash). */
     fb_init(); lv_init(); fonts_init(); i18n_load();   /* fonts before any screen; language before any text */
+    if(fonts_sd_attach()) DBG("sd font attached (CJK...)\n");   /* Fonts/<x>.ttf on the card (mounted above) */
     static lv_disp_draw_buf_t db; static lv_color_t buf[480*120];
     lv_disp_draw_buf_init(&db,buf,NULL,480*120);
     static lv_disp_drv_t dd; lv_disp_drv_init(&dd);
