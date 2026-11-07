@@ -181,22 +181,35 @@ int smartmix_ready(void){ return g_ready; }
 int smartmix_count(void){ return NE; }
 
 /* --- index-backed browsing: enumerate the index instead of hitting the slow SD --- */
+/* case-insensitive FNV-1a */
+static unsigned hash_ci(const char*s,int n){ unsigned h=2166136261u;
+    for(int i=0;i<n;i++){ h^=(unsigned char)tolower((unsigned char)s[i]); h*=16777619u; } return h; }
+/* Entries of one folder, from the index. The first path component of every track below
+ * `dir` is one entry; duplicates (all the tracks of an artist) are dropped. This used to
+ * compare each track with every entry found so far — O(tracks x entries), ~0.9 s for the
+ * Music root with 600+ artists on the R3. Now: same as the previous track (tracks of a
+ * folder are consecutive in the index) or a hash-set lookup. */
 int smartmix_listdir(const char*dir,char names[][256],char*isdir,int cap){
     if(!g_ready) return -1;
     const char*r=rel_of(dir); char prefix[1024];
     if(!r[0]) prefix[0]=0; else snprintf(prefix,sizeof prefix,"%s/",r);
-    size_t pfl=strlen(prefix); int n=0;
+    size_t pfl=strlen(prefix); int n=0, last=-1;
+    enum { HB=8192 };                       /* > 2 x cap: open addressing stays short */
+    short *slot=calloc(HB,sizeof *slot); if(!slot) return -1;     /* entry index + 1, 0 = free */
     for(int i=0;i<NE;i++){ const char*rel=E[i].rel;
         if(pfl && strncmp(rel,prefix,pfl)) continue;
         const char*rest=rel+pfl; if(!*rest) continue;
         const char*sl=strchr(rest,'/');
         int d=sl?1:0, cl=sl?(int)(sl-rest):(int)strlen(rest); if(cl>255)cl=255;
-        char comp[256]; memcpy(comp,rest,cl); comp[cl]=0;
-        int dup=0; for(int k=0;k<n;k++) if(isdir[k]==d && !strcasecmp(names[k],comp)){ dup=1; break; }
-        if(dup) continue;
-        if(n>=cap) break;
-        memcpy(names[n],comp,cl+1); isdir[n]=(char)d; n++;
+        if(last>=0 && isdir[last]==d && !strncasecmp(names[last],rest,cl) && !names[last][cl]) continue;
+        unsigned k=(hash_ci(rest,cl)*2u+(unsigned)d)&(HB-1); int dup=-1;
+        while(slot[k]){ int j=slot[k]-1; if(isdir[j]==d && !strncasecmp(names[j],rest,cl) && !names[j][cl]){ dup=j; break; }
+            k=(k+1)&(HB-1); }
+        if(dup>=0){ last=dup; continue; }
+        if(n>=cap || n>=HB/2) break;
+        memcpy(names[n],rest,cl); names[n][cl]=0; isdir[n]=(char)d; slot[k]=(short)(n+1); last=n; n++;
     }
+    free(slot);
     return n;
 }
 int smartmix_folder(const char*dir,char out[][1024],int cap){
