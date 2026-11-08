@@ -413,7 +413,8 @@ static int pick_song(void){
             if(access(c[n],R_OK)){ char*m=strstr(l,"Music/"); if(m) snprintf(c[n],640,SDR "/%s",m); }
             if(!access(c[n],R_OK)) n++; }
         fclose(f); }
-    if(n) snprintf(song_path,sizeof song_path,"%s",c[rand()%n]);
+    if(getenv("R3DRUM_SONG")){ snprintf(song_path,sizeof song_path,"%s",getenv("R3DRUM_SONG")); n=1; }   /* testing */
+    else if(n) snprintf(song_path,sizeof song_path,"%s",c[rand()%n]);
     else for(int t=0;t<6;t++) if(pick_from_dir(SDR "/Music",0)){ n=1; break; }
     if(!n) return 0;
     /* "ARTIST - TITLE" in the 5x7 font's alphabet */
@@ -1203,12 +1204,12 @@ static void short_back(void){                                       /* short pow
 static void poll_keys(void){
     struct input_event e;
     while(kp_fd>=0 && read(kp_fd,&e,sizeof e)==sizeof e){ if(e.type!=EV_KEY) continue;
-        if(e.code==116){ if(e.value==1){ pwr_down=1; pwr_t=now_us(); }
+        if(e.code==116){ fprintf(stderr,"[keys] power %d\n",e.value); if(e.value==1){ pwr_down=1; pwr_t=now_us(); }
             else if(e.value==0 && pwr_down){ pwr_down=0; if(now_us()-pwr_t<1000000) short_back(); } }
         else if(e.code==165 && e.value==1) drum(DR_DUM,ev_sample(&e),SRC_KEYS); }
     if(pwr_down && now_us()-pwr_t>=1200000){ pwr_down=0;            /* hold power: leave Drumfolk, from anywhere */
         if(st==ST_BATTLE && end_t<=0){ bk_on=0; end_battle(0); }
-        music_stop(); quit=1; }
+        fprintf(stderr,"[r3drum] power held: leaving\n"); music_stop(); quit=1; }
     while(km_fd>=0 && read(km_fd,&e,sizeof e)==sizeof e){ if(e.type!=EV_KEY || e.value!=1) continue;
         if(e.code==163) drum(DR_KA,ev_sample(&e),SRC_KEYS);
         else if(e.code==164) drum(DR_TOK,ev_sample(&e),SRC_KEYS);
@@ -1308,6 +1309,7 @@ int main(int argc,char**argv){
         int64_t until=t0+1000000/40;
         while(now_us()<until && !quit){ poll_pads(); poll_touch(); poll_keys(); usleep(2000); }
     }
+    fprintf(stderr,"[r3drum] leaving: quit=%d st=%d land=%d paused=%d nsquad=%d pads=%d\n",quit,st,land,paused,A.nsquad,pad_count());
     save_game(); music_stop();
     audio_run=0; pthread_join(at,NULL);
     if(pcm) pcm_close(pcm); if(mx) mixer_close(mx); bt_close();
