@@ -11,9 +11,10 @@
 
 #define DR_RATE 48000
 enum { DR_DUM, DR_KA, DR_TOK, DR_CHI, DR_NDRUMS };
-enum { CMD_NONE=-1, CMD_MARCH, CMD_STRIKE, CMD_GUARD, CMD_RETREAT, CMD_RALLY, CMD_N };
+enum { CMD_NONE=-1, CMD_MARCH, CMD_STRIKE, CMD_GUARD, CMD_RETREAT, CMD_RALLY, CMD_SPECIAL, CMD_N };
 enum { J_NONE, J_PERFECT, J_GOOD, J_MISS };
 #define DR_FEVER_AT 4
+#define DR_SUPER_AT 8           /* super fever; SPECIAL (CHI KA CHI KA) only works then, and spends it */
 #define DR_PERFECT_MS 50
 #define DR_GOOD_MS 110
 
@@ -26,12 +27,12 @@ typedef struct {
     unsigned char seq[4]; int64_t seq_beat[4]; int nseq;   /* hits of the command being entered */
     int resp_cmd; int64_t resp_beat;                       /* performing resp_cmd on beats resp_beat..+3 */
     int64_t next_start;        /* beat the next command must start on to keep the streak (-1: none) */
-    int combo, fever;
+    int combo, fever, super;
     /* events for the frontend, set by rc_hit / rc_tick, cleared by the caller */
     int ev_judge;              /* J_* of the last hit */
     int ev_cmd;                /* a command was recognised (CMD_*), its response starts next beat */
     int ev_break;              /* streak broken */
-    int ev_fever_on, ev_fever_off;
+    int ev_fever_on, ev_fever_off, ev_super_on, ev_not_ready;   /* not_ready: SPECIAL drummed without super fever */
 } rc_t;
 
 void    rc_init(rc_t*r,int bpm,int64_t t0);

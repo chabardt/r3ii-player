@@ -8,7 +8,7 @@ static int fail;
 
 static rc_t r;
 static int64_t T(int64_t b,int ms){ return rc_beat_time(&r,b)+MS(ms); }
-static void clear(void){ r.ev_judge=J_NONE; r.ev_cmd=CMD_NONE; r.ev_break=0; r.ev_fever_on=r.ev_fever_off=0; }
+static void clear(void){ r.ev_judge=J_NONE; r.ev_cmd=CMD_NONE; r.ev_break=0; r.ev_fever_on=r.ev_fever_off=0; r.ev_super_on=r.ev_not_ready=0; }
 /* play command c starting on beat b (offset ms on every hit), ticking time along */
 static int play(int c,int64_t b,int ms){ int last=J_NONE;
     for(int i=0;i<4;i++){ rc_tick(&r,T(b+i,ms)); last=rc_hit(&r,DR_PATTERN[c][i],T(b+i,ms)); }
@@ -55,6 +55,17 @@ int main(void){
     rc_init(&r,120,1000); rc_hit(&r,DR_DUM,T(0,0)); CHECK(rc_hit(&r,DR_KA,T(0,40))==J_MISS && r.nseq==0,"two hits on one beat");
     /* half command abandoned */
     rc_init(&r,120,1000); rc_hit(&r,DR_DUM,T(0,0)); rc_hit(&r,DR_KA,T(1,0)); rc_tick(&r,T(2,300)); CHECK(r.nseq==0,"stale sequence dropped");
+    /* super fever at 8 in a row; SPECIAL works only then and spends it (back to plain fever) */
+    rc_init(&r,120,1000); clear();
+    for(int k=0;k<7;k++) play(k%2?CMD_STRIKE:CMD_MARCH,k*8,0);
+    CHECK(r.combo==7 && r.fever && !r.super,"7 in a row: fever, no super (%d)",r.combo);
+    clear(); play(CMD_GUARD,56,0); CHECK(r.combo==8 && r.super && r.ev_super_on,"super fever at 8");
+    clear(); play(CMD_SPECIAL,64,0); CHECK(r.ev_cmd==CMD_SPECIAL && !r.super && r.fever && r.combo==DR_FEVER_AT,"special spends super (combo %d)",r.combo);
+    clear(); play(CMD_MARCH,72,0); CHECK(r.combo==DR_FEVER_AT+1 && r.fever,"streak goes on after the special");
+    /* SPECIAL without super fever: not ready, streak broken */
+    rc_init(&r,120,1000); clear(); play(CMD_MARCH,0,0); clear(); play(CMD_SPECIAL,8,0);
+    CHECK(r.ev_not_ready && r.ev_cmd==CMD_NONE && r.combo==0,"special too early");
+
     /* negative beats (input before t0) don't crash the maths */
     rc_init(&r,120,48000); CHECK(rc_nearest_beat(&r,10)==-2 || rc_nearest_beat(&r,10)==-1,"before t0");
 
