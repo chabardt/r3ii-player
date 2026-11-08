@@ -217,7 +217,9 @@ static void mix_block(int16_t*out,int n){
         l=l*13/32; if(soft_gain<32768) l=(int32_t)(((int64_t)l*soft_gain)>>15);
         if(l>30000) l=30000; if(l<-30000) l=-30000; out[2*i]=out[2*i+1]=(int16_t)l; }
 }
-static int PERIOD=256, NPER=3;          /* the smallest the DAC driver accepts (see main) */
+static int PERIOD=1024, NPER=4;         /* DAC buffer (see open_dac) */
+#define BLK 512                            /* mixed and written per step */
+#define QMAX 1536                          /* frames allowed in the DAC queue before writing: ~32-43 ms */
 /* Output follows r3player: the wired DAC, or the Bluetooth device it uses (aplay -D r3bt through a
  * small pipe, like audio.c). A DAC that takes nothing for 0.6 s (it stops clocking while a BT
  * output is active) is dropped: the game then runs on the clock alone instead of hanging. */
@@ -244,7 +246,9 @@ static int bt_open(void){
 }
 static void dac_route(void); static void hw_volume(void);
 static void open_dac(void){                 /* lowest latency first; the codec driver decides what it takes */
-    static const int TRY[][2]={{256,4},{512,2},{512,3},{1024,2},{1024,4}};
+    /* never small periods: 256-frame periods are accepted but wedge the codec's DMA until a power
+     * cycle (then nothing plays, r3player included). 1024x4 is what r3gb / r3gba use. */
+    static const int TRY[][2]={{1024,4},{2048,8}};
     for(unsigned i=0;i<sizeof TRY/sizeof TRY[0] && !pcm;i++){
         struct pcm_config cfg; memset(&cfg,0,sizeof cfg);
         cfg.channels=2; cfg.rate=DR_RATE; cfg.period_size=TRY[i][0]; cfg.period_count=TRY[i][1]; cfg.format=PCM_FORMAT_S16_LE;
@@ -256,25 +260,30 @@ static void open_dac(void){                 /* lowest latency first; the codec d
 }
 static void bt_close(void){ if(bt_fd>=0) close(bt_fd); bt_fd=-1; if(bt_pid>0){ kill(bt_pid,SIGTERM); waitpid(bt_pid,0,0); } bt_pid=-1; }
 static void*audio_thread(void*arg){ (void)arg;
-    static int16_t buf[1024*2]; int64_t stuck_since=0;
+    static int16_t buf[1024*2];
     while(audio_run){
-        mix_block(buf,PERIOD);
+        mix_block(buf,BLK);
         int buffered=0;
         if(bt_fd>=0){ const char*q=(const char*)buf; size_t left=(size_t)PERIOD*4;
+            left=(size_t)BLK*4;
             while(left){ ssize_t w=write(bt_fd,q,left); if(w<0){ if(errno==EINTR) continue;
                     fprintf(stderr,"[r3drum] bluetooth gone: wired output\n"); bt_close(); open_dac(); break; } q+=w; left-=(size_t)w; }
             buffered=bt_lat; }
         else if(pcm){
-            int r=pcm_wait(pcm,100);                                     /* never block forever */
-            if(r<=0){ if(!stuck_since) stuck_since=now_us();
-                if(now_us()-stuck_since>600000){ fprintf(stderr,"[r3drum] DAC not consuming: sound off\n"); pcm_close(pcm); pcm=NULL; }
-                continue; }
-            stuck_since=0;
-            if(pcm_write(pcm,buf,PERIOD*4)) pcm_prepare(pcm);
-            unsigned avail=0; struct timespec ts;
-            if(pcm_get_htimestamp(pcm,&avail,&ts)==0){ buffered=PERIOD*NPER-(int)avail; if(buffered<0) buffered=0; } }
-        else usleep(PERIOD*1000000/DR_RATE);
-        pthread_mutex_lock(&clk_mu); written+=PERIOD; anchor_played=written-buffered; anchor_us=now_us(); pthread_mutex_unlock(&clk_mu);
+            /* low latency on a big buffer: write only when <= QMAX frames are still queued */
+            int64_t wait0=now_us(); unsigned last_av=0; int64_t moved=now_us();
+            for(;;){ unsigned avail=0; struct timespec ts;
+                if(pcm_get_htimestamp(pcm,&avail,&ts)!=0) break;              /* not started yet */
+                buffered=PERIOD*NPER-(int)avail; if(buffered<=QMAX) break;
+                if(avail!=last_av){ last_av=avail; moved=now_us(); }
+                if(now_us()-moved>600000){ fprintf(stderr,"[r3drum] DAC not consuming: sound off\n"); pcm_close(pcm); pcm=NULL; break; }
+                if(!audio_run) break; usleep(1000); }
+            (void)wait0;
+            if(pcm){ if(pcm_write(pcm,buf,BLK*4)) pcm_prepare(pcm);
+                unsigned avail=0; struct timespec ts;
+                if(pcm_get_htimestamp(pcm,&avail,&ts)==0){ buffered=PERIOD*NPER-(int)avail; if(buffered<0) buffered=0; } } }
+        else usleep(BLK*1000000/DR_RATE);
+        pthread_mutex_lock(&clk_mu); written+=BLK; anchor_played=written-buffered; anchor_us=now_us(); pthread_mutex_unlock(&clk_mu);
     }
     return 0;
 }
@@ -283,23 +292,36 @@ static void hw_volume(void){
     if(!mx) return; int hw=255-(vol<0?0:vol>255?255:vol);
     struct mixer_ctl*l=mixer_get_ctl_by_name(mx,"Left Playback Volume"),*r=mixer_get_ctl_by_name(mx,"Right Playback Volume");
     if(l) mixer_ctl_set_value(l,0,hw); if(r) mixer_ctl_set_value(r,0,hw); }
+/* route like r3player (audio.c mx_fixed): the 4.4 mm balanced jack is port 3 + "Balance Lineout En",
+ * 3.5 mm headphones port 1. Forcing port 1 left the codec without a path on the balanced jack:
+ * it never clocked ("DAC not consuming"). */
+static int read_switch(const char*p){ FILE*f=fopen(p,"r"); int v=-1; if(f){ if(fscanf(f,"%d",&v)!=1) v=-1; fclose(f); } return v; }
 static void dac_route(void){ if(!mx) return;
-    struct mixer_ctl*mo=mixer_get_ctl_by_name(mx,"Mute Output"),*sm=mixer_get_ctl_by_name(mx,"Soft Mute"),*op=mixer_get_ctl_by_name(mx,"Output Port Switch");
-    if(mo) mixer_ctl_set_value(mo,0,0); if(sm) mixer_ctl_set_value(sm,0,0); if(op) mixer_ctl_set_value(op,0,1); }
+    struct mixer_ctl*mo=mixer_get_ctl_by_name(mx,"Mute Output"),*sm=mixer_get_ctl_by_name(mx,"Soft Mute"),*op=mixer_get_ctl_by_name(mx,"Output Port Switch"),
+                    *be=mixer_get_ctl_by_name(mx,"Balance Lineout En");
+    int bal=read_switch("/sys/class/switch/balance/state"), hs=read_switch("/sys/class/switch/headset/state");
+    int port = bal==1 ? 3 : (hs==1 ? 1 : 3);
+    if(mo) mixer_ctl_set_value(mo,0,0); if(sm) mixer_ctl_set_value(sm,0,0); if(op) mixer_ctl_set_value(op,0,port);
+    if(be) mixer_ctl_set_value(be,0,bal==1?1:0);
+    fprintf(stderr,"[r3drum] DAC route: port %d%s\n",port,bal==1?" (balanced 4.4 mm)":hs==1?" (3.5 mm)":""); }
 
 /* ======================================================================= state */
-enum { ST_CAMP, ST_EDIT, ST_BATTLE, ST_RESULT, ST_LISTEN };
-static int st=ST_CAMP, sel=0, slot=0, offset_ms=30, paused, quit;
+enum { ST_CAMP, ST_EDIT, ST_BATTLE, ST_RESULT, ST_LISTEN, ST_TEST };
+static int st=ST_CAMP, sel=0, slot=0, paused, quit;
+enum { SRC_TOUCH, SRC_PAD, SRC_KEYS, SRC_N };
+static int off_src[SRC_N]={30,30,30};      /* timing offset per input, ms (measured on the rhythm test) */
+static const char*const SRC_NAME[SRC_N]={"TOUCH","JOY-CON","R3 KEYS"};
 static armory_t A;
 static uint32_t vb_until;
-typedef struct { uint32_t magic, ver; armory_t a; int offset, sel, music; } save_t;   /* v1 had no music */
+typedef struct { uint32_t magic, ver; armory_t a; int offset, sel, music, off3[3]; } save_t;   /* v1: no music, v2: one offset */
 static int music_opt;
 #define MAGIC 0x44524D46u
-static void save_game(void){ save_t s={MAGIC,2,A,offset_ms,sel,music_opt}; FILE*f=fopen(SAVE ".tmp","wb"); if(!f) return;
+static void save_game(void){ save_t s={MAGIC,3,A,off_src[0],sel,music_opt,{off_src[0],off_src[1],off_src[2]}}; FILE*f=fopen(SAVE ".tmp","wb"); if(!f) return;
     int ok=fwrite(&s,sizeof s,1,f)==1; fflush(f); fsync(fileno(f)); fclose(f); if(ok) rename(SAVE ".tmp",SAVE); }
 static void load_game(void){ dg_armory_default(&A); save_t s; FILE*f=fopen(SAVE,"rb");
     if(f){ memset(&s,0,sizeof s); size_t n=fread(&s,1,sizeof s,f);
-        if(n>=offsetof(save_t,music) && s.magic==MAGIC && (s.ver==1||s.ver==2)){ A=s.a; offset_ms=s.offset; sel=s.sel; music_opt=s.ver>=2?s.music:0; }
+        if(n>=offsetof(save_t,music) && s.magic==MAGIC && s.ver>=1 && s.ver<=3){ A=s.a; sel=s.sel; music_opt=s.ver>=2?s.music:0;
+            for(int i=0;i<SRC_N;i++) off_src[i]= s.ver>=3 ? s.off3[i] : s.offset; }
         fclose(f); }
     if(A.nsquad<1||A.nsquad>DG_MAXU) dg_armory_default(&A);
     if(sel<0||sel>=DG_NMISSION||sel>A.cleared) sel=0; }
@@ -771,7 +793,7 @@ static void draw_battle(void){
     if(music_live && G.time<12){ char b[80]; snprintf(b,sizeof b,"MUSIC: %s",song_title); textcs(SW/2,PF_Y+396,b,1,0xF4E4D0); }
     hud(); draw_pads();
     if(paused){ dim(0,TOP,SW,SH-TOP); legend(PF_Y+92); textcs(SW/2,PF_Y+260,"PAUSED",4,0xF4E4D0);
-        textc(SW/2,PF_Y+310,"POWER: RESUME   HOLD POWER: CAMP",1,0xC0A080); }
+        textc(SW/2,PF_Y+310,"POWER OR TAP: RESUME   HOLD POWER: LEAVE",1,0xC0A080); }
     if(st==ST_BATTLE && end_t>0) textcs(SW/2,PF_Y+200,G.won?"VICTORY!":"THE SQUAD FELL",4,G.won?0xFFE040:0xFF5040);
 }
 
@@ -861,16 +883,23 @@ static void battle_events(void){
     G.ev_scout_flee=G.ev_alarm=G.ev_gate_down=0;
     G.ev_block=0;
 }
+static void resume_play(void){
+    paused=0; rc.nseq=0;
+    if(music_live) music_reanchor();
+    else { int64_t t=now_sample()+DR_RATE; rc_init(&rc,120,t); last_beat=-1; bk_t0=t; bk_fever=0; bk_on=1; }
+}
 static void hit_fx(void){ /* sparks where enemies just got hit: cheap approximation from flash */
     for(int k=0;k<DG_MAXE;k++){ enemy_t*e=&G.e[k]; if(!e->on) continue;
         if(e->flash>0.24f){ burst(dg_front(e)+10,e->y-30-(DG_ETYPE[e->type].boss>=0?50:0),5,0xFFE0A0,90,2,1); }
         if(e->hp<=0 && e->flash>0.2f){ burst(e->x,e->y-30,14,DG_ETYPE[e->type].color,120,4,1); e->flash=0.19f; } }
 }
-static void drum(int d,int64_t t){
+static void test_hit(int src,int64_t t);
+static void drum(int d,int64_t t,int src){
+    if(st==ST_TEST){ test_hit(src,t); return; }
     if(st!=ST_BATTLE || paused || end_t>0) return;
     pad_t[d]=0.15f;
     snd(S_DUM+d,1,0);
-    int j=rc_hit(&rc,d,t-(int64_t)offset_ms*DR_RATE/1000);
+    int j=rc_hit(&rc,d,t-(int64_t)off_src[src]*DR_RATE/1000);
     judge=j; judge_t=0.5f;
     if(j==J_MISS) snd(S_MISS,1,0);
     if(rc.ev_cmd!=CMD_NONE){ int c=rc.ev_cmd; rc.ev_cmd=CMD_NONE; say_cmd(c);
@@ -883,7 +912,8 @@ static void battle_tick(float dt){
     if(paused) return;
     int64_t ns=now_sample();
     { static int seen; if(music_live && beat_ver!=seen && rc.nseq==0 && rc_responding(&rc,ns,0)==CMD_NONE){ seen=beat_ver; music_reanchor(); } }
-    rc_tick(&rc,ns-(int64_t)offset_ms*DR_RATE/1000);
+    { int mo=off_src[0]; for(int i=1;i<SRC_N;i++) if(off_src[i]>mo) mo=off_src[i];   /* lenient: the latest input */
+      rc_tick(&rc,ns-(int64_t)mo*DR_RATE/1000); }
     if(rc.ev_break||rc.ev_fever_off){ rc.ev_break=0; rc.ev_fever_off=0; bk_fever=0; }
     int64_t cb=(ns-rc.t0)>=0 ? (ns-rc.t0)/rc.beat : -1;
     while(last_beat<cb && end_t<=0){ last_beat++;
@@ -939,9 +969,10 @@ static void draw_camp(void){
             text(x+60,yy+50,DG_SHIELD[l->shield].name,1,l->shield?0xC0A080:0x5A4A3A); }
         else textc(x+112,yy+32,"+ ADD",2,0x8A6A4A); }
     /* buttons */
-    y=TOP+636; rbox(12,y,224,52,10,0x1E1814);
-    rbox(16,y+4,44,44,8,0x3A2A1A); textc(38,y+16,"-",3,0xF4E4D0); rbox(188,y+4,44,44,8,0x3A2A1A); textc(210,y+16,"+",3,0xF4E4D0);
-    char b[24]; snprintf(b,sizeof b,"%+dMS",offset_ms); textc(124,y+10,"TIMING",1,0xC0A080); textc(124,y+26,b,2,0xF4E4D0);
+    y=TOP+636; rbox(12,y,224,52,10,0x2A2018); frame(12,y,224,52,1,0x5A4A3A);
+    textc(124,y+10,"RHYTHM TEST",2,0xF4E4D0);
+    { char b[48]; snprintf(b,sizeof b,"TOUCH %+d  PAD %+d  KEYS %+d",off_src[0],off_src[1],off_src[2]); textc(124,y+34,b,1,0xC0A080); }
+    text(8,TOP+4,"HOLD POWER: LEAVE",1,0x6A5A4A);
     rbox(244,y,224,52,12,0xE8731C); textc(356,y+12,"MARCH!",4,0x101010);
 }
 static void cycle_weapon(loadout_t*l,int dir){
@@ -987,6 +1018,7 @@ static void draw_result(void){
     else textc(SW/2,y,victory?"NOTHING NEW THIS TIME":"THE SQUAD WILL BE BACK",2,0x8A6A4A);
     textc(SW/2,TOP+640,"TAP TO RETURN TO CAMP",2,0xC0A080);
 }
+static void test_enter(void);
 static void tap(int x,int y){
     if(st==ST_CAMP){
         if(y>=TOP+40 && y<TOP+70 && x>=110 && x<370){ music_opt=!music_opt; save_game(); snd(S_TOK,0.7f,0); return; }
@@ -994,8 +1026,7 @@ static void tap(int x,int y){
         int sy=TOP+462; for(int i=0;i<DG_MAXU;i++){ int xx=12+(i%2)*232, yy=sy+(i/2)*84;
             if(x>=xx&&x<xx+224&&y>=yy&&y<yy+78){ if(i>=A.nsquad){ i=A.nsquad++; A.squad[i]=(loadout_t){CL_LANCER,-1,0}; fix_loadout(&A.squad[i]); }
                 slot=i; st=ST_EDIT; snd(S_KA,0.7f,0); return; } }
-        int by=TOP+636; if(y>=by&&y<by+52){ if(x<70){ if(offset_ms>-150) offset_ms-=5; snd(S_TOK,0.5f,0); }
-            else if(x>=180&&x<240){ if(offset_ms<150) offset_ms+=5; snd(S_TOK,0.5f,0); }
+        int by=TOP+636; if(y>=by&&y<by+52){ if(x<240){ test_enter(); snd(S_TOK,0.6f,0); }
             else if(x>=244){ save_game(); snd(S_DUM,1,0); start_battle(); } }
         return; }
     if(st==ST_EDIT){ loadout_t*l=&A.squad[slot];
@@ -1009,6 +1040,80 @@ static void tap(int x,int y){
     if(st==ST_RESULT){ st=ST_CAMP; if(sel<A.cleared && sel<DG_NMISSION-1 && victory) sel++; return; }
 }
 
+/* ======================================================================= rhythm test
+ * A metronome (120 BPM, through the same output as the game) and a tap area: every hit is placed
+ * against the nearest click. Per input: mean offset = latency to compensate, spread = jitter,
+ * interval spread = how regular the taps are. USE THESE stores the offsets. With the click off,
+ * only regularity is measured. */
+typedef struct { int src, off; } thit_t;
+static thit_t TH[24]; static int nth, test_click=1; static int64_t test_t0, test_beat, last_hit[SRC_N];
+static int64_t ts_n[SRC_N], ts_sum[SRC_N], ts_sq[SRC_N], ti_n[SRC_N], ti_sum[SRC_N], ti_sq[SRC_N];
+static float test_flash, test_src_flash[SRC_N];
+static const uint32_t SRC_C[SRC_N]={0xE8731C,0x5AB0F0,0x80E080};
+static void test_reset(void){ nth=0; memset(ts_n,0,sizeof ts_n); memset(ts_sum,0,sizeof ts_sum); memset(ts_sq,0,sizeof ts_sq);
+    memset(ti_n,0,sizeof ti_n); memset(ti_sum,0,sizeof ti_sum); memset(ti_sq,0,sizeof ti_sq); memset(last_hit,0,sizeof last_hit); }
+static void test_enter(void){
+    st=ST_TEST; test_reset(); test_beat=DR_RATE/2; test_t0=now_sample()+DR_RATE/2;
+    bk_t0=test_t0; bk_beat=test_beat; bk_fever=0; bk_on=test_click;
+}
+static void test_leave(void){ bk_on=0; st=ST_CAMP; save_game(); }
+static void test_hit(int src,int64_t t){
+    test_src_flash[src]=0.15f; snd(S_TOK,0.8f,0);
+    int64_t rel=t-test_t0, b=(rel+test_beat/2)/test_beat; if(rel<-test_beat/2) b=-1;
+    int off=(int)((rel-b*test_beat)*1000/DR_RATE);
+    if(test_click){ ts_n[src]++; ts_sum[src]+=off; ts_sq[src]+=(int64_t)off*off;
+        memmove(TH+1,TH,sizeof TH-sizeof TH[0]); TH[0]=(thit_t){src,off}; if(nth<24) nth++; }
+    if(last_hit[src]){ int iv=(int)((t-last_hit[src])*1000/DR_RATE); if(iv>200 && iv<1500){ ti_n[src]++; ti_sum[src]+=iv; ti_sq[src]+=(int64_t)iv*iv; } }
+    last_hit[src]=t;
+    if(!test_click){ memmove(TH+1,TH,sizeof TH-sizeof TH[0]); TH[0]=(thit_t){src,0}; if(nth<24) nth++; }
+}
+static int isd(int64_t n,int64_t sum,int64_t sq){ if(n<2) return 0; int64_t m=sum/n; int64_t v=sq/n-m*m; return v>0?isqrt(v):0; }
+#define TA_Y (TOP+64)
+#define TA_H 250
+static int test_tap(int x,int y,int64_t t){
+    if(y>=TA_Y && y<TA_Y+TA_H){ test_hit(SRC_TOUCH,t); return 1; }
+    if(y>=TOP+30 && y<TOP+58){ test_click=!test_click; test_reset(); bk_on=test_click; return 1; }
+    int by=TOP+636; if(y>=by && y<by+52){
+        if(x<160){ for(int s2=0;s2<SRC_N;s2++) if(ts_n[s2]>=8){ int m=(int)(ts_sum[s2]/ts_n[s2]); if(m<-300)m=-300; if(m>400)m=400; off_src[s2]=m; }
+            save_game(); snd(S_DUM,1,0); }
+        else if(x<320){ test_reset(); snd(S_TOK,0.6f,0); }
+        else test_leave();
+        return 1; }
+    return 0;
+}
+static void draw_test(float dt){
+    rect(0,TOP,SW,SH-TOP,0x120E0C);
+    textcs(SW/2,TOP+4,"RHYTHM TEST",3,0xE8731C);
+    rbox(140,TOP+32,200,24,10,test_click?0x3A2A1A:0x1E1814); textc(SW/2,TOP+40,test_click?"CLICK: ON (120 BPM)":"CLICK: OFF (REGULARITY)",1,0xF4E4D0);
+    /* tap area, flashing on the click */
+    int64_t ns=now_sample(); float ph = ns>=test_t0 ? (float)((ns-test_t0)%test_beat)/test_beat : 1;
+    if(test_click && ph<0.08f) test_flash=0.12f;
+    uint32_t c = test_flash>0 ? 0x5A3A1A : 0x2A2018; rbox(12,TA_Y,456,TA_H,16,c);
+    textc(SW/2,TA_Y+90,test_click?"TAP HERE ON THE CLICK":"TAP HERE, STEADY",2,0xF4E4D0);
+    textc(SW/2,TA_Y+120,"OR PRESS JOY-CON / R3 KEYS",1,0xC0A080);
+    for(int s2=0;s2<SRC_N;s2++){ if(test_src_flash[s2]>0){ circle(80+s2*160,TA_Y+190,22,SRC_C[s2]); test_src_flash[s2]-=dt; } else ring(80+s2*160,TA_Y+190,22,2,SRC_C[s2]);
+        textc(80+s2*160,TA_Y+222,SRC_NAME[s2],1,SRC_C[s2]); }
+    if(test_flash>0) test_flash-=dt;
+    /* hits against the click: -150..+150 ms */
+    int gy=TOP+324, gh=200, cx=SW/2; rect(12,gy,456,gh,0x0A0806);
+    if(test_click){ rect(cx-(int)(110*1.4f),gy,(int)(220*1.4f),gh,0x1A1410); rect(cx-(int)(50*1.4f),gy,(int)(100*1.4f),gh,0x24201A); rect(cx,gy,1,gh,0xF4E4D0);
+        text(16,gy+4,"EARLY",1,0x8A6A4A); text(SW-46,gy+4,"LATE",1,0x8A6A4A); }
+    for(int i=0;i<nth;i++){ int x=test_click? cx+(int)(TH[i].off*1.4f) : 24+(i%20)*22; if(x<16) x=16; if(x>SW-16) x=SW-16;
+        circle(x,gy+gh-10-i*8,4,SRC_C[TH[i].src]); }
+    /* stats */
+    int y=TOP+532;
+    for(int s2=0;s2<SRC_N;s2++){ char b[96];
+        if(test_click && ts_n[s2]) snprintf(b,sizeof b,"%-7s %2d HITS  OFFSET %+4d MS  SPREAD %3d MS  STEADY %3d MS",SRC_NAME[s2],(int)ts_n[s2],
+            (int)(ts_sum[s2]/ts_n[s2]),isd(ts_n[s2],ts_sum[s2],ts_sq[s2]),isd(ti_n[s2],ti_sum[s2],ti_sq[s2]));
+        else if(ti_n[s2]) snprintf(b,sizeof b,"%-7s %2d HITS  EVERY %4d MS  STEADY %3d MS",SRC_NAME[s2],(int)ti_n[s2]+1,(int)(ti_sum[s2]/ti_n[s2]),isd(ti_n[s2],ti_sum[s2],ti_sq[s2]));
+        else snprintf(b,sizeof b,"%-7s -",SRC_NAME[s2]);
+        text(16,y+s2*16,b,1,SRC_C[s2]); }
+    { char b[64]; snprintf(b,sizeof b,"IN USE: TOUCH %+d  PAD %+d  KEYS %+d MS",off_src[0],off_src[1],off_src[2]); text(16,y+54,b,1,0x8A6A4A); }
+    int by=TOP+636; rbox(12,by,148,52,10,0xE8731C); textc(86,by+12,"USE THESE",2,0x101010); textc(86,by+34,"8+ HITS EACH",1,0x3A2010);
+    rbox(166,by,148,52,10,0x2A2018); textc(240,by+18,"RESET",2,0xF4E4D0);
+    rbox(320,by,148,52,10,0x2A2018); textc(394,by+18,"BACK",2,0xF4E4D0);
+}
+
 /* ======================================================================= input */
 static int ts_fd=-1, kp_fd=-1, km_fd=-1;
 #define NS 10
@@ -1016,49 +1121,74 @@ static struct { int x,y,down,was; } sl[NS]; static int cur_slot;
 static int64_t ev_sample(const struct input_event*e){            /* evdev time (monotonic) -> sample clock */
     int64_t eu=(int64_t)e->input_event_sec*1000000+e->input_event_usec, nu=now_us(), d=nu-eu; if(d<0||d>200000) d=0;
     return now_sample()-d*DR_RATE/1000000; }
+static int test_tap(int x,int y,int64_t t);
 static void press_at(int x,int y,int64_t t){
-    if(st==ST_BATTLE){ if(y>=PAD_Y) for(int d=0;d<4;d++){ int px_,py,w,h; pad_rect(d,&px_,&py,&w,&h); if(x>=px_&&x<px_+w&&y>=py&&y<py+h){ drum(d,t); return; } }
-        if(paused && y<PAD_Y) paused=0;
+    static int logged; if(logged<20){ logged++; fprintf(stderr,"[touch] press %d,%d state %d\n",x,y,st); }
+    if(st==ST_BATTLE){ if(y>=PAD_Y) for(int d=0;d<4;d++){ int px_,py,w,h; pad_rect(d,&px_,&py,&w,&h); if(x>=px_&&x<px_+w&&y>=py&&y<py+h){ drum(d,t,SRC_TOUCH); return; } }
+        if(paused && y<PAD_Y) resume_play();
         return; }
+    if(st==ST_TEST && test_tap(x,y,t)) return;
     tap(x,y);
 }
+/* The R3's touchscreen speaks multitouch protocol A: every frame lists the fingers down, each ended
+ * by SYN_MT_REPORT; a lifted finger is just not listed any more (no tracking id -1). Waiting for a
+ * release (protocol B) kept the first finger "down" forever, so only the first tap ever counted.
+ * Contacts are rebuilt each SYN_REPORT; protocol B (ABS_MT_SLOT) is handled too. */
 static void poll_touch(void){
-    struct input_event e; static int sx,sy,sdown; static int mt;
+    struct input_event e; static int typeB, fx, fy, fhas, nfc, cx_[NS], cy_[NS], btn=0;
     while(read(ts_fd,&e,sizeof e)==sizeof e){
+        { static int raw; if(raw<60){ raw++; fprintf(stderr,"[touch] ev %d %d %d\n",e.type,e.code,e.value); } }
         if(e.type==EV_ABS){
-            if(e.code==ABS_MT_SLOT){ cur_slot=e.value<0||e.value>=NS?0:e.value; mt=1; }
-            else if(e.code==ABS_MT_TRACKING_ID){ mt=1; sl[cur_slot].down=e.value>=0; }
-            else if(e.code==ABS_MT_POSITION_X){ sl[cur_slot].x=e.value; sx=e.value; }
-            else if(e.code==ABS_MT_POSITION_Y){ sl[cur_slot].y=e.value; sy=e.value; }
-            else if(e.code==ABS_X) sx=e.value; else if(e.code==ABS_Y) sy=e.value;
-        } else if(e.type==EV_KEY && e.code==BTN_TOUCH && !mt) sdown=e.value;
-        else if(e.type==EV_SYN){ if(!mt){ sl[0].x=sx; sl[0].y=sy; sl[0].down=sdown; }
+            if(e.code==ABS_MT_SLOT){ typeB=1; cur_slot=e.value<0||e.value>=NS?0:e.value; }
+            else if(e.code==ABS_MT_TRACKING_ID){ if(typeB) sl[cur_slot].down=e.value>=0; }
+            else if(e.code==ABS_MT_POSITION_X||e.code==ABS_X){ if(typeB&&e.code==ABS_MT_POSITION_X) sl[cur_slot].x=e.value; fx=e.value; fhas=1; }
+            else if(e.code==ABS_MT_POSITION_Y||e.code==ABS_Y){ if(typeB&&e.code==ABS_MT_POSITION_Y) sl[cur_slot].y=e.value; fy=e.value; fhas=1; }
+        } else if(e.type==EV_KEY && e.code==BTN_TOUCH){ btn=e.value; }
+        else if(e.type==EV_SYN && e.code==SYN_MT_REPORT){ if(fhas && nfc<NS){ cx_[nfc]=fx; cy_[nfc]=fy; nfc++; } fhas=0; }
+        else if(e.type==EV_SYN && e.code==SYN_REPORT){
+            if(!typeB){                                   /* protocol A (or plain single touch) */
+                if(fhas && nfc<NS){ cx_[nfc]=fx; cy_[nfc]=fy; nfc++; } fhas=0;
+                if(!btn) nfc=0;
+                for(int i=0;i<NS;i++){ sl[i].down=i<nfc; if(i<nfc){ sl[i].x=cx_[i]; sl[i].y=cy_[i]; } } }
+            else if(!btn) for(int i=0;i<NS;i++) sl[i].down=0;
+            nfc=0;
             int64_t t=ev_sample(&e);
             for(int i=0;i<NS;i++){ if(sl[i].down && !sl[i].was) press_at(sl[i].x,sl[i].y,t); sl[i].was=sl[i].down; } }
     }
 }
 static int64_t pwr_t; static int pwr_down;
+static void test_leave(void);
+static void short_back(void){                                       /* short power / Joy-Con minus: pause, or back to camp */
+    if(st==ST_BATTLE && end_t<=0){ if(!paused){ paused=1; bk_on=0; } else resume_play(); }
+    else if(st==ST_TEST) test_leave();
+    else if(st!=ST_CAMP && st!=ST_BATTLE){ if(st==ST_LISTEN) music_stop(); st=ST_CAMP; save_game(); }
+}
 static void poll_keys(void){
     struct input_event e;
     while(kp_fd>=0 && read(kp_fd,&e,sizeof e)==sizeof e){ if(e.type!=EV_KEY) continue;
         if(e.code==116){ if(e.value==1){ pwr_down=1; pwr_t=now_us(); }
-            else if(e.value==0 && pwr_down){ pwr_down=0; if(now_us()-pwr_t<1000000){
-                if(st==ST_BATTLE && end_t<=0){ paused=!paused; if(paused){ bk_on=0; } else { int64_t t=now_sample()+DR_RATE; rc_init(&rc,120,t); last_beat=-1; bk_t0=t; bk_fever=0; bk_on=1; } }
-                else if(st==ST_EDIT){ st=ST_CAMP; save_game(); } } } }
-        else if(e.code==165 && e.value==1) drum(DR_DUM,ev_sample(&e)); }
-    if(pwr_down && now_us()-pwr_t>=1200000){ pwr_down=0;
-        if(st==ST_BATTLE){ bk_on=0; end_battle(0); } else if(st==ST_CAMP) quit=1; else { if(st==ST_LISTEN) music_stop(); st=ST_CAMP; } }
+            else if(e.value==0 && pwr_down){ pwr_down=0; if(now_us()-pwr_t<1000000) short_back(); } }
+        else if(e.code==165 && e.value==1) drum(DR_DUM,ev_sample(&e),SRC_KEYS); }
+    if(pwr_down && now_us()-pwr_t>=1200000){ pwr_down=0;            /* hold power: leave Drumfolk, from anywhere */
+        if(st==ST_BATTLE && end_t<=0){ bk_on=0; end_battle(0); }
+        music_stop(); quit=1; }
     while(km_fd>=0 && read(km_fd,&e,sizeof e)==sizeof e){ if(e.type!=EV_KEY || e.value!=1) continue;
-        if(e.code==163) drum(DR_KA,ev_sample(&e));
-        else if(e.code==164) drum(DR_TOK,ev_sample(&e));
+        if(e.code==163) drum(DR_KA,ev_sample(&e),SRC_KEYS);
+        else if(e.code==164) drum(DR_TOK,ev_sample(&e),SRC_KEYS);
         else if(e.code==115||e.code==114){ vol+= e.code==115?12:-12; if(vol<0)vol=0; if(vol>255)vol=255; hw_volume(); vb_save(vol); vb_until=r3_tick_ms()+2000; } }
 }
+/* Drums by the buttons' physical places, matching the pads on screen:
+ * bottom = DUM (bottom-left pad), right = KA (bottom-right), top = CHI (top-right), left = TOK (top-left).
+ * pad.c names a sideways Joy-Con (L)'s Down/Right/Left/Up A/X/B/Y; standard pads are A south, B east,
+ * X north, Y west. Polled every 2 ms between frames (see main), so a press is timed within ~2 ms. */
 static void poll_pads(void){
     int a; pad_poll();
-    while(pad_next(&a)){ int64_t t=now_sample();
-        if(a==PA_A) drum(DR_DUM,t); else if(a==PA_B) drum(DR_KA,t); else if(a==PA_X) drum(DR_TOK,t); else if(a==PA_Y) drum(DR_CHI,t);
-        else if((a==PA_HOME||a==PA_PLUS||a==PA_MINUS) && st==ST_BATTLE && end_t<=0){ paused=!paused;
-            if(paused) bk_on=0; else { int64_t t2=now_sample()+DR_RATE; rc_init(&rc,120,t2); last_beat=-1; bk_t0=t2; bk_fever=0; bk_on=1; } } }
+    int jc=0; for(int i=0;i<pad_count();i++){ const char*n=pad_name(i); if(n && strstr(n,"Joy-Con")) jc=1; }
+    while(pad_next(&a)){ int64_t t=now_sample(); int d=-1;
+        if(jc){ if(a==PA_A) d=DR_DUM; else if(a==PA_X) d=DR_KA; else if(a==PA_Y) d=DR_CHI; else if(a==PA_B) d=DR_TOK; }
+        else  { if(a==PA_A) d=DR_DUM; else if(a==PA_B) d=DR_KA; else if(a==PA_X) d=DR_CHI; else if(a==PA_Y) d=DR_TOK; }
+        if(d>=0){ drum(d,t,SRC_PAD); continue; }
+        if(a==PA_HOME||a==PA_PLUS||a==PA_MINUS) short_back(); }
 }
 
 static void on_crash(int sig){ fprintf(stderr,"[r3drum] crash %d\n",sig); _exit(128+sig); }
@@ -1072,6 +1202,7 @@ static int shot(const char*scene,const char*out){
     dg_armory_default(&A); A.cleared=3; A.weapons=0xFFFFFFFFu; A.shields=0xFFu;
     if(!strcmp(scene,"camp")) draw_camp();
     else if(!strcmp(scene,"edit")){ slot=1; A.squad[1]=(loadout_t){CL_LANCER,4,5}; draw_edit(); }
+    else if(!strcmp(scene,"test")){ test_enter(); for(int i=0;i<14;i++){ test_hit(i%3==0?SRC_PAD:SRC_TOUCH,test_t0+i*test_beat+(i%3==0?7200:1200+(i%4)*700)); } draw_test(0); }
     else if(!strncmp(scene,"battle:",7)){ int m=0,x=600; char boss[8]=""; sscanf(scene+7,"%d:%d:%7s",&m,&x,boss);
         sel=m; dg_start(&G,m,&A,7); rc_init(&rc,120,0); G.sx=(float)x; cam=G.sx-150;
         for(int i=0;i<90;i++) dg_step(&G,1/60.0f);
@@ -1089,7 +1220,8 @@ int main(int argc,char**argv){
     if(argc>3 && !strcmp(argv[1],"--audiotest")){        /* r3drum --audiotest PERIOD COUNT: 4 s of beat */
         struct pcm_config cfg; memset(&cfg,0,sizeof cfg); int P=atoi(argv[2]), N=atoi(argv[3]);
         cfg.channels=2; cfg.rate=DR_RATE; cfg.period_size=P; cfg.period_count=N; cfg.format=PCM_FORMAT_S16_LE;
-        cfg.start_threshold=P; cfg.stop_threshold=P*N; cfg.avail_min=P;
+        if(argc<=4){ cfg.start_threshold=P; cfg.stop_threshold=P*N; cfg.avail_min=P; }   /* "def" or a rate: tinyalsa defaults, like r3player */
+        if(argc>4 && atoi(argv[4])>=8000) cfg.rate=(unsigned)atoi(argv[4]);
         if(P==0){ /* mixing only, no DAC: how much CPU does the synth take */
             bk_t0=DR_RATE/4; bk_beat=DR_RATE/2; bk_on=1; static int16_t b[1024*2]; struct timespec c0,c1;
             clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&c0); int64_t t0=now_us();
@@ -1130,12 +1262,13 @@ int main(int argc,char**argv){
         if(st==ST_BATTLE) battle_tick(dt);
         if(st==ST_LISTEN) listen_tick(dt);
         if(st==ST_BATTLE) draw_battle(); else if(st==ST_CAMP) draw_camp(); else if(st==ST_EDIT) draw_edit();
-        else if(st==ST_LISTEN) draw_listen(); else draw_result();
+        else if(st==ST_LISTEN) draw_listen(); else if(st==ST_TEST) draw_test(dt); else draw_result();
         present();
         if(r3_tick_ms()<vb_until) vb_draw(fb,fbstride,0,vol);
         if(++vt%60==0) hw_volume();
-        int64_t used=now_us()-t0, budget=1000000/40;              /* ~40 fps; input is timestamped */
-        if(used<budget) usleep((useconds_t)(budget-used));
+        /* ~40 fps drawing; inputs polled every 2 ms in between (the Joy-Con has no timestamps) */
+        int64_t until=t0+1000000/40;
+        while(now_us()<until && !quit){ poll_pads(); poll_touch(); poll_keys(); usleep(2000); }
     }
     save_game(); music_stop();
     audio_run=0; pthread_join(at,NULL);
