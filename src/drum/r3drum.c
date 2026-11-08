@@ -41,7 +41,11 @@
 #define SH 720
 #define TOP 24                         /* the bezel hides the first rows of the panel */
 #define SAVE "/usr/data/r3drum.sav"
-static uint16_t cv[SH][SW];            /* the frame, drawn in RAM */
+static uint16_t cvbuf[SW*SH];          /* the frame, drawn in RAM: CW x CH (portrait 480x720, landscape 720x480) */
+static int CW=SW, CH=SH, land;         /* landscape: R3 turned clockwise, a controller in hand */
+#define CV(x,y) cvbuf[(y)*CW+(x)]
+static int PF_Y=TOP, PLAY_BOT=TOP+420, UW=SW;   /* playfield top / bottom, usable width (landscape: the bezel hides the right edge) */
+static int GROUND=392;                  /* ground line on screen */
 static uint16_t *fb; static int fbstride;
 static int64_t now_us(void){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (int64_t)t.tv_sec*1000000+t.tv_nsec/1000; }
 uint32_t r3_tick_ms(void){ return (uint32_t)(now_us()/1000); }   /* for pad.c */
@@ -52,18 +56,18 @@ static uint32_t lerpc(uint32_t a,uint32_t b,float t){ if(t<0)t=0; if(t>1)t=1;
     int r=(int)(((a>>16)&255)*(1-t)+((b>>16)&255)*t), g=(int)(((a>>8)&255)*(1-t)+((b>>8)&255)*t), bl=(int)((a&255)*(1-t)+(b&255)*t);
     return (uint32_t)(r<<16|g<<8|bl); }
 static uint32_t shade(uint32_t c,float k){ return k<1 ? lerpc(0,c,k) : lerpc(c,0xFFFFFF,k-1); }
-static inline void px(int x,int y,uint16_t c){ if((unsigned)x<SW && (unsigned)y<SH) cv[y][x]=c; }
+static inline void px(int x,int y,uint16_t c){ if((unsigned)x<CW && (unsigned)y<CH) CV(x,y)=c; }
 static void rect(int x,int y,int w,int h,uint32_t c){ uint16_t k=rgb(c);
-    if(x<0){ w+=x; x=0; } if(y<0){ h+=y; y=0; } if(x+w>SW) w=SW-x; if(y+h>SH) h=SH-y;
-    for(int j=y;j<y+h;j++) for(int i=x;i<x+w;i++) cv[j][i]=k; }
-static void dim(int x,int y,int w,int h){ if(x<0){ w+=x; x=0; } if(y<0){ h+=y; y=0; } if(x+w>SW) w=SW-x; if(y+h>SH) h=SH-y;
-    for(int j=y;j<y+h;j++) for(int i=x;i<x+w;i++) cv[j][i]=(uint16_t)((cv[j][i]>>1)&0x7BEF); }
+    if(x<0){ w+=x; x=0; } if(y<0){ h+=y; y=0; } if(x+w>CW) w=CW-x; if(y+h>CH) h=CH-y;
+    for(int j=y;j<y+h;j++) for(int i=x;i<x+w;i++) CV(i,j)=k; }
+static void dim(int x,int y,int w,int h){ if(x<0){ w+=x; x=0; } if(y<0){ h+=y; y=0; } if(x+w>CW) w=CW-x; if(y+h>CH) h=CH-y;
+    for(int j=y;j<y+h;j++) for(int i=x;i<x+w;i++) CV(i,j)=(uint16_t)((CV(i,j)>>1)&0x7BEF); }
 static int isqrt(int64_t v){ if(v<=0) return 0; int64_t r=(int64_t)1<<30; while(r>v) r>>=2; int64_t x=0;   /* no FPU here */
     while(r){ if(v>=x+r){ v-=x+r; x=(x>>1)+r; } else x>>=1; r>>=2; } return (int)x; }
 static void ellipse(int cx,int cy,int rx,int ry,uint32_t c){ if(rx<1)rx=1; if(ry<1)ry=1; uint16_t k=rgb(c);
     for(int y=-ry;y<=ry;y++){ int w=isqrt((int64_t)rx*rx*((int64_t)ry*ry-(int64_t)y*y)/((int64_t)ry*ry));
-        int yy=cy+y; if((unsigned)yy>=SH) continue; int x0=cx-w<0?0:cx-w, x1=cx+w>=SW?SW-1:cx+w;
-        for(int x=x0;x<=x1;x++) cv[yy][x]=k; } }
+        int yy=cy+y; if((unsigned)yy>=CH) continue; int x0=cx-w<0?0:cx-w, x1=cx+w>=CW?CW-1:cx+w;
+        for(int x=x0;x<=x1;x++) CV(x,yy)=k; } }
 static void circle(int cx,int cy,int r,uint32_t c){ ellipse(cx,cy,r,r,c); }
 static void ring(int cx,int cy,int r,int t,uint32_t c){ uint16_t k=rgb(c);
     for(int y=-r;y<=r;y++) for(int x=-r;x<=r;x++){ int d=x*x+y*y; if(d<=r*r && d>=(r-t)*(r-t)) px(cx+x,cy+y,k); } }
@@ -73,12 +77,12 @@ static void line(int x0,int y0,int x1,int y1,int w,uint32_t c){ uint16_t k=rgb(c
         for(int a=-h;a<=w-1-h;a++) for(int b=-h;b<=w-1-h;b++) px(x+a,y+b,k); } }
 static void tri(int x0,int y0,int x1,int y1,int x2,int y2,uint32_t c){ uint16_t k=rgb(c);
     int miny=y0<y1?(y0<y2?y0:y2):(y1<y2?y1:y2), maxy=y0>y1?(y0>y2?y0:y2):(y1>y2?y1:y2);
-    if(miny<0)miny=0; if(maxy>=SH)maxy=SH-1;
+    if(miny<0)miny=0; if(maxy>=CH)maxy=CH-1;
     int X[3]={x0,x1,x2},Y[3]={y0,y1,y2};
     for(int y=miny;y<=maxy;y++){ int xs[3]; int n=0;
         for(int e=0;e<3;e++){ int a=e,b=(e+1)%3; if((Y[a]<=y&&Y[b]>y)||(Y[b]<=y&&Y[a]>y)) xs[n++]=X[a]+(y-Y[a])*(X[b]-X[a])/(Y[b]-Y[a]); }
-        if(n<2) continue; int l=xs[0]<xs[1]?xs[0]:xs[1], r=xs[0]<xs[1]?xs[1]:xs[0]; if(l<0) l=0; if(r>=SW) r=SW-1;
-        for(int x=l;x<=r;x++) cv[y][x]=k; } }
+        if(n<2) continue; int l=xs[0]<xs[1]?xs[0]:xs[1], r=xs[0]<xs[1]?xs[1]:xs[0]; if(l<0) l=0; if(r>=CW) r=CW-1;
+        for(int x=l;x<=r;x++) CV(x,y)=k; } }
 static void frame(int x,int y,int w,int h,int t,uint32_t c){ rect(x,y,w,t,c); rect(x,y+h-t,w,t,c); rect(x,y,t,h,c); rect(x+w-t,y,t,h,c); }
 static void rbox(int x,int y,int w,int h,int r,uint32_t c){
     rect(x+r,y,w-2*r,h,c); rect(x,y+r,r,h-2*r,c); rect(x+w-r,y+r,r,h-2*r,c);
@@ -103,7 +107,20 @@ static void text(int x,int y,const char*s,int sc,uint32_t c){ uint16_t k=rgb(c);
 static void textc(int cx,int y,const char*s,int sc,uint32_t c){ text(cx-text_w(s,sc)/2,y,s,sc,c); }
 static void texts(int x,int y,const char*s,int sc,uint32_t c){ text(x+sc,y+sc,s,sc,0x000000); text(x,y,s,sc,c); }   /* shadowed */
 static void textcs(int cx,int y,const char*s,int sc,uint32_t c){ texts(cx-text_w(s,sc)/2,y,s,sc,c); }
-static void present(void){ for(int y=TOP;y<SH;y++) memcpy(fb+y*fbstride,cv[y],SW*2); }
+static void set_mode(int l){
+    land=l; if(l){ CW=720; CH=480; PF_Y=0; GROUND=372; PLAY_BOT=420; UW=CW-28; } else { CW=SW; CH=SH; PF_Y=TOP; GROUND=392; PLAY_BOT=TOP+420; UW=SW; }
+    memset(cvbuf,0,sizeof cvbuf); if(fb) for(int y=0;y<SH;y++) memset(fb+y*fbstride,0,SW*2);
+    fprintf(stderr,"[r3drum] %s\n",l?"landscape (controller)":"portrait"); }
+static void present(void){
+    if(!land){ for(int y=TOP;y<SH;y++) memcpy(fb+y*fbstride,&cvbuf[y*SW],SW*2); return; }
+    /* landscape, R3 turned clockwise: viewer (vx,vy) -> panel (x=vy, y=719-vx); 8 panel rows at a time
+     * so the canvas is read along its rows (the transpose stays in cache) */
+    static uint16_t rows[8][SW];
+    for(int py0=0;py0<SH;py0+=8){
+        for(int px=0;px<SW;px++){ const uint16_t*src=&cvbuf[px*720+(SH-1-py0-7)];
+            for(int k=0;k<8;k++) rows[7-k][px]=src[k]; }
+        for(int k=0;k<8;k++) memcpy(fb+(py0+k)*fbstride,rows[k],SW*2); }
+}
 
 /* ======================================================================= audio */
 enum { S_DUM, S_KA, S_TOK, S_CHI, S_KICK, S_HAT, S_CLAP, S_BASS, S_CHANT, S_HIT, S_KILL, S_HURT, S_WARN,
@@ -480,13 +497,13 @@ static void listen_tick(float dt){
         rc.beat=bl; rc.t0=tk; G.beat_s=(float)bl/DR_RATE; }
 }
 static void draw_listen(void){
-    rect(0,TOP,SW,SH-TOP,0x120E0C);
-    textcs(SW/2,TOP+150,listen_msg_t>0?"NO STEADY BEAT":"LISTENING...",4,0xE8731C);
-    textc(SW/2,TOP+210,song_title,1,0xF4E4D0);
-    if(listen_msg_t>0) textc(SW/2,TOP+250,"MARCHING TO THE DRUMS INSTEAD",2,0xC0A080);
+    rect(0,TOP,CW,CH-TOP,0x120E0C);
+    textcs(CW/2,TOP+150,listen_msg_t>0?"NO STEADY BEAT":"LISTENING...",4,0xE8731C);
+    textc(CW/2,TOP+210,song_title,1,0xF4E4D0);
+    if(listen_msg_t>0) textc(CW/2,TOP+250,"MARCHING TO THE DRUMS INSTEAD",2,0xC0A080);
     else { int w=an_rate>0? (int)((int64_t)an_frames*360/((int64_t)an_rate*20)) : 0; if(w>360) w=360;
         rect(60,TOP+250,360,10,0x2A221A); rect(60,TOP+250,w,10,0xE8731C);
-        textc(SW/2,TOP+280,"FINDING THE BEAT OF YOUR SONG",1,0xC0A080); }
+        textc(CW/2,TOP+280,"FINDING THE BEAT OF YOUR SONG",1,0xC0A080); }
 }
 static void music_reanchor(void){                          /* lock the rhythm on the refined grid, keeping beat numbers */
     int64_t bl,tk; if(!song_grid(now_sample(),&bl,&tk)) return;
@@ -494,8 +511,6 @@ static void music_reanchor(void){                          /* lock the rhythm on
 }
 
 /* ======================================================================= world drawing */
-#define PF_Y TOP                        /* playfield top */
-#define GROUND 392                      /* ground line on screen */
 static float cam;
 static int sxw(float wx){ return (int)(wx-cam); }
 /* ---- biomes: forest + jungle, desert, snow mountain, volcano ---- */
@@ -504,7 +519,7 @@ static float hsh(float x){ float s=sinf(x*12.9898f)*43758.5453f; return s-floorf
 /* integer helpers for per-column work (no FPU): isin over 1024 steps -> Q15, ih -> 0..255 */
 static inline int isin(int a){ return SINT[a&1023]; }
 static inline int ih(int x){ uint32_t h=(uint32_t)x*2654435761u; h^=h>>15; return (int)(h&255); }
-static uint16_t SKYROW[4][SH]; static int sky_ok[4];
+static uint16_t SKYROW[2][4][SH]; static int sky_ok[2][4];
 static void pine(int x,int base,int h,uint32_t c,int snow){
     rect(x-2,base-h/5,4,h/5,0x3A2A1A);
     for(int k=0;k<3;k++){ int top=base-h+k*h/4, w=h/5+k*h/8; tri(x,top,x-w,top+h/3,x+w,top+h/3,c);
@@ -514,47 +529,47 @@ static void broadleaf(int x,int base,int h,uint32_t c){
     circle(x,base-h*3/4,h/3,c); circle(x-h/4,base-h*2/3,h/4,shade(c,0.85f)); circle(x+h/4,base-h*2/3,h/4,shade(c,1.1f)); }
 static void draw_world_bg(int biome,int sh){
     float t=G.time;
-    if(!sky_ok[biome]){ sky_ok[biome]=1; for(int y=PF_Y;y<GROUND+40;y++) SKYROW[biome][y]=rgb(lerpc(SKY[biome][1],SKY[biome][0],(float)(y-PF_Y)/(GROUND-PF_Y))); }
-    for(int y=PF_Y;y<GROUND+40;y++){ uint16_t k=SKYROW[biome][y]; for(int x=0;x<SW;x++) cv[y][x]=k; }
+    if(!sky_ok[land][biome]){ sky_ok[land][biome]=1; for(int y=PF_Y;y<GROUND+40;y++) SKYROW[land][biome][y]=rgb(lerpc(SKY[biome][1],SKY[biome][0],(float)(y-PF_Y)/(GROUND-PF_Y))); }
+    for(int y=PF_Y;y<GROUND+40;y++){ uint16_t k=SKYROW[land][biome][y]; for(int x=0;x<CW;x++) CV(x,y)=k; }
     int tms=(int)(t*1000), c15=(int)(cam*0.15f), c50=(int)(cam*0.5f), c40=(int)(cam*0.4f), c70=(int)(cam*0.7f);
     switch(biome){
     case BIOME_FOREST:
-        for(int x=0;x<SW;x++){ int wx=x+c15; int top=PF_Y+210-(30*ih(wx/22)>>8)-(14*isin(wx*13/4)>>15)+sh;   /* far tree line */
-            uint16_t k=rgb(0x2E5A44); for(int y=top;y<GROUND+40;y++) cv[y][x]=k; }
+        for(int x=0;x<CW;x++){ int wx=x+c15; int top=PF_Y+210-(30*ih(wx/22)>>8)-(14*isin(wx*13/4)>>15)+sh;   /* far tree line */
+            uint16_t k=rgb(0x2E5A44); for(int y=top;y<GROUND+40;y++) CV(x,y)=k; }
         for(int i=-1;i<8;i++){ float wx=floorf(cam*0.45f/90)*90+i*90; int x=(int)(wx-cam*0.45f); float r=hsh(wx);
             broadleaf(x+(int)(r*40),GROUND+sh,150+(int)(r*90),r<0.5f?0x3A7A3A:0x2A6A40); }
         for(int i=-1;i<10;i++){ float wx=floorf(cam*0.8f/60)*60+i*60; int x=(int)(wx-cam*0.8f); float r=hsh(wx+7);   /* jungle vines */
             if(r<0.6f){ int len=40+(int)(r*120); line(x,PF_Y,x+(int)(sinf(t+r*9)*4),PF_Y+len,2,0x2A5A2A); circle(x+(int)(sinf(t+r*9)*4),PF_Y+len,4,0x4A8A3A); } }
-        rect(0,PF_Y,SW,14,0x1E3A24);
+        rect(0,PF_Y,CW,14,0x1E3A24);
         break;
     case BIOME_DESERT:
         circle(370,PF_Y+80,40,0xFFF4C0); circle(370,PF_Y+80,32,0xFFFFE8);
         for(int i=-1;i<6;i++){ float wx=floorf(cam*0.15f/160)*160+i*160; int x=(int)(wx-cam*0.15f); float r=hsh(wx);
             if(r<0.7f){ int w=60+(int)(r*80), h=50+(int)(r*60); rect(x,PF_Y+250-h+sh,w,h+60,0xC07850); rect(x-6,PF_Y+250-h+sh,w+12,8,0xB06840); } }
         for(int layer=0;layer<2;layer++){ int off=layer?c70:c40; uint16_t k=rgb(layer?0xE8B870:0xD8A060);
-            for(int x=0;x<SW;x++){ int wx=x+off; int top=PF_Y+(layer?330:300)-(22*isin(wx*2+layer*163)>>15)-(10*isin(wx*5)>>15)+sh;
-                for(int y=top;y<GROUND+40;y++) cv[y][x]=k; } }
+            for(int x=0;x<CW;x++){ int wx=x+off; int top=PF_Y+(layer?330:300)-(22*isin(wx*2+layer*163)>>15)-(10*isin(wx*5)>>15)+sh;
+                for(int y=top;y<GROUND+40;y++) CV(x,y)=k; } }
         break;
     case BIOME_SNOW:
         for(int i=-1;i<6;i++){ float wx=floorf(cam*0.12f/140)*140+i*140; int x=(int)(wx-cam*0.12f); float r=hsh(wx);
             int h=120+(int)(r*90); tri(x,PF_Y+300-h+sh,x-90,PF_Y+300+sh,x+90,PF_Y+300+sh,0x7A90B0); tri(x,PF_Y+300-h+sh,x-30,PF_Y+300-h+40+sh,x+30,PF_Y+300-h+40+sh,0xF4F8FC); }
-        rect(0,PF_Y+300+sh,SW,GROUND-PF_Y-300+40,0xB8CCE0);
+        rect(0,PF_Y+300+sh,CW,GROUND-PF_Y-300+40,0xB8CCE0);
         for(int i=-1;i<10;i++){ float wx=floorf(cam*0.5f/55)*55+i*55; int x=(int)(wx-cam*0.5f); float r=hsh(wx+3);
             pine(x+(int)(r*20),GROUND+sh,70+(int)(r*60),0x2A4A3A,1); }
-        for(int k=0;k<40;k++){ int x=(k*73+tms*(18+k%5*6)/1000+c15*2)%SW, y=PF_Y+(k*41+tms*(40+k%7*8)/1000)%(GROUND-PF_Y); px(x,y,0xFFFF); px(x+1,y,0xFFFF); }
+        for(int k=0;k<40;k++){ int x=(k*73+tms*(18+k%5*6)/1000+c15*2)%CW, y=PF_Y+(k*41+tms*(40+k%7*8)/1000)%(GROUND-PF_Y); px(x,y,0xFFFF); px(x+1,y,0xFFFF); }
         break;
     case BIOME_VOLCANO: {
         int vx=(int)(300-cam*0.08f)%700; if(vx<-200) vx+=700;
         tri(vx,PF_Y+120+sh,vx-220,PF_Y+330+sh,vx+220,PF_Y+330+sh,0x3A1A16); rect(vx-28,PF_Y+120+sh,56,8,0xFF6020);
         for(int k=0;k<5;k++){ int r=20+k*12+(int)(sinf(t*1.5f+k)*4); circle(vx+(int)(sinf(t*0.5f+k)*20),PF_Y+100-k*24+sh,r,0x4A3A38); }
-        { uint16_t k=rgb(0x2A1410); for(int x=0;x<SW;x++){ int wx=x+c50; int top=PF_Y+320-(30*ih(wx/40)>>8)-(12*isin(wx*5)>>15)+sh;
-            for(int y=top;y<GROUND+40;y++) cv[y][x]=k; } }
-        for(int k=0;k<30;k++){ int x=(k*97+tms*20*(k%3+1)/1000)%SW, y=GROUND-(k*53+tms*35*(k%2+1)/1000)%(GROUND-PF_Y); px(x,y,rgb(0xFFB040)); px(x+1,y,rgb(0xFF8020)); }
+        { uint16_t k=rgb(0x2A1410); for(int x=0;x<CW;x++){ int wx=x+c50; int top=PF_Y+320-(30*ih(wx/40)>>8)-(12*isin(wx*5)>>15)+sh;
+            for(int y=top;y<GROUND+40;y++) CV(x,y)=k; } }
+        for(int k=0;k<30;k++){ int x=(k*97+tms*20*(k%3+1)/1000)%CW, y=GROUND-(k*53+tms*35*(k%2+1)/1000)%(GROUND-PF_Y); px(x,y,rgb(0xFFB040)); px(x+1,y,rgb(0xFF8020)); }
         } break;
     }
     uint32_t gtop = biome==0?0x3A6A2A : biome==1?0xE0B070 : biome==2?0xF0F6FA : 0x3A2018,
              gfill= biome==0?0x3A2A1A : biome==1?0xC89858 : biome==2?0xB8CCE0 : 0x221010;
-    rect(0,GROUND+sh,SW,4,gtop); rect(0,GROUND+4+sh,SW,PF_Y+420-GROUND-4,gfill);
+    rect(0,GROUND+sh,CW,4,gtop); rect(0,GROUND+4+sh,CW,PLAY_BOT-GROUND-4,gfill);
     for(int i=-2;i<14;i++){ float wx=floorf(cam/40)*40+i*40; int x=sxw(wx); float r=hsh(wx+1);
         if(biome==0 && r<0.4f){ line(x,GROUND+sh,x-4,GROUND-10+sh,2,0x4A8A3A); line(x,GROUND+sh,x+5,GROUND-12+sh,2,0x5A9A3A); }
         if(biome==1 && r<0.12f){ rect(x-3,GROUND-34+sh,6,34,0x4A7A3A); rect(x-12,GROUND-24+sh,9,4,0x4A7A3A); rect(x-12,GROUND-30+sh,4,8,0x4A7A3A); }
@@ -562,14 +577,14 @@ static void draw_world_bg(int biome,int sh){
         if(biome==3 && r<0.35f){ line(x,GROUND+8+sh,x+18,GROUND+14+sh,2,lerpc(0xFF4010,0xFFC040,0.5f+0.5f*sinf(t*3+r*9))); }
         if(r>0.85f) ellipse(x+12,GROUND+12+sh,5,3,shade(gfill,1.3f)); }
     /* the banner at the end */
-    int bx=sxw((float)G.m->length); if(bx>-40 && bx<SW+40){ line(bx,GROUND+sh,bx,GROUND-110+sh,4,0x3A2A1A);
+    int bx=sxw((float)G.m->length); if(bx>-40 && bx<CW+40){ line(bx,GROUND+sh,bx,GROUND-110+sh,4,0x3A2A1A);
         float wv=sinf(t*4)*4; tri(bx+2,GROUND-110+sh,bx+50,GROUND-96+(int)wv+sh,bx+2,GROUND-80+sh,0xE8731C);
         circle(bx+18,GROUND-96+sh,5,0xFFE0A0); }
 }
 /* the fortress wall behind an iron gate (drawn even once the gate has fallen) */
 static void draw_walls(int sh){
     for(int k=0;k<DG_MAXE;k++){ const enemy_t*e=&G.e[k]; if(!e->on || e->type!=ET_IRONGATE) continue;
-        int x=sxw(e->x); if(x<-400||x>SW+400) continue; int top=GROUND-130+sh;
+        int x=sxw(e->x); if(x<-400||x>CW+400) continue; int top=GROUND-130+sh;
         rect(x-170,top,360,130,0x6A6058); for(int c=-170;c<190;c+=24) rect(x+c,top-14,14,14,0x6A6058);
         for(int r=0;r<5;r++) for(int c=-170+(r%2)*15;c<190;c+=30) frame(x+c,top+r*26,30,26,1,0x4A443E);
         if(e->hp<=0){ rect(x-30,top+20,60,110,0x2A2420); for(int i=0;i<6;i++) ellipse(x-30+i*12,GROUND-4+sh,9,6,0x5A524A); } } }
@@ -736,14 +751,14 @@ static void pad_rect(int d,int*x,int*y,int*w,int*h){   /* DUM bottom-left, KA bo
     int col = d==DR_DUM||d==DR_TOK ? 0 : 1, row = d==DR_TOK||d==DR_CHI ? 0 : 1;
     *x=12+col*232; *y=PAD_Y+row*106; *w=224; *h=100; }
 static void draw_pads(void){
-    rect(0,PAD_Y-6,SW,SH-PAD_Y+6,0x0A0A0A);
+    rect(0,PAD_Y-6,CW,CH-PAD_Y+6,0x0A0A0A);
     for(int d=0;d<4;d++){ int x,y,w,h; pad_rect(d,&x,&y,&w,&h); float lit=pad_t[d]>0?pad_t[d]/0.15f:0;
         rbox(x,y,w,h,16,lerpc(shade(PAD_C[d],0.45f),shade(PAD_C[d],1.4f),lit));
         ring(x+w/2,y+h/2,40,4,shade(PAD_C[d],lit>0?1.6f:0.9f));
         textc(x+w/2,y+h/2-10,PAD_LBL[d],3,lit>0?0x101010:0xF4E4D0); }
 }
 static void hud(void){
-    int y=446; rect(0,y,SW,56,0x141010); rect(0,y,SW,2,0x3A2A20);
+    int y=446; rect(0,y,CW,56,0x141010); rect(0,y,CW,2,0x3A2A20);
     /* the command being drummed: four slots */
     for(int i=0;i<4;i++){ int x=12+i*46; rbox(x,y+8,40,40,8,0x2A221A);
         if(i<rc.nseq){ int d=rc.seq[i]; rbox(x+3,y+11,34,34,6,PAD_C[d]); textc(x+20,y+21,PAD_LBL[d],1,0x101010); } }
@@ -757,18 +772,34 @@ static void hud(void){
     if(rc.combo>0){ char b[16]; snprintf(b,sizeof b,"X%d",rc.combo); text(420,y+34,b,2,rc.fever?0xFFE040:0xC0A080); }
     if(rc.fever && ((int)(G.time*6)&1)) text(250,y+38,"FEVER",2,0xFFE040);
     if(judge_t>0){ const char*j= judge==J_PERFECT?"PERFECT":judge==J_GOOD?"GOOD":"MISS";
-        uint32_t c=judge==J_PERFECT?0xFFE040:judge==J_GOOD?0x80E0FF:0xFF5040; textcs(SW/2,PAD_Y-60,j,3,c); }
+        uint32_t c=judge==J_PERFECT?0xFFE040:judge==J_GOOD?0x80E0FF:0xFF5040; textcs(CW/2,PAD_Y-60,j,3,c); }
+}
+static void hud_land(void){
+    int y=PLAY_BOT; rect(0,y,CW,CH-y,0x141010); rect(0,y,CW,2,0x3A2A20);
+    for(int i=0;i<4;i++){ int x=12+i*46; rbox(x,y+10,40,40,8,0x2A221A);
+        if(i<rc.nseq){ int d=rc.seq[i]; rbox(x+3,y+13,34,34,6,PAD_C[d]); textc(x+20,y+23,PAD_LBL[d],1,0x101010); } }
+    int64_t ns=now_sample(); float ph=(float)((ns-rc.t0)%rc.beat)/(float)rc.beat; if(ns<rc.t0) ph=1;
+    int pr=(int)(16*(1-ph)); circle(222,y+30,6+pr,ph<0.2f?0xF4E4D0:0x5A4A3A);
+    int bi; int cmd=rc_responding(&rc,ns,&bi);
+    if(cmd!=CMD_NONE) textcs(380,y+16,DR_CMD_NAME[cmd],3,rc.fever?0xFFE040:0xF4E4D0);
+    else if(rc.combo>0 && rc.nseq==0){ int64_t b=rc_nearest_beat(&rc,ns); if(b==rc.next_start) textcs(380,y+16,"NOW!",3,0x80FF80); }
+    if(rc.combo>0){ char b[16]; snprintf(b,sizeof b,"X%d",rc.combo); text(UW-70,y+14,b,2,rc.fever?0xFFE040:0xC0A080); }
+    if(rc.fever && ((int)(G.time*6)&1)) text(UW-80,y+36,"FEVER",2,0xFFE040);
+    /* the drum buttons by place, as a reminder: left TOK, up CHI, down DUM, right KA */
+    if(judge_t>0){ const char*j= judge==J_PERFECT?"PERFECT":judge==J_GOOD?"GOOD":"MISS";
+        uint32_t c=judge==J_PERFECT?0xFFE040:judge==J_GOOD?0x80E0FF:0xFF5040; textcs(UW/2,PLAY_BOT-70,j,3,c); }
 }
 static void legend(int y){
-    rbox(30,y,420,6*22+14,10,0x000000);
+    int lx=(UW-420)/2; (void)lx;
+    rbox(30+(UW-480)/2,y,420,6*22+14,10,0x000000);
     for(int c=0;c<CMD_N;c++){ int yy=y+10+c*22; text(44,yy+3,DR_CMD_NAME[c],2,0xF4E4D0);
         for(int i=0;i<4;i++){ int d=DR_PATTERN[c][i]; rbox(170+i*68,yy,62,18,6,PAD_C[d]); textc(201+i*68,yy+5,PAD_LBL[d],1,0x101010); } }
-    textc(SW/2,y+10+5*22+2,"ONE HIT PER BEAT. KEEP THE STREAK.",1,0xC0A080);
+    textc(CW/2,y+10+5*22+2,"ONE HIT PER BEAT. KEEP THE STREAK.",1,0xC0A080);
 }
 static void draw_bubbles(int sh);
 static int mv_banner_busy(void){ int b=dg_boss(&G); return b>=0 && dg_boss_move(&G,b)!=0; }
 static void draw_battle(void){
-    float target=G.sx-150; cam+= (target-cam)*0.15f;
+    float target=G.sx-(land?230:150); cam+= (target-cam)*0.15f;
     int sh = shake>0 ? (int)((rand()%9-4)*shake) : 0;
     draw_world_bg(G.m->biome,sh); draw_walls(sh);
     for(int k=0;k<DG_MAXE;k++) if(G.e[k].on && G.e[k].hp>0) draw_enemy(&G.e[k],sh);
@@ -781,25 +812,25 @@ static void draw_battle(void){
     draw_bubbles(sh);
     for(int k=0;k<160;k++){ part_t*p=&P[k]; if(p->life<=0) continue;
         int X=p->world?sxw(p->x):(int)p->x, Y=p->world?GROUND+(int)p->y:(int)p->y; circle(X,Y+sh,(int)(p->size*(p->life>0.3f?1:p->life/0.3f)),p->c); }
-    if(rc.fever) for(int k=0;k<6;k++){ int x=(int)((G.time*80+k*90))%SW; px(x,PF_Y+40+(k*37)%200,rgb(0xFFF080)); }
+    if(rc.fever) for(int k=0;k<6;k++){ int x=(int)((G.time*80+k*90))%CW; px(x,PF_Y+40+(k*37)%200,rgb(0xFFF080)); }
     /* boss bar + telegraph banner */
     int b=dg_boss(&G);
     if(b>=0 && dg_front(&G.e[b])-G.sx<700){ const enemy_t*e=&G.e[b]; const etype_t*t=&DG_ETYPE[e->type];
         texts(12,PF_Y+6,t->name,2,e->enraged?0xFF5040:0xF4E4D0);
-        rect(12,PF_Y+24,456,8,0x300000); rect(12,PF_Y+24,(int)(456*e->hp/e->maxhp),8,e->enraged?0xFF3020:0xE0A020);
+        rect(12,PF_Y+24,UW-24,8,0x300000); rect(12,PF_Y+24,(int)((UW-24)*e->hp/e->maxhp),8,e->enraged?0xFF3020:0xE0A020);
         const bmove_t*mv=dg_boss_move(&G,b);
-        if(mv){ char s[40]; snprintf(s,sizeof s,"%s!",mv->name); textcs(SW/2,PF_Y+44,s,3,((int)(G.time*6)&1)?0xFFE040:0xFF5040);
-            for(int i=0;i<e->windup && i<11;i++) circle(SW/2-(e->windup-1)*9+i*18,PF_Y+76,5,0xFF5040); } }
+        if(mv){ char s[40]; snprintf(s,sizeof s,"%s!",mv->name); textcs(UW/2,PF_Y+44,s,3,((int)(G.time*6)&1)?0xFFE040:0xFF5040);
+            for(int i=0;i<e->windup && i<11;i++) circle(UW/2-(e->windup-1)*9+i*18,PF_Y+76,5,0xFF5040); } }
     /* progress */
-    rect(12,PF_Y+412,456,3,0x2A2018); rect(12,PF_Y+412,(int)(456*G.sx/G.m->length),3,0xE8731C);
+    rect(12,PLAY_BOT-8,UW-24,3,0x2A2018); rect(12,PLAY_BOT-8,(int)((UW-24)*G.sx/G.m->length),3,0xE8731C);
     if(banner_t>0 && !mv_banner_busy()){ int a=banner_t>2.4f?(int)((2.8f-banner_t)/0.4f*255):255; (void)a;
-        textcs(SW/2,PF_Y+120,banner,4,0xFFE0A0); if(banner2) textcs(SW/2,PF_Y+160,banner2,2,0xF4E4D0); }
+        textcs(UW/2,PF_Y+120,banner,4,0xFFE0A0); if(banner2) textcs(UW/2,PF_Y+160,banner2,2,0xF4E4D0); }
     if(G.time<10 || paused) legend(PF_Y+40);
-    if(music_live && G.time<12){ char b[80]; snprintf(b,sizeof b,"MUSIC: %s",song_title); textcs(SW/2,PF_Y+396,b,1,0xF4E4D0); }
-    hud(); draw_pads();
-    if(paused){ dim(0,TOP,SW,SH-TOP); legend(PF_Y+92); textcs(SW/2,PF_Y+260,"PAUSED",4,0xF4E4D0);
-        textc(SW/2,PF_Y+310,"POWER OR TAP: RESUME   HOLD POWER: LEAVE",1,0xC0A080); }
-    if(st==ST_BATTLE && end_t>0) textcs(SW/2,PF_Y+200,G.won?"VICTORY!":"THE SQUAD FELL",4,G.won?0xFFE040:0xFF5040);
+    if(music_live && G.time<12){ char b[80]; snprintf(b,sizeof b,"MUSIC: %s",song_title); textcs(UW/2,PLAY_BOT-24,b,1,0xF4E4D0); }
+    if(land) hud_land(); else { hud(); draw_pads(); }
+    if(paused){ dim(0,PF_Y,CW,CH-PF_Y); legend(PF_Y+(land?20:92)); textcs(UW/2,PF_Y+(land?180:260),"PAUSED",4,0xF4E4D0);
+        textc(UW/2,PF_Y+(land?222:310),land?"MINUS / POWER: RESUME   HOLD POWER: LEAVE":"POWER OR TAP: RESUME   HOLD POWER: LEAVE",1,0xC0A080); }
+    if(st==ST_BATTLE && end_t>0) textcs(UW/2,PF_Y+200,G.won?"VICTORY!":"THE SQUAD FELL",4,G.won?0xFFE040:0xFF5040);
 }
 
 /* ---- speech bubbles: the squad chatters, picked at random per situation ---- */
@@ -848,7 +879,7 @@ static void draw_bubbles(int sh){
     for(int k=0;k<3;k++){ bubble_t*b=&BB[k]; if(b->t<=0) continue; const unit_t*u=&G.u[b->unit]; if(!u->on||u->hp<=0){ b->t=0; continue; }
         int sc=strlen(b->s)>16?1:2, w=text_w(b->s,sc)+16, h=sc==2?26:18;
         int ux=sxw(u->x), uy=GROUND+(int)dg_unit_y(&G,b->unit)+sh-70-k*4;
-        int x=ux-w/2; if(x<6) x=6; if(x+w>SW-6) x=SW-6-w; int y=uy-h;
+        int x=ux-w/2; if(x<6) x=6; if(x+w>UW-6) x=UW-6-w; int y=uy-h;
         if(y<PF_Y+90) y=PF_Y+90;                                     /* below the boss bar / banner */
         uint32_t bg = b->t<0.25f ? lerpc(0x120E0C,0xF4ECDC,b->t/0.25f) : 0xF4ECDC;
         tri(ux-6,y+h-1,ux+6,y+h-1,ux,y+h+9,bg); rbox(x,y,w,h,8,bg);
@@ -946,11 +977,11 @@ static const char*matchup(const weapon_t*w){
     const char*e = w->elem==EL_FIRE?", BURNS" : w->elem==EL_FROST?", SLOWS FOES" : w->elem==EL_STORM?", CHAINS" : "";
     snprintf(b,sizeof b,"%s%s",t,e); return b; }
 static void draw_camp(void){
-    rect(0,TOP,SW,SH-TOP,0x120E0C);
-    for(int y=TOP;y<TOP+70;y++){ uint16_t k=rgb(lerpc(0x3A1A10,0x120E0C,(float)(y-TOP)/70)); for(int x=0;x<SW;x++) cv[y][x]=k; }
-    textcs(SW/2,TOP+10,"DRUMFOLK",5,0xE8731C);
+    rect(0,TOP,CW,CH-TOP,0x120E0C);
+    for(int y=TOP;y<TOP+70;y++){ uint16_t k=rgb(lerpc(0x3A1A10,0x120E0C,(float)(y-TOP)/70)); for(int x=0;x<CW;x++) CV(x,y)=k; }
+    textcs(CW/2,TOP+10,"DRUMFOLK",5,0xE8731C);
     rbox(120,TOP+48,240,20,10,music_opt?0x3A2A1A:0x1E1814); frame(120,TOP+48,240,20,1,music_opt?0xE8731C:0x4A3A2A);
-    textc(SW/2,TOP+54,music_opt?"BEAT: MY MUSIC":"BEAT: DRUMS",1,music_opt?0xFFE0A0:0xC0A080);
+    textc(CW/2,TOP+54,music_opt?"BEAT: MY MUSIC":"BEAT: DRUMS",1,music_opt?0xFFE0A0:0xC0A080);
     for(int i=0;i<DG_NMISSION;i++){ int y=TOP+70+i*50; int locked=i>A.cleared, on=i==sel;
         rbox(12,y,456,44,10,on?0x3A2A1A:0x1E1814); if(on) frame(12,y,456,44,2,0xE8731C);
         char t[48]; snprintf(t,sizeof t,"%d. %s",i+1,DG_MISSION[i].name);
@@ -991,37 +1022,37 @@ static void fix_loadout(loadout_t*l){
     if(!(dg_shield_ok(l->cls,l->shield)&&owned(100+l->shield))){ l->shield=0;
         if(!DG_CLASS[l->cls].two_handed) for(int s=DG_NSHIELD-1;s>0;s--) if(dg_shield_ok(l->cls,s)&&owned(100+s)){ l->shield=s; break; } } }
 static void draw_edit(void){
-    rect(0,TOP,SW,SH-TOP,0x120E0C);
+    rect(0,TOP,CW,CH-TOP,0x120E0C);
     loadout_t*l=&A.squad[slot]; char b[64];
-    snprintf(b,sizeof b,"SQUAD MEMBER %d",slot+1); textcs(SW/2,TOP+12,b,3,0xE8731C);
+    snprintf(b,sizeof b,"SQUAD MEMBER %d",slot+1); textcs(CW/2,TOP+12,b,3,0xE8731C);
     const char*lab[3]={"CLASS","WEAPON","SHIELD"};
     for(int r=0;r<3;r++){ int y=TOP+56+r*112; rbox(12,y,456,100,12,0x1E1814);
         text(28,y+8,lab[r],1,0xC0A080);
         rbox(20,y+28,52,52,10,0x3A2A1A); textc(46,y+40,"<",4,0xF4E4D0);
         rbox(408,y+28,52,52,10,0x3A2A1A); textc(434,y+40,">",4,0xF4E4D0);
-        if(r==0){ textc(SW/2,y+32,DG_CLASS[l->cls].name,3,DG_CLASS[l->cls].color); textc(SW/2,y+62,DG_CLASS[l->cls].role,1,0xC0A080);
-            snprintf(b,sizeof b,"HP %d",DG_CLASS[l->cls].hp); textc(SW/2,y+78,b,1,0x8A6A4A); }
+        if(r==0){ textc(CW/2,y+32,DG_CLASS[l->cls].name,3,DG_CLASS[l->cls].color); textc(CW/2,y+62,DG_CLASS[l->cls].role,1,0xC0A080);
+            snprintf(b,sizeof b,"HP %d",DG_CLASS[l->cls].hp); textc(CW/2,y+78,b,1,0x8A6A4A); }
         if(r==1){ if(l->weapon>=0){ const weapon_t*w=&DG_WEAPON[l->weapon];
-                textc(SW/2,y+30,w->name,2,w->elem==EL_FIRE?0xFF8040:w->elem==EL_FROST?0x90E0FF:w->elem==EL_STORM?0xFFF060:0xF4E4D0);
+                textc(CW/2,y+30,w->name,2,w->elem==EL_FIRE?0xFF8040:w->elem==EL_FROST?0x90E0FF:w->elem==EL_STORM?0xFFF060:0xF4E4D0);
                 if(w->heal) snprintf(b,sizeof b,"DMG %d  HEAL %d",w->dmg,w->heal); else snprintf(b,sizeof b,"DMG %d  RANGE %d  %s",w->dmg,w->range,DG_ELEM_NAME[w->elem]);
-                textc(SW/2,y+54,b,1,0xF4E4D0); textc(SW/2,y+70,matchup(w),1,0xC0A080); } }
-        if(r==2){ const shield_t*s=&DG_SHIELD[l->shield]; textc(SW/2,y+30,s->name,2,l->shield?0xF4E4D0:0x8A6A4A);
-            if(DG_CLASS[l->cls].two_handed) textc(SW/2,y+56,"TWO-HANDED: NO SHIELD",1,0xC0A080);
-            else { snprintf(b,sizeof b,"BLOCK %d%% (X2 ON GUARD)",s->block); textc(SW/2,y+56,b,1,0xF4E4D0);
-                textc(SW/2,y+72,s->special&SH_REFLECT?"REFLECTS MISSILES ON GUARD":s->special&SH_THORNS?"HURTS MELEE ATTACKERS":s->special&SH_HEAVY?"HEAVY: SLOWER MARCH":"",1,0xC0A080); } } }
+                textc(CW/2,y+54,b,1,0xF4E4D0); textc(CW/2,y+70,matchup(w),1,0xC0A080); } }
+        if(r==2){ const shield_t*s=&DG_SHIELD[l->shield]; textc(CW/2,y+30,s->name,2,l->shield?0xF4E4D0:0x8A6A4A);
+            if(DG_CLASS[l->cls].two_handed) textc(CW/2,y+56,"TWO-HANDED: NO SHIELD",1,0xC0A080);
+            else { snprintf(b,sizeof b,"BLOCK %d%% (X2 ON GUARD)",s->block); textc(CW/2,y+56,b,1,0xF4E4D0);
+                textc(CW/2,y+72,s->special&SH_REFLECT?"REFLECTS MISSILES ON GUARD":s->special&SH_THORNS?"HURTS MELEE ATTACKERS":s->special&SH_HEAVY?"HEAVY: SLOWER MARCH":"",1,0xC0A080); } } }
     rbox(12,TOP+396,456,180,12,0x1A1410);
-    draw_unit(SW/2,TOP+560,l->cls,l->weapon,l->shield,0,0,0,0,3,1);
+    draw_unit(CW/2,TOP+560,l->cls,l->weapon,l->shield,0,0,0,0,3,1);
     int y=TOP+590; if(A.nsquad>1){ rbox(12,y,180,52,10,0x3A1A14); textc(102,y+18,"REMOVE",2,0xFF8070); }
     rbox(288,y,180,52,12,0xE8731C); textc(378,y+14,"DONE",3,0x101010);
 }
 static void draw_result(void){
-    rect(0,TOP,SW,SH-TOP,0x120E0C);
-    textcs(SW/2,TOP+40,victory?"VICTORY!":"RETREAT...",5,victory?0xFFE040:0xFF6050);
-    textc(SW/2,TOP+100,DG_MISSION[sel].name,2,0xC0A080);
-    int y=TOP+150; if(nnew){ textc(SW/2,y,"NEW GEAR",3,0xE8731C); y+=40;
-        for(int i=0;i<nnew && y<TOP+600;i++){ textc(SW/2,y,code_name(newly[i]),2,0xF4E4D0); y+=26; } }
-    else textc(SW/2,y,victory?"NOTHING NEW THIS TIME":"THE SQUAD WILL BE BACK",2,0x8A6A4A);
-    textc(SW/2,TOP+640,"TAP TO RETURN TO CAMP",2,0xC0A080);
+    rect(0,TOP,CW,CH-TOP,0x120E0C);
+    textcs(CW/2,TOP+40,victory?"VICTORY!":"RETREAT...",5,victory?0xFFE040:0xFF6050);
+    textc(CW/2,TOP+100,DG_MISSION[sel].name,2,0xC0A080);
+    int y=TOP+150; if(nnew){ textc(CW/2,y,"NEW GEAR",3,0xE8731C); y+=40;
+        for(int i=0;i<nnew && y<TOP+600;i++){ textc(CW/2,y,code_name(newly[i]),2,0xF4E4D0); y+=26; } }
+    else textc(CW/2,y,victory?"NOTHING NEW THIS TIME":"THE SQUAD WILL BE BACK",2,0x8A6A4A);
+    textc(CW/2,TOP+640,"TAP TO RETURN TO CAMP",2,0xC0A080);
 }
 static void test_enter(void);
 static void tap(int x,int y){
@@ -1087,23 +1118,23 @@ static int test_tap(int x,int y,int64_t t){
     return 0;
 }
 static void draw_test(float dt){
-    rect(0,TOP,SW,SH-TOP,0x120E0C);
-    textcs(SW/2,TOP+4,"RHYTHM TEST",3,0xE8731C);
-    rbox(140,TOP+32,200,24,10,test_click?0x3A2A1A:0x1E1814); textc(SW/2,TOP+40,test_click?"CLICK: ON (120 BPM)":"CLICK: OFF (REGULARITY)",1,0xF4E4D0);
+    rect(0,TOP,CW,CH-TOP,0x120E0C);
+    textcs(CW/2,TOP+4,"RHYTHM TEST",3,0xE8731C);
+    rbox(140,TOP+32,200,24,10,test_click?0x3A2A1A:0x1E1814); textc(CW/2,TOP+40,test_click?"CLICK: ON (120 BPM)":"CLICK: OFF (REGULARITY)",1,0xF4E4D0);
     /* tap area, flashing on the click */
     int64_t ns=now_sample(); float ph = ns>=test_t0 ? (float)((ns-test_t0)%test_beat)/test_beat : 1;
     if(test_click && ph<0.08f) test_flash=0.12f;
     uint32_t c = test_flash>0 ? 0x5A3A1A : 0x2A2018; rbox(12,TA_Y,456,TA_H,16,c);
-    textc(SW/2,TA_Y+90,test_click?"TAP HERE ON THE CLICK":"TAP HERE, STEADY",2,0xF4E4D0);
-    textc(SW/2,TA_Y+120,"OR PRESS JOY-CON / R3 KEYS",1,0xC0A080);
+    textc(CW/2,TA_Y+90,test_click?"TAP HERE ON THE CLICK":"TAP HERE, STEADY",2,0xF4E4D0);
+    textc(CW/2,TA_Y+120,"OR PRESS JOY-CON / R3 KEYS",1,0xC0A080);
     for(int s2=0;s2<SRC_N;s2++){ if(test_src_flash[s2]>0){ circle(80+s2*160,TA_Y+190,22,SRC_C[s2]); test_src_flash[s2]-=dt; } else ring(80+s2*160,TA_Y+190,22,2,SRC_C[s2]);
         textc(80+s2*160,TA_Y+222,SRC_NAME[s2],1,SRC_C[s2]); }
     if(test_flash>0) test_flash-=dt;
     /* hits against the click: -150..+150 ms */
-    int gy=TOP+324, gh=200, cx=SW/2; rect(12,gy,456,gh,0x0A0806);
+    int gy=TOP+324, gh=200, cx=CW/2; rect(12,gy,456,gh,0x0A0806);
     if(test_click){ rect(cx-(int)(110*1.4f),gy,(int)(220*1.4f),gh,0x1A1410); rect(cx-(int)(50*1.4f),gy,(int)(100*1.4f),gh,0x24201A); rect(cx,gy,1,gh,0xF4E4D0);
-        text(16,gy+4,"EARLY",1,0x8A6A4A); text(SW-46,gy+4,"LATE",1,0x8A6A4A); }
-    for(int i=0;i<nth;i++){ int x=test_click? cx+(int)(TH[i].off*1.4f) : 24+(i%20)*22; if(x<16) x=16; if(x>SW-16) x=SW-16;
+        text(16,gy+4,"EARLY",1,0x8A6A4A); text(CW-46,gy+4,"LATE",1,0x8A6A4A); }
+    for(int i=0;i<nth;i++){ int x=test_click? cx+(int)(TH[i].off*1.4f) : 24+(i%20)*22; if(x<16) x=16; if(x>CW-16) x=CW-16;
         circle(x,gy+gh-10-i*8,4,SRC_C[TH[i].src]); }
     /* stats */
     int y=TOP+532;
@@ -1128,6 +1159,7 @@ static int64_t ev_sample(const struct input_event*e){            /* evdev time (
     return now_sample()-d*DR_RATE/1000000; }
 static int test_tap(int x,int y,int64_t t);
 static void press_at(int x,int y,int64_t t){
+    if(land) return;                                 /* landscape: no pads, the controller plays */
     static int logged; if(logged<20){ logged++; fprintf(stderr,"[touch] press %d,%d state %d\n",x,y,st); }
     if(st==ST_BATTLE){ if(y>=PAD_Y) for(int d=0;d<4;d++){ int px_,py,w,h; pad_rect(d,&px_,&py,&w,&h); if(x>=px_&&x<px_+w&&y>=py&&y<py+h){ drum(d,t,SRC_TOUCH); return; } }
         if(paused && y<PAD_Y) resume_play();
@@ -1200,19 +1232,19 @@ static void on_crash(int sig){ fprintf(stderr,"[r3drum] crash %d\n",sig); _exit(
 
 /* --shot SCENE OUT.ppm: draw one scene into a picture, no screen / sound (art checks on a PC).
  * SCENE: camp | edit | battle:M:X[:boss] (mission M, squad at x X, boss telegraphing) */
-static void write_ppm(const char*path){ FILE*f=fopen(path,"wb"); if(!f) return; fprintf(f,"P6 %d %d 255\n",SW,SH-TOP);
-    for(int y=TOP;y<SH;y++) for(int x=0;x<SW;x++){ uint16_t c=cv[y][x]; fputc((c>>11)<<3,f); fputc(((c>>5)&63)<<2,f); fputc((c&31)<<3,f); }
+static void write_ppm(const char*path){ FILE*f=fopen(path,"wb"); if(!f) return; int t0=land?0:TOP; fprintf(f,"P6 %d %d 255\n",CW,CH-t0);
+    for(int y=t0;y<CH;y++) for(int x=0;x<CW;x++){ uint16_t c=CV(x,y); fputc((c>>11)<<3,f); fputc(((c>>5)&63)<<2,f); fputc((c&31)<<3,f); }
     fclose(f); }
 static int shot(const char*scene,const char*out){
     dg_armory_default(&A); A.cleared=3; A.weapons=0xFFFFFFFFu; A.shields=0xFFu;
     if(!strcmp(scene,"camp")) draw_camp();
     else if(!strcmp(scene,"edit")){ slot=1; A.squad[1]=(loadout_t){CL_LANCER,4,5}; draw_edit(); }
     else if(!strcmp(scene,"test")){ test_enter(); for(int i=0;i<14;i++){ test_hit(i%3==0?SRC_PAD:SRC_TOUCH,test_t0+i*test_beat+(i%3==0?7200:1200+(i%4)*700)); } draw_test(0); }
-    else if(!strncmp(scene,"battle:",7)){ int m=0,x=600; char boss[8]=""; sscanf(scene+7,"%d:%d:%7s",&m,&x,boss);
+    else if(!strncmp(scene,"battle:",7)){ int m=0,x=600; char boss[8]=""; sscanf(scene+7,"%d:%d:%7s",&m,&x,boss); if(strstr(scene,"land")){ set_mode(1); if(!strncmp(boss,"land",4)) boss[0]=0; }
         sel=m; dg_start(&G,m,&A,7); rc_init(&rc,120,0); G.sx=(float)x; cam=G.sx-150;
         for(int i=0;i<90;i++) dg_step(&G,1/60.0f);
         for(int k=0;k<DG_MAXE;k++) if(G.e[k].on&&(G.e[k].traits&TR_SCOUT)&&fabsf(G.e[k].x-G.sx)<300) G.e[k].fleeing=1;
-        if(boss[0]){ int b=dg_boss(&G); if(b>=0){ G.e[b].move=1; G.e[b].windup=7; } G.guard_until=(int)G.beat+4; }
+        if(boss[0]=='b'){ int b=dg_boss(&G); if(b>=0){ G.e[b].move=1; G.e[b].windup=7; } G.guard_until=(int)G.beat+4; }
         BB[0]=(bubble_t){1,LINES[boss[0]?SAY_TELEGRAPH:SAY_MARCH][0],1}; G.time= x<700 ? 5 : 12;
         draw_battle(); }
     else { fprintf(stderr,"unknown scene %s\n",scene); return 2; }
@@ -1247,7 +1279,7 @@ int main(int argc,char**argv){
     if(fd<0||ioctl(fd,FBIOGET_VSCREENINFO,&vi)||ioctl(fd,FBIOGET_FSCREENINFO,&fi)){ fprintf(stderr,"no fb\n"); return 1; }
     vi.xoffset=0; vi.yoffset=0; ioctl(fd,FBIOPAN_DISPLAY,&vi);
     fb=mmap(0,fi.smem_len,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0); fbstride=fi.line_length/2;
-    for(int y=0;y<TOP;y++) memset(fb+y*fbstride,0,SW*2);    /* rows under the bezel: no leftovers */
+    for(int y=0;y<TOP;y++) memset(fb+y*fbstride,0,CW*2);    /* rows under the bezel: no leftovers */
     int clk=CLOCK_MONOTONIC;
     ts_fd=open("/dev/input/event1",O_RDONLY|O_NONBLOCK); kp_fd=open("/dev/input/event0",O_RDONLY|O_NONBLOCK); km_fd=open("/dev/input/event2",O_RDONLY|O_NONBLOCK);
     if(ts_fd>=0) ioctl(ts_fd,EVIOCSCLOCKID,&clk); if(kp_fd>=0) ioctl(kp_fd,EVIOCSCLOCKID,&clk); if(km_fd>=0) ioctl(km_fd,EVIOCSCLOCKID,&clk);
@@ -1265,11 +1297,12 @@ int main(int argc,char**argv){
         int64_t t0=now_us(); float dt=(float)(t0-last)/1e6f; if(dt>0.1f) dt=0.1f; last=t0;
         poll_touch(); poll_keys(); poll_pads();
         if(st==ST_BATTLE) battle_tick(dt);
+        { int want=(st==ST_BATTLE||st==ST_LISTEN) && pad_count()>0; if(want!=land) set_mode(want); }
         if(st==ST_LISTEN) listen_tick(dt);
         if(st==ST_BATTLE) draw_battle(); else if(st==ST_CAMP) draw_camp(); else if(st==ST_EDIT) draw_edit();
         else if(st==ST_LISTEN) draw_listen(); else if(st==ST_TEST) draw_test(dt); else draw_result();
         present();
-        if(r3_tick_ms()<vb_until) vb_draw(fb,fbstride,0,vol);
+        if(r3_tick_ms()<vb_until) vb_draw(fb,fbstride,land,vol);
         if(++vt%60==0) hw_volume();
         /* ~40 fps drawing; inputs polled every 2 ms in between (the Joy-Con has no timestamps) */
         int64_t until=t0+1000000/40;
@@ -1278,7 +1311,7 @@ int main(int argc,char**argv){
     save_game(); music_stop();
     audio_run=0; pthread_join(at,NULL);
     if(pcm) pcm_close(pcm); if(mx) mixer_close(mx); bt_close();
-    memset(cv,0,sizeof cv); present();
+    memset(cvbuf,0,sizeof cvbuf); present();
     fprintf(stderr,"[r3drum] quit\n");
     return 0;
 }
