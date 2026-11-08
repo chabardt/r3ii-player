@@ -241,7 +241,7 @@ static void poll_keys(unsigned*bits){
     while(km_fd>=0 && read(km_fd,&e,sizeof e)==sizeof e){ if(e.type!=EV_KEY) continue;
         if(e.code==163) *bits = e.value ? (*bits|K_A) : (*bits&~K_A);
         else if(e.code==164) *bits = e.value ? (*bits|K_START) : (*bits&~K_START);
-        else if(e.value && (e.code==115||e.code==114)){ vol+= e.code==115?12:-12; if(vol<0)vol=0; if(vol>255)vol=255;
+        else if(e.value && (e.code==115||e.code==114)){ vol+= e.code==115?12:-12; if(vol<0)vol=0; if(vol>vb_max())vol=vb_max();
             hw_volume(); vb_save(vol); vb_until=now_ms()+2000; } }
 }
 static unsigned pad_bits(void){

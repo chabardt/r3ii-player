@@ -14,8 +14,11 @@
 #define VB_H 720
 #define VB_THICK 54
 
-static inline int vb_load(void){ int v=160; FILE*f=fopen(VB_FILE,"r"); if(f){ if(fscanf(f,"%d",&v)!=1) v=160; fclose(f); }
-    return v<0?0:v>255?255:v; }
+#define VB_MAX_FILE "/usr/data/r3_volmax"   /* Settings > Sounds > Maximum volume (ear safety) */
+static inline int vb_max(void){ int m=255; FILE*f=fopen(VB_MAX_FILE,"r"); if(f){ if(fscanf(f,"%d",&m)!=1) m=255; fclose(f); }
+    return m<24?24:m>255?255:m; }
+static inline int vb_load(void){ int v=160, m=vb_max(); FILE*f=fopen(VB_FILE,"r"); if(f){ if(fscanf(f,"%d",&v)!=1) v=160; fclose(f); }
+    return v<0?0:v>m?m:v; }
 static inline void vb_save(int v){ FILE*f=fopen(VB_FILE,"w"); if(f){ fprintf(f,"%d\n",v); fclose(f); } }
 static inline uint16_t vb_rgb(uint32_t c){ return (uint16_t)(((c>>8)&0xF800)|((c>>5)&0x07E0)|((c>>3)&0x1F)); }
 

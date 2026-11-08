@@ -1213,7 +1213,7 @@ static void poll_keys(void){
     while(km_fd>=0 && read(km_fd,&e,sizeof e)==sizeof e){ if(e.type!=EV_KEY || e.value!=1) continue;
         if(e.code==163) drum(DR_KA,ev_sample(&e),SRC_KEYS);
         else if(e.code==164) drum(DR_TOK,ev_sample(&e),SRC_KEYS);
-        else if(e.code==115||e.code==114){ vol+= e.code==115?12:-12; if(vol<0)vol=0; if(vol>255)vol=255; hw_volume(); vb_save(vol); vb_until=r3_tick_ms()+2000; } }
+        else if(e.code==115||e.code==114){ vol+= e.code==115?12:-12; if(vol<0)vol=0; if(vol>vb_max())vol=vb_max(); hw_volume(); vb_save(vol); vb_until=r3_tick_ms()+2000; } }
 }
 /* Drums by the buttons' physical places, matching the pads on screen:
  * bottom = DUM (bottom-left pad), right = KA (bottom-right), top = CHI (top-right), left = TOK (top-left).
