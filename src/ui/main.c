@@ -949,6 +949,8 @@ static void idle_poll(void){
 #define PREFS_FILE "/usr/data/r3_prefs"
 #define BL_PATH    "/sys/class/backlight/backlight_pwm0/brightness"   /* 0..101 */
 static int p_bright=60, p_timeout=60 /* s, 0 = never */, p_filter=0, p_nos=0;
+#define VOLMAX_FILE "/usr/data/r3_volmax"   /* the games read it too (common/volbar.h) */
+static int p_volmax=255;
 static int g_scr_off=0;           /* backlight off (screen timeout) */
 static volatile int g_wake_swallow=0;   /* the touch that woke the screen must not click */
 static void prefs_save(void){
@@ -956,6 +958,8 @@ static void prefs_save(void){
     fprintf(f,"bright=%d\ntimeout=%d\nfilter=%d\nnos=%d\n",p_bright,p_timeout,p_filter,p_nos); fclose(f);
 }
 static void prefs_load(void){
+    { FILE*vm=fopen(VOLMAX_FILE,"r"); int v; if(vm){ if(fscanf(vm,"%d",&v)==1) p_volmax=v<24?24:(v>255?255:v); fclose(vm); } }
+    audio_set_volume_max(p_volmax);
     FILE*f=fopen(PREFS_FILE,"r"); if(!f) return; char l[64];
     while(fgets(l,sizeof l,f)){ int v;
         if(sscanf(l,"bright=%d",&v)==1) p_bright = v<5?5:(v>101?101:v);
@@ -1054,8 +1058,31 @@ static void snd_filter_cb(lv_event_t*e){ lv_obj_t*bm=lv_event_get_target(e);
     p_filter=i; audio_set_dac_filter(p_filter,p_nos); prefs_save(); }
 static void snd_nos_cb(lv_event_t*e){ lv_obj_t*sw=lv_event_get_target(e);
     p_nos=lv_obj_has_state(sw,LV_STATE_CHECKED)?1:0; audio_set_dac_filter(p_filter,p_nos); prefs_save(); }
+static lv_obj_t*vm_lbl;
+static void vm_label(void){ if(vm_lbl){ char b[24]; snprintf(b,sizeof b,"%d%%",p_volmax*100/255); lv_label_set_text(vm_lbl,b); } }
+static void snd_volmax_cb(lv_event_t*e){ lv_obj_t*s=lv_event_get_target(e);
+    p_volmax=lv_slider_get_value(s); audio_set_volume_max(p_volmax); vm_label();
+    if(lv_event_get_code(e)==LV_EVENT_RELEASED){
+        FILE*f=fopen(VOLMAX_FILE,"w"); if(f){ fprintf(f,"%d\n",p_volmax); fclose(f); }
+        f=fopen(VOL_FILE,"w"); if(f){ fprintf(f,"%d\n",audio_get_volume()); fclose(f); } } }   /* lowered under the cap */
 static void show_sounds(void){
     lv_obj_t*scr,*l=page_new(_("Sounds"),setup_back_cb,&scr);
+    set_section(l,_("MAXIMUM VOLUME"));
+    { lv_obj_t*b=page_box(l,70);
+      lv_obj_t*lo=lv_label_create(b); lv_label_set_text(lo,LV_SYMBOL_VOLUME_MAX);
+      lv_obj_set_style_text_color(lo,lv_color_hex(C_DIM),0); lv_obj_align(lo,LV_ALIGN_LEFT_MID,0,0);
+      lv_obj_t*s=lv_slider_create(b); lv_obj_set_size(s,300,14); lv_obj_align(s,LV_ALIGN_LEFT_MID,40,0);
+      lv_slider_set_range(s,24,255); lv_slider_set_value(s,p_volmax,LV_ANIM_OFF);
+      lv_obj_set_style_bg_color(s,lv_color_hex(C_PANEL2),LV_PART_MAIN);
+      lv_obj_set_style_bg_color(s,lv_color_hex(C_ACCENT),LV_PART_INDICATOR);
+      lv_obj_set_style_bg_color(s,lv_color_hex(C_FG),LV_PART_KNOB);
+      lv_obj_set_style_pad_all(s,8,LV_PART_KNOB); lv_obj_set_ext_click_area(s,20);
+      lv_obj_add_event_cb(s,snd_volmax_cb,LV_EVENT_VALUE_CHANGED,NULL);
+      lv_obj_add_event_cb(s,snd_volmax_cb,LV_EVENT_RELEASED,NULL);
+      vm_lbl=lv_label_create(b); lv_obj_set_style_text_color(vm_lbl,lv_color_hex(C_FG),0);
+      lv_obj_align(vm_lbl,LV_ALIGN_RIGHT_MID,0,0); vm_label(); }
+    { lv_obj_t*n=lv_label_create(l); lv_label_set_text(n,_("The volume keys never go above this, in games too."));
+      lv_obj_set_style_text_color(n,lv_color_hex(C_DIM),0); lv_obj_set_style_pad_hor(n,12,0); }
     set_section(l,_("DAC DIGITAL FILTER"));
     lv_obj_t*b=page_box(l,84);
     lv_obj_t*bm=lv_btnmatrix_create(b); lv_btnmatrix_set_map(bm,FL_MAP);
@@ -1267,7 +1294,7 @@ static void show_setup(void){
     if(p_timeout) snprintf(sub[2],64,_("brightness %d%%, off after %d%s"),p_bright*100/101,
                            p_timeout>=60?p_timeout/60:p_timeout,p_timeout>=60?_(" min"):_(" s"));
     else snprintf(sub[2],64,_("brightness %d%%, always on"),p_bright*100/101);
-    snprintf(sub[3],64,_("filter %d%s"),p_filter+1,p_nos?_(", NOS"):"");
+    snprintf(sub[3],64,_("filter %d%s, max volume %d%%"),p_filter+1,p_nos?_(", NOS"):"",p_volmax*100/255);
     { time_t t=time(0); struct tm tm; localtime_r(&t,&tm); strftime(sub[4],64,"%d/%m/%Y %H:%M",&tm); }
     lv_obj_t*pad=lv_obj_create(l); lv_obj_set_size(pad,10,8);
     lv_obj_set_style_bg_opa(pad,LV_OPA_TRANSP,0); lv_obj_set_style_border_width(pad,0,0);

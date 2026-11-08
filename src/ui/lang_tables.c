@@ -116,6 +116,7 @@ static const lang_entry_t L_fr[] = {
     { "Lights", "Lumi\303\250re" },
     { "Lights off", "Lumi\303\250re \303\251teinte" },
     { "Lights on", "Lumi\303\250re allum\303\251e" },
+    { "MAXIMUM VOLUME", "VOLUME MAXIMUM" },
     { "MINES", "MINES" },
     { "MOKO  -  egg", "MOKO  -  \305\223uf" },
     { "MULTI BALL!", "MULTI-BALLES !" },
@@ -219,6 +220,7 @@ static const lang_entry_t L_fr[] = {
     { "Tap again to erase all scores", "Touchez encore pour tout effacer" },
     { "Test buttons", "Tester les boutons" },
     { "That was unfair...", "C\342\200\231\303\251tait injuste..." },
+    { "The volume keys never go above this, in games too.", "Les touches de volume ne vont jamais au-del\303\240, m\303\252me en jeu." },
     { "Thursday", "jeudi" },
     { "Tuesday", "mardi" },
     { "Turn Wi-Fi on to share your music with\nVLC and other players on this network.\nWi-Fi uses more battery.", "Activez le Wi-Fi pour partager votre musique\navec VLC et d\342\200\231autres lecteurs du r\303\251seau.\nLe Wi-Fi consomme plus de batterie." },
@@ -255,7 +257,7 @@ static const lang_entry_t L_fr[] = {
     { "elder", "ancien" },
     { "event", "\303\251v\303\251nement" },
     { "falling-block puzzle", "puzzle de blocs qui tombent" },
-    { "filter %d%s", "filtre %d%s" },
+    { "filter %d%s, max volume %d%%", "filtre %d%s, volume max %d%%" },
     { "food", "repas" },
     { "from your favorites & plays", "selon vos favoris et \303\251coutes" },
     { "game in progress", "partie en cours" },
@@ -298,6 +300,6 @@ static const lang_entry_t L_fr[] = {
     { "went back to the stars", "est reparti vers les \303\251toiles" },
 };
 const lang_t LANGS[] = {
-    { "fr", "Fran\303\247ais", 294, L_fr },
+    { "fr", "Fran\303\247ais", 296, L_fr },
 };
 const int LANG_N = 1;
