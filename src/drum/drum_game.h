@@ -34,6 +34,10 @@ enum { ET_GRUNT, ET_IRONBACK, ET_WINGSPITE, ET_PALISADE, ET_STONESLINGER,
        /* forts */      ET_SCOUT, ET_GATE, ET_WATCHTOWER, ET_IRONGATE, ET_BALLISTA,
        /* sub-bosses */ ET_CHIEFTAIN, ET_RUSTJAW, ET_HEXMOTHER, ET_CINDERHORN,
        /* bosses */     ET_THORNHIDE, ET_GLOOMWING, ET_GLACIERWYRM, ET_EMBERMAW, ET_N };
+/* visual effects reported to the frontend (it empties fx[] each frame) */
+enum { FX_HIT, FX_CRIT, FX_HURT, FX_BLOCK, FX_HEAL, FX_SPECIAL };   /* FX_SPECIAL: arg = class */
+typedef struct { float x, y; int amt, kind, arg; } dg_fx_t;
+#define DG_MAXFX 32
 /* boss moves */
 enum { MV_MELEE,     /* heavy blow on the front unit */
        MV_SWEEP,     /* hits the whole squad */
@@ -74,12 +78,13 @@ int  dg_weapon_ok(int cls,int w);            /* class may wield it */
 int  dg_shield_ok(int cls,int s);
 float dg_mult(int dtype,int elem,int traits); /* damage multiplier vs a foe's traits */
 
-typedef struct { int on, cls, weapon, shield; float hp, maxhp, x, flash, swing; int rallied; float off; } unit_t;   /* off: combat step from the formation spot */
+typedef struct { int on, cls, weapon, shield; float hp, maxhp, x, flash, swing; int rallied; float off, kb; } unit_t;   /* off: combat step from the formation spot; kb: knocked back by a blow */
 typedef struct { int on, type, traits; float x, y, hp, maxhp, burn, flash, bob;
                  int frost, next, windup;              /* beats: countdown, telegraph */
                  int move, enraged, grounded, summoned, spawns; /* bosses: move telegraphed (-1), phase 2, dive; minion; summons made */
                  int fleeing; float fled;              /* scouts */
-                 float act; } enemy_t;                 /* animation: 1 when a blow lands, decays */
+                 float act;                            /* animation: 1 when a blow lands, decays */
+                 float home, kb, walk; } enemy_t;      /* spawn x (bosses keep near it), knockback still to apply, distance walked (legs) */
 typedef struct { int on, foe, target, kind, dtype, elem; float t, dur, x0, y0, dmg; } proj_t;   /* foe: thrown by an enemy */
 
 typedef struct {
@@ -94,11 +99,12 @@ typedef struct {
     int ev_attack, ev_hit, ev_kill, ev_hurt, ev_block, ev_heal, ev_windup, ev_drop;   /* ev_drop: reward code+1 */
     int ev_boss_move;             /* a boss started telegraphing move index+1 */
     int ev_boss_land, ev_quake, ev_roar, ev_summon, ev_boss_down;
-    int ev_scout_flee, ev_alarm, ev_gate_down;
+    int ev_scout_flee, ev_alarm, ev_gate_down, ev_special;
+    dg_fx_t fx[DG_MAXFX]; int nfx;
 } dg_t;
 
 void dg_start(dg_t*g,int mission,const armory_t*a,uint32_t seed);
-void dg_beat(dg_t*g,int64_t beat,int cmd,int beat_in,int fever);   /* cmd: CMD_NONE when idle */
+void dg_beat(dg_t*g,int64_t beat,int cmd,int beat_in,int fever);   /* cmd: CMD_NONE when idle; fever 2 = super fever */
 void dg_step(dg_t*g,float dt);
 int  dg_alive(const dg_t*g);
 int  dg_enemies_left(const dg_t*g);

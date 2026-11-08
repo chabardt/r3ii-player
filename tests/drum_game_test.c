@@ -30,7 +30,7 @@ static float hp_frac(const dg_t*g){ float h=0,m=0; for(int i=0;i<DG_MAXU;i++) if
 static int choose(const dg_t*g,int smart){
     if(smart){ int k=dg_boss(g); const bmove_t*mv=k>=0?dg_boss_move(g,k):0;
         /* guard only if the blow lands inside the window a GUARD drummed now will cover
-         * (response starts in 4 beats, the stance holds 8) — otherwise hit it while it winds up */
+         * (response starts in 4 beats, the stance holds 12) — otherwise hit it while it winds up */
         if(mv && mv->kind!=MV_SUMMON && mv->kind!=MV_HEAL && mv->kind!=MV_ROAR
            && g->e[k].windup>=4 && g->e[k].windup<=11 && g->beat+g->e[k].windup>g->guard_until) return CMD_GUARD;
         for(int j=0;j<DG_MAXE;j++){ const enemy_t*e=&g->e[j];          /* a ballista bolt on its way */
@@ -43,16 +43,17 @@ static int choose(const dg_t*g,int smart){
     if(front_reaches(g)) return CMD_STRIKE;
     return alt ? CMD_STRIKE : CMD_MARCH;
 }
-typedef struct { int won, lost, beats; float hp; } result_t;
+typedef struct { int won, lost, beats, specials; float hp; } result_t;
 static result_t play(int mission,const armory_t*a,uint32_t seed,int smart){
     static dg_t g; dg_start(&g,mission,a,seed);
-    int64_t beat=0; int cmd=CMD_NONE, combo=0; result_t r={0};
+    int64_t beat=0; int cmd=CMD_NONE, combo=0, specials=0; result_t r={0};
     while(!g.won && !g.lost && beat<8000){
         int cyc=(int)(beat%8);
         if(cyc==0) cmd=choose(&g,smart);
-        int fever=combo>=DR_FEVER_AT;
+        if(cyc==0 && smart && combo>=DR_SUPER_AT && cmd!=CMD_GUARD && in_reach(&g)) cmd=CMD_SPECIAL;   /* spend super fever */
+        int fever=combo>=DR_SUPER_AT?2:combo>=DR_FEVER_AT;
         dg_beat(&g,beat,cyc<4?CMD_NONE:cmd,cyc<4?cyc:cyc-4,fever);
-        if(cyc==7) combo++;
+        if(cyc==7){ combo++; if(cmd==CMD_SPECIAL){ combo=DR_FEVER_AT; specials++; } }
         for(int s=0;s<30 && !g.won && !g.lost;s++) dg_step(&g,0.5f/30);
         for(int i=0;i<DG_MAXU;i++) if(g.u[i].on){
             if(!(g.u[i].hp>=0 && g.u[i].hp<=g.u[i].maxhp+0.01f) || isnan(g.u[i].x)){ CHECK(0,"unit %d hp %f x %f",i,g.u[i].hp,g.u[i].x); return r; } }
@@ -60,7 +61,7 @@ static result_t play(int mission,const armory_t*a,uint32_t seed,int smart){
         if(!(g.sx>=120 && g.sx<=g.m->length+200)){ CHECK(0,"squad x %f",g.sx); return r; }
         beat++;
     }
-    r.won=g.won; r.lost=g.lost; r.beats=(int)beat; r.hp=hp_frac(&g);
+    r.won=g.won; r.lost=g.lost; r.beats=(int)beat; r.hp=hp_frac(&g); r.specials=specials;
     if(getenv("DG_DEBUG") && !g.won){
         printf("  [m%d seed %u] %s at beat %lld, squad x %.0f:",mission+1,seed,g.lost?"wiped":"timeout",(long long)beat,g.sx);
         for(int i=0;i<DG_MAXU;i++) if(g.u[i].on) printf(" %s %.0f/%.0f",DG_CLASS[g.u[i].cls].name,g.u[i].hp,g.u[i].maxhp);
@@ -98,9 +99,9 @@ int main(void){
         {CL_WARDEN,7,5,  CL_LANCER,2,3,  CL_SLINGER,11,0, CL_MENDER,17,0},          /* crush for the bulwark, fire vs frostborn */
         {CL_WARDEN,7,6,  CL_LANCER,19,5, CL_SLINGER,12,0, CL_MENDER,17,0},          /* frost vs the fireproof beast */
     };
-    for(int m=0;m<DG_NMISSION;m++){ armory_t s=a; loadout(&s,4,SQ[m]); int wins=0, beats=0; float hp=0;
-        for(uint32_t seed=1;seed<=12;seed++){ result_t r=play(m,&s,seed,1); wins+=r.won; beats+=r.beats; hp+=r.hp; }
-        printf("mission %d %-16s smart: %d/12 won, %.1f min avg, %.0f%% hp left\n",m+1,DG_MISSION[m].name,wins,beats/12*0.5/60,hp/12*100);
+    for(int m=0;m<DG_NMISSION;m++){ armory_t s=a; loadout(&s,4,SQ[m]); int wins=0, beats=0; float hp=0; int sp=0;
+        for(uint32_t seed=1;seed<=12;seed++){ result_t r=play(m,&s,seed,1); wins+=r.won; beats+=r.beats; hp+=r.hp; sp+=r.specials; }
+        printf("mission %d %-16s smart: %d/12 won, %.1f min avg, %.0f%% hp left, %.1f specials\n",m+1,DG_MISSION[m].name,wins,beats/12*0.5/60,hp/12*100,sp/12.0);
         CHECK(wins>=8,"mission %d should be winnable with a fitting squad (%d/12)",m+1,wins);
         CHECK(beats/12*0.5/60<9,"mission %d takes too long",m+1); }
     /* strategy matters */

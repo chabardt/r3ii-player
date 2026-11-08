@@ -222,7 +222,7 @@ static void enemy_init(dg_t*g,int i,int type,float x){
     memset(e,0,sizeof *e);
     e->on=1; e->type=type; e->traits=t->traits; e->x=x; e->maxhp=e->hp=(float)t->hp*(t->boss>=0?BOSS_HP:1); e->move=-1;
     e->next=t->period? t->period+(i%t->period) : 0;
-    e->y=(t->traits&TR_FLYING) ? (t->boss>=0?-150.0f:-120.0f) : 0.0f; e->bob=(float)i;
+    e->y=(t->traits&TR_FLYING) ? (t->boss>=0?-150.0f:-120.0f) : 0.0f; e->bob=(float)i; e->home=x;
 }
 void dg_start(dg_t*g,int mission,const armory_t*a,uint32_t seed){
     memset(g,0,sizeof *g);
@@ -240,7 +240,7 @@ int dg_enemies_left(const dg_t*g){ int n=0; for(int i=0;i<DG_MAXE;i++) if(g->e[i
 float dg_unit_y(const dg_t*g,int i){
     const unit_t*u=&g->u[i]; float y=0;
     if(g->move_left!=0) y=-fabsf(sinf(g->time*12.566f+(float)i))*6;   /* trot */
-    if(u->swing>0) y-=u->swing*4;
+    if(u->swing>0) y-=u->swing*7;
     return y;
 }
 
@@ -250,15 +250,20 @@ static void drop(dg_t*g){
     const mission_t*m=g->m; g->ev_drop=m->reward[rnd(g)%m->nreward]+1;
 }
 static int totem_up(const dg_t*g){ for(int k=0;k<DG_MAXE;k++) if(g->e[k].on&&g->e[k].hp>0&&(g->e[k].traits&TR_TOTEM)) return 1; return 0; }
-static void enemy_hurt(dg_t*g,int k,float dmg,int elem,int chain){
+static void fx(dg_t*g,float x,float y,float amt,int kind,int arg){
+    if(g->nfx<DG_MAXFX) g->fx[g->nfx++]=(dg_fx_t){x,y,(int)(amt+0.5f),kind,arg}; }
+static float sup(const dg_t*g){ return g->fever>=2?1.4f : g->fever?1.25f : 1; }   /* fever / super fever */
+static void enemy_hurt(dg_t*g,int k,float dmg,int elem,int chain,int crit){
     enemy_t*e=&g->e[k]; if(!e->on || e->hp<=0) return;
     if(!(e->traits&TR_TOTEM) && totem_up(g)) dmg*=0.7f;
     e->hp-=dmg; e->flash=0.25f; g->ev_hit++;
+    fx(g,dg_front(e)+8,e->y-(DG_ETYPE[e->type].boss>=0?70:30),dmg,crit?FX_CRIT:FX_HIT,elem);
+    if(!(e->traits&(TR_STATIC|TR_GATE))){ float p = DG_ETYPE[e->type].boss>=0 ? fminf(dmg*0.25f,10) : fminf(dmg*1.4f,40); e->kb+=p; }   /* knocked back */
     if(elem==EL_FIRE && !(e->traits&TR_FIREPROOF)) e->burn=3.0f;
     if(elem==EL_FROST && !(e->traits&TR_FROSTBORN)) e->frost=2;
     if(elem==EL_STORM && chain){ int best=-1; float bd=140;
         for(int j=0;j<DG_MAXE;j++){ enemy_t*o=&g->e[j]; if(j==k||!o->on||o->hp<=0) continue; float d=fabsf(o->x-e->x); if(d<bd){ bd=d; best=j; } }
-        if(best>=0) enemy_hurt(g,best,dmg*0.5f,EL_NONE,0); }
+        if(best>=0) enemy_hurt(g,best,dmg*0.5f,EL_NONE,0,0); }
     if(e->hp<=0){ e->hp=0; g->ev_kill++; if(DG_ETYPE[e->type].boss>=0) g->ev_boss_down++; if(e->traits&TR_GATE) g->ev_gate_down++;
         if(!e->summoned && !(e->traits&(TR_GATE|TR_STATIC))) drop(g); }
 }
@@ -270,6 +275,8 @@ static float unit_hurt(dg_t*g,int i,float dmg){
     if(guarding(g)){ b=blk*2+0.15f; if(u->cls!=CL_WARDEN && warden_up(g)) b+=0.2f; if(b>0.85f) b=0.85f; }
     else b=blk*0.5f;
     float took=dmg*(1-b); u->hp-=took;   /* dmg already scaled by the caller */ u->flash=0.3f; g->ev_hurt++; if(b>=0.5f) g->ev_block++;
+    u->kb+=fminf(took*2.5f,60); if(u->kb>80) u->kb=80;             /* every blow pushes: a little, or a lot */
+    fx(g,u->x,-30,took,b>=0.5f?FX_BLOCK:FX_HURT,0);
     if(u->hp<0) u->hp=0;
     return took;
 }
@@ -279,7 +286,7 @@ static int random_unit(dg_t*g){ int c[DG_MAXU],n=0; for(int i=0;i<DG_MAXU;i++) i
 static void shoot(dg_t*g,int foe,int target,float x0,float y0,float dmg,int dtype,int elem,int kind,float dist){
     for(int k=0;k<DG_MAXP;k++) if(!g->p[k].on){ proj_t*p=&g->p[k];
         p->on=1; p->foe=foe; p->target=target; p->x0=x0; p->y0=y0; p->dmg=dmg; p->dtype=dtype; p->elem=elem; p->kind=kind;
-        p->t=0; p->dur=0.3f+fabsf(dist)/900.0f; return; }
+        p->t=0; p->dur=0.18f+fabsf(dist)/1400.0f; return; }
 }
 static void shove(dg_t*g,float d){ g->sx-=d; if(g->sx<120) g->sx=120; g->move_left=0; g->ev_quake++; }
 
@@ -326,16 +333,17 @@ static void strike(dg_t*g){
     for(int i=0;i<DG_MAXU;i++){ unit_t*u=&g->u[i]; if(!u->on||u->hp<=0||u->weapon<0) continue;
         int k=target_for(g,u); if(k<0) continue;
         const weapon_t*w=&DG_WEAPON[u->weapon]; enemy_t*e=&g->e[k];
-        float dmg=w->dmg*dg_mult(w->dtype,w->elem,e->traits)*(g->fever?1.25f:1)*(u->rallied?1.35f:1);
+        float m=dg_mult(w->dtype,w->elem,e->traits), dmg=w->dmg*m*sup(g)*(u->rallied?1.35f:1);
         u->swing=1; g->ev_attack++;
         if(DG_CLASS[u->cls].ranged) shoot(g,0,k,u->x,-34,dmg,w->dtype,w->elem,u->cls==CL_SLINGER?(w->dtype==DT_CRUSH?2:1):0,dg_front(e)-u->x);
-        else enemy_hurt(g,k,dmg,w->elem,1);
+        else enemy_hurt(g,k,dmg,w->elem,1,m>=1.4f);
     }
 }
 static void heal_all(dg_t*g,float scale){
     for(int i=0;i<DG_MAXU;i++){ unit_t*m=&g->u[i]; if(!m->on||m->hp<=0||m->cls!=CL_MENDER||m->weapon<0) continue;
         float h=DG_WEAPON[m->weapon].heal*scale*HEAL*(g->fever?1.3f:1);
-        for(int j=0;j<DG_MAXU;j++){ unit_t*u=&g->u[j]; if(!u->on||u->hp<=0) continue; u->hp+=h; if(u->hp>u->maxhp) u->hp=u->maxhp; }
+        for(int j=0;j<DG_MAXU;j++){ unit_t*u=&g->u[j]; if(!u->on||u->hp<=0) continue; float before=u->hp; u->hp+=h; if(u->hp>u->maxhp) u->hp=u->maxhp;
+            if(u->hp-before>=1) fx(g,u->x,0,u->hp-before,FX_HEAL,0); }
         g->ev_heal++; m->swing=1; }
 }
 static float block_limit(const dg_t*g){       /* the squad can't walk through a standing ground foe */
@@ -369,7 +377,7 @@ static void boss_land(dg_t*g,int k,const bmove_t*mv){
     e->act=1; g->ev_boss_land++;
     if(!reach) return;                                         /* retreated out of range: dodged */
     switch(mv->kind){
-    case MV_MELEE:  unit_hurt(g,f,D); if(DG_SHIELD[g->u[f].shield].special&SH_THORNS) enemy_hurt(g,k,6,EL_NONE,0); break;
+    case MV_MELEE:  unit_hurt(g,f,D); if(DG_SHIELD[g->u[f].shield].special&SH_THORNS) enemy_hurt(g,k,6,EL_NONE,0,0); break;
     case MV_SWEEP:  for(int i=0;i<DG_MAXU;i++) unit_hurt(g,i,D); break;
     case MV_QUAKE:  for(int i=0;i<DG_MAXU;i++) unit_hurt(g,i,D); shove(g,(float)mv->n); break;
     case MV_VOLLEY: for(int n=0;n<mv->n;n++){ int v=random_unit(g); if(v>=0) shoot(g,1,v,e->x,e->y-60,D,DT_PIERCE,EL_NONE,3,dist+n*30); } break;
@@ -427,7 +435,7 @@ static void enemies_beat(dg_t*g){
         else if(t->traits&TR_HEALER) mend_foes(g,e->x,0.15f,25);
         else if(t->traits&TR_RANGED){ int v=random_unit(g); if(v>=0) shoot(g,1,v,e->x,e->y-20,t->dmg*FOE_DMG,DT_CRUSH,EL_NONE,(t->traits&TR_BOMB)?4:3,dx); }
         else { unit_hurt(g,f,t->dmg*FOE_DMG);
-            if(DG_SHIELD[g->u[f].shield].special&SH_THORNS) enemy_hurt(g,k,6,EL_NONE,0); }
+            if(DG_SHIELD[g->u[f].shield].special&SH_THORNS) enemy_hurt(g,k,6,EL_NONE,0,0); }
     }
 }
 
@@ -444,6 +452,45 @@ static void scout_run(dg_t*g,int k,float dt){
         spawn_at(g,g->m->alarm[0],at+70); spawn_at(g,g->m->alarm[1],at+120); }
 }
 
+/* SPECIAL (super fever only): every soldier's signature move at once */
+static void special(dg_t*g){
+    int f=front_unit(g); if(f<0) return;
+    float front=g->u[f].x; g->ev_special++;
+    for(int i=0;i<DG_MAXU;i++){ unit_t*u=&g->u[i]; if(!u->on||u->hp<=0||u->weapon<0) continue;
+        const weapon_t*w=&DG_WEAPON[u->weapon]; u->swing=1; fx(g,u->x,-40,0,FX_SPECIAL,u->cls);
+        switch(u->cls){
+        case CL_WARDEN:      /* SHIELD BASH: the foes at the front are hit, stunned 3 beats and thrown back; the wall holds */
+            for(int k=0;k<DG_MAXE;k++){ enemy_t*e=&g->e[k]; float d=dg_front(e)-front;
+                if(!e->on||e->hp<=0||(e->traits&TR_FLYING)||d<-60||d>170) continue;
+                enemy_hurt(g,k,(w->dmg*2+10)*dg_mult(DT_CRUSH,EL_NONE,e->traits)*1.4f,EL_NONE,0,1);
+                if(!(e->traits&(TR_STATIC|TR_GATE))){ if(e->frost<3) e->frost=3; e->kb+=DG_ETYPE[e->type].boss>=0?14:50; } }
+            if(g->guard_until<(int)g->beat+8) g->guard_until=(int)g->beat+8;
+            break;
+        case CL_LANCER:      /* SPEAR RAIN: six javelins over everything ahead, flyers too */
+            for(int n=0;n<6;n++){ int c[DG_MAXE],m=0;
+                for(int k=0;k<DG_MAXE;k++){ const enemy_t*e=&g->e[k]; float d=dg_front(e)-u->x; if(e->on&&e->hp>0&&d>-40&&d<520) c[m++]=k; }
+                if(!m) break; int k=c[rnd(g)%m]; const enemy_t*e=&g->e[k];
+                shoot(g,0,k,u->x,-70-n*6,w->dmg*1.3f*dg_mult(w->dtype,w->elem,e->traits)*1.4f,w->dtype,w->elem,0,dg_front(e)-u->x+n*40); }
+            break;
+        case CL_SLINGER: {   /* PIERCING SHOT: the toughest foe in sight, through any armour */
+            int best=-1; for(int k=0;k<DG_MAXE;k++){ const enemy_t*e=&g->e[k]; float d=dg_front(e)-u->x;
+                if(e->on&&e->hp>0&&d>-40&&d<700&&(best<0||e->hp>g->e[best].hp)) best=k; }
+            if(best>=0){ const enemy_t*e=&g->e[best]; float m=dg_mult(w->dtype,w->elem,e->traits); if(m<1) m=1;
+                shoot(g,0,best,u->x,-40,w->dmg*5*m*1.4f,w->dtype,w->elem,6,dg_front(e)-u->x); }
+            break; }
+        case CL_BREAKER:     /* EARTHQUAKE: every ground foe near the front is crushed and shaken back */
+            for(int k=0;k<DG_MAXE;k++){ enemy_t*e=&g->e[k]; float d=dg_front(e)-front;
+                if(!e->on||e->hp<=0||(e->traits&TR_FLYING)||d<-60||d>320) continue;
+                enemy_hurt(g,k,w->dmg*1.6f*dg_mult(DT_CRUSH,w->elem,e->traits)*1.4f,w->elem,0,1);
+                if(!(e->traits&(TR_STATIC|TR_GATE))) e->kb+=DG_ETYPE[e->type].boss>=0?10:40; }
+            break;
+        case CL_MENDER:      /* BLESSING: half of everyone's health back, a guard and a rally */
+            for(int j=0;j<DG_MAXU;j++){ unit_t*o=&g->u[j]; if(!o->on||o->hp<=0) continue; float b=o->hp;
+                o->hp+=o->maxhp*0.5f; if(o->hp>o->maxhp) o->hp=o->maxhp; o->rallied=1; if(o->hp-b>=1) fx(g,o->x,0,o->hp-b,FX_HEAL,0); }
+            if(g->guard_until<(int)g->beat+8) g->guard_until=(int)g->beat+8;
+            g->ev_heal++; break;
+        } }
+}
 void dg_beat(dg_t*g,int64_t beat,int cmd,int beat_in,int fever){
     if(g->won||g->lost) return;
     g->beat=beat; g->cmd=cmd; g->cmd_beat=beat_in; g->fever=fever;
@@ -463,9 +510,14 @@ void dg_beat(dg_t*g,int64_t beat,int cmd,int beat_in,int fever){
         if(beat_in==3) for(int i=0;i<DG_MAXU;i++) g->u[i].rallied=0;
         break;
     case CMD_GUARD:
-        if(beat_in==0){ g->guard_until=(int)beat+8;   /* a stance: holds while the next command is drummed */
+        if(beat_in==0){ g->guard_until=(int)beat+12;  /* a stance: holds through the next command and its response */
             for(int i=0;i<DG_MAXU;i++) g->u[i].off=0; }   /* close ranks: the shield wall */
         if(beat_in==2) heal_all(g,0.4f);
+        break;
+    case CMD_SPECIAL:
+        if(beat_in==0) engage(g);
+        if(beat_in==1) special(g);
+        if(beat_in==3){ strike(g); for(int i=0;i<DG_MAXU;i++) g->u[i].rallied=0; }
         break;
     case CMD_RALLY:
         if(beat_in==1){ heal_all(g,1); for(int i=0;i<DG_MAXU;i++) if(g->u[i].on) g->u[i].rallied=1; }
@@ -477,6 +529,29 @@ void dg_beat(dg_t*g,int64_t beat,int cmd,int beat_in,int fever){
     if(dg_alive(g)==0) g->lost=1;
 }
 
+/* foes walk up: melee to contact (queueing behind each other), ranged and healers to ~75% of their
+ * range; the garrison waits behind its standing gate; bosses stalk the squad but keep near their lair */
+static float foe_speed(int type){
+    switch(type){ case ET_GRUNT: return 38; case ET_IRONBACK: return 24; case ET_STONESLINGER: return 30; case ET_BRISTLER: return 60;
+    case ET_HEXCALLER: return 26; case ET_GOURDTHROWER: return 28; case ET_BULWARK: return 18; case ET_FROSTLING: return 34; default: return 0; } }
+static void foes_move(dg_t*g,float dt){
+    int f=front_unit(g); if(f<0) return;
+    float ux=g->u[f].x, base=fmaxf(g->sx+48,ux+28);
+    for(int k=0;k<DG_MAXE;k++){ enemy_t*e=&g->e[k]; const etype_t*t=&DG_ETYPE[e->type];
+        if(!e->on||e->hp<=0||e->frost>0||e->fleeing||(e->traits&(TR_STATIC|TR_GATE|TR_FLYING|TR_SCOUT))) continue;
+        float fr=dg_front(e); if(fr-g->sx>480) continue;            /* not seen the squad yet */
+        int sheltered=0, ahead=0;
+        for(int j=0;j<DG_MAXE;j++){ const enemy_t*o=&g->e[j]; if(j==k||!o->on||o->hp<=0) continue;
+            if((o->traits&TR_GATE) && o->x<e->x && o->x>g->sx) sheltered=1;
+            if(!(o->traits&(TR_STATIC|TR_GATE|TR_FLYING)) && o->x<e->x && e->x-o->x<220 && DG_ETYPE[o->type].boss<0) ahead++; }
+        if(sheltered) continue;
+        float want, v;
+        if(t->boss>=0){ if(e->move>=0||e->act>0.3f) continue; v=e->enraged?32:22; want=fmaxf(base+40,e->home-320); }
+        else { v=foe_speed(e->type); if(v<=0||e->act>0.3f) continue;
+            want = (t->traits&(TR_RANGED|TR_HEALER)) ? fmaxf(base,ux+t->range*0.75f) : base+30*ahead; }
+        if(fr>want+1){ float d=fminf(fr-want,v*dt); e->x-=d; e->walk+=d; }
+    }
+}
 void dg_step(dg_t*g,float dt){
     if(g->won||g->lost) return;
     g->time+=dt;
@@ -491,20 +566,23 @@ void dg_step(dg_t*g,float dt){
     if(calm) for(int i=0;i<DG_MAXU;i++){ float*o=&g->u[i].off; *o-=*o*fminf(1,dt*3); if(fabsf(*o)<0.5f) *o=0; }   /* back into formation */
     for(int i=0;i<DG_MAXU;i++){ unit_t*u=&g->u[i]; if(!u->on) continue;
         if(u->hp>0 && calm){ u->hp+=4*dt; if(u->hp>u->maxhp) u->hp=u->maxhp; }   /* catching breath between fights */
-        if(u->hp>0) u->x+= (tx[i]-u->x)*fminf(1,dt*10);
-        if(u->flash>0) u->flash-=dt; if(u->swing>0) u->swing-=dt*4; if(u->swing<0) u->swing=0; }
+        if(u->hp>0) u->x+= (tx[i]-u->kb-u->x)*fminf(1,dt*16);
+        u->kb-=u->kb*fminf(1,dt*3); if(u->kb<0.5f) u->kb=0;   /* staggered back, then steps in again */
+        if(u->flash>0) u->flash-=dt; if(u->swing>0) u->swing-=dt*6; if(u->swing<0) u->swing=0; }
+    foes_move(g,dt);
     for(int k=0;k<DG_MAXE;k++){ enemy_t*e=&g->e[k]; if(!e->on) continue;
         if(e->fleeing && e->hp>0) scout_run(g,k,dt);
         if(e->hp>0 && (e->traits&TR_FLYING) && DG_ETYPE[e->type].boss<0){      /* flyers hound the squad */
             float want=g->sx+170, d=want-e->x; if(fabsf(d)>60) e->x+= (d>0?1:-1)*fminf(fabsf(d),70*dt); }
-        if(e->flash>0) e->flash-=dt; if(e->act>0) e->act-=dt*3;
+        if(e->kb!=0){ float m=e->kb*fminf(1,dt*12); e->x+=m; e->kb-=m; if(fabsf(e->kb)<0.3f) e->kb=0; }
+        if(e->flash>0) e->flash-=dt; if(e->act>0) e->act-=dt*4;
         e->bob+=dt;
         if(e->hp>0 && e->burn>0){ e->burn-=dt; e->hp-=3*dt*((e->traits&TR_WOODEN)?2:1);
             if(e->hp<=0){ e->hp=0; g->ev_kill++; if(DG_ETYPE[e->type].boss>=0) g->ev_boss_down++; if(!e->summoned) drop(g); } } }
     for(int k=0;k<DG_MAXP;k++){ proj_t*p=&g->p[k]; if(!p->on) continue;
         p->t+=dt; if(p->t<p->dur) continue;
         p->on=0;
-        if(!p->foe){ enemy_hurt(g,p->target,p->dmg,p->elem,1); continue; }
+        if(!p->foe){ const enemy_t*e=&g->e[p->target]; enemy_hurt(g,p->target,p->dmg,p->elem,1,p->kind==6||dg_mult(p->dtype,p->elem,e->traits)>=1.4f); continue; }
         unit_t*u=&g->u[p->target];
         if(u->on && u->hp>0 && guarding(g) && (DG_SHIELD[u->shield].special&SH_REFLECT)){   /* mirror: send it back */
             int best=-1; float bd=1e9f; for(int j=0;j<DG_MAXE;j++){ enemy_t*e=&g->e[j]; if(!e->on||e->hp<=0) continue; float d=fabsf(e->x-u->x); if(d<bd){ bd=d; best=j; } }
