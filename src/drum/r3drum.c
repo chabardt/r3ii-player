@@ -249,13 +249,18 @@ static void open_dac(void){                 /* lowest latency first; the codec d
     /* never small periods: 256-frame periods are accepted but wedge the codec's DMA until a power
      * cycle (then nothing plays, r3player included). 1024x4 is what r3gb / r3gba use. */
     static const int TRY[][2]={{1024,4},{2048,8}};
-    for(unsigned i=0;i<sizeof TRY/sizeof TRY[0] && !pcm;i++){
-        struct pcm_config cfg; memset(&cfg,0,sizeof cfg);
-        cfg.channels=2; cfg.rate=DR_RATE; cfg.period_size=TRY[i][0]; cfg.period_count=TRY[i][1]; cfg.format=PCM_FORMAT_S16_LE;
-        cfg.start_threshold=TRY[i][0]; cfg.stop_threshold=TRY[i][0]*TRY[i][1]; cfg.avail_min=TRY[i][0];
-        pcm=pcm_open(0,0,PCM_OUT,&cfg);
-        if(pcm && !pcm_is_ready(pcm)){ pcm_close(pcm); pcm=NULL; }
-        else if(pcm){ PERIOD=TRY[i][0]; NPER=TRY[i][1]; fprintf(stderr,"[r3drum] audio %dx%d (%d ms)\n",PERIOD,NPER,PERIOD*NPER*1000/DR_RATE); } }
+    /* r3player stops its song when we start, but closes the DAC from its audio thread a moment
+     * later: "busy" for a while is normal, so retry for up to 3 s */
+    for(int attempt=0;attempt<30 && !pcm;attempt++){
+        for(unsigned i=0;i<sizeof TRY/sizeof TRY[0] && !pcm;i++){
+            struct pcm_config cfg; memset(&cfg,0,sizeof cfg);
+            cfg.channels=2; cfg.rate=DR_RATE; cfg.period_size=TRY[i][0]; cfg.period_count=TRY[i][1]; cfg.format=PCM_FORMAT_S16_LE;
+            cfg.start_threshold=TRY[i][0]; cfg.stop_threshold=TRY[i][0]*TRY[i][1]; cfg.avail_min=TRY[i][0];
+            pcm=pcm_open(0,0,PCM_OUT,&cfg);
+            if(pcm && !pcm_is_ready(pcm)){ if(attempt%10==0) fprintf(stderr,"[r3drum] DAC %dx%d: %s\n",TRY[i][0],TRY[i][1],pcm_get_error(pcm));
+                pcm_close(pcm); pcm=NULL; }
+            else if(pcm){ PERIOD=TRY[i][0]; NPER=TRY[i][1]; fprintf(stderr,"[r3drum] audio %dx%d (%d ms buffer, ~%d ms queued)\n",PERIOD,NPER,PERIOD*NPER*1000/DR_RATE,QMAX*1000/DR_RATE); } }
+        if(!pcm) usleep(100000); }
     if(pcm){ snprintf(out_name,sizeof out_name,"HEADPHONES"); dac_route(); hw_volume(); }
 }
 static void bt_close(void){ if(bt_fd>=0) close(bt_fd); bt_fd=-1; if(bt_pid>0){ kill(bt_pid,SIGTERM); waitpid(bt_pid,0,0); } bt_pid=-1; }
