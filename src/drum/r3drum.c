@@ -1244,6 +1244,7 @@ static int shot(const char*scene,const char*out){
     else if(!strncmp(scene,"battle:",7)){ int m=0,x=600; char boss[8]=""; sscanf(scene+7,"%d:%d:%7s",&m,&x,boss); if(strstr(scene,"land")){ set_mode(1); if(!strncmp(boss,"land",4)) boss[0]=0; }
         sel=m; dg_start(&G,m,&A,7); rc_init(&rc,120,0); G.sx=(float)x; cam=G.sx-150;
         for(int i=0;i<90;i++) dg_step(&G,1/60.0f);
+        if(strstr(scene,"strike")){ dg_beat(&G,0,CMD_STRIKE,0,0); for(int i=0;i<40;i++) dg_step(&G,1/60.0f); }
         for(int k=0;k<DG_MAXE;k++) if(G.e[k].on&&(G.e[k].traits&TR_SCOUT)&&fabsf(G.e[k].x-G.sx)<300) G.e[k].fleeing=1;
         if(boss[0]=='b'){ int b=dg_boss(&G); if(b>=0){ G.e[b].move=1; G.e[b].windup=7; } G.guard_until=(int)G.beat+4; }
         BB[0]=(bubble_t){1,LINES[boss[0]?SAY_TELEGRAPH:SAY_MARCH][0],1}; G.time= x<700 ? 5 : 12;

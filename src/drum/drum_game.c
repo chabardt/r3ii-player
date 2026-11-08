@@ -146,11 +146,11 @@ const mission_t DG_MISSION[]={
          {ET_PALISADE,2300},{ET_WATCHTOWER,2340},{ET_GRUNT,2400},{ET_CHIEFTAIN,2520},
          {ET_STONESLINGER,2900},{ET_GRUNT,3000},{ET_THORNHIDE,3600}},
         4, {1, 7, 100+3, 2}, {ET_GRUNT,ET_BRISTLER}, BIOME_FOREST},
-    {"SUNSCAR DUNES", "BEETLES, A DESERT FORTRESS, WINGS", 4400, 20,
+    {"SUNSCAR DUNES", "BEETLES, A DESERT FORTRESS, WINGS", 4400, 19,
         {{ET_SCOUT,450},{ET_WINGSPITE,700},{ET_IRONBACK,850},
          {ET_WATCHTOWER,1150},{ET_GATE,1200},{ET_GOURDTHROWER,1280},{ET_TOTEM,1330},
          {ET_SCOUT,1650},{ET_WINGSPITE,1800},{ET_IRONBACK,1950},
-         {ET_BALLISTA,2350},{ET_IRONGATE,2450},{ET_BALLISTA,2520},{ET_BULWARK,2560},{ET_STONESLINGER,2620},{ET_RUSTJAW,3000},
+         {ET_BALLISTA,2350},{ET_IRONGATE,2450},{ET_BULWARK,2560},{ET_STONESLINGER,2620},{ET_RUSTJAW,3000},   /* first fortress: one ballista */
          {ET_WINGSPITE,3250},{ET_GOURDTHROWER,3350},{ET_IRONBACK,3450},{ET_GLOOMWING,3950}},
         7, {11, 14, 100+5, 12, 3, 17, 8}, {ET_BRISTLER,ET_GRUNT}, BIOME_DESERT},
     {"RIME PASS", "FROSTBORN, THE HEX MOTHER'S HOLD", 4600, 20,
@@ -206,16 +206,16 @@ static uint32_t rnd(dg_t*g){ g->rng=g->rng*1664525u+1013904223u; return g->rng>>
 static const int RANK[CL_N]={2,0,4,3,1};      /* front to back: warden, breaker, lancer, mender, slinger */
 #define SPACING 36.0f
 #define BEAT_S (g->beat_s)                     /* the song's tempo; 0.5 s at 120 BPM */
-#define FOE_DMG 0.65f                          /* tuning knobs (tests/drum_game_test.c) */
+#define FOE_DMG 0.5f                          /* tuning knobs (tests/drum_game_test.c) */
 #define BOSS_HP 0.75f
-#define BOSS_DMG 0.85f
+#define BOSS_DMG 0.75f
 #define HEAL 1.5f
 
 static void formation(dg_t*g,float*tx){
     int order[DG_MAXU],n=0;
     for(int i=0;i<DG_MAXU;i++) if(g->u[i].on && g->u[i].hp>0) order[n++]=i;
     for(int i=0;i<n;i++) for(int j=i+1;j<n;j++) if(RANK[g->u[order[j]].cls]<RANK[g->u[order[i]].cls]){ int t=order[i]; order[i]=order[j]; order[j]=t; }
-    for(int k=0;k<n;k++) tx[order[k]]=g->sx-SPACING*k;
+    for(int k=0;k<n;k++) tx[order[k]]=g->sx-SPACING*k+g->u[order[k]].off;
 }
 static void enemy_init(dg_t*g,int i,int type,float x){
     enemy_t*e=&g->e[i]; const etype_t*t=&DG_ETYPE[type];
@@ -293,6 +293,34 @@ static int target_for(const dg_t*g,const unit_t*u){
         float pri = dx - ((e->traits&(TR_HEALER|TR_TOTEM))?400:0) - (e->fleeing?600:0);
         if(pri<bd){ bd=pri; best=k; } }
     return best;
+}
+/* Engaging: at the start of a STRIKE, melee steps from its formation spot to striking distance of
+ * the nearest ground foe (never through it), ranged units take ~70% of their weapon's range (back a
+ * little when a foe is close, never past the melee line). They regroup when the fight is over. */
+static void engage(dg_t*g){
+    float tx[DG_MAXU]={0}; float save[DG_MAXU];
+    for(int i=0;i<DG_MAXU;i++){ save[i]=g->u[i].off; g->u[i].off=0; }
+    formation(g,tx);                                       /* plain formation spots */
+    float melee_front=-1e9f;
+    for(int i=0;i<DG_MAXU;i++){ unit_t*u=&g->u[i]; if(!u->on||u->hp<=0||u->weapon<0||DG_CLASS[u->cls].ranged||u->cls==CL_MENDER) continue;   /* the healer stays back */
+        int best=-1; float bd=1e9f;
+        for(int k=0;k<DG_MAXE;k++){ const enemy_t*e=&g->e[k]; if(!e->on||e->hp<=0||(e->traits&TR_FLYING)) continue;
+            float d=dg_front(e)-tx[i]; if(d>-40 && d<220 && d<bd){ bd=d; best=k; } }
+        float off=0;
+        if(best>=0){ float reach=(float)DG_WEAPON[u->weapon].range, want=dg_front(&g->e[best])-reach*0.6f;
+            off=want-tx[i]; if(off<0) off=0; if(off>100) off=100;
+            float lim=dg_front(&g->e[best])-18-tx[i]; if(off>lim) off=lim>0?lim:0; }
+        u->off=off; if(tx[i]+off>melee_front) melee_front=tx[i]+off; }
+    for(int i=0;i<DG_MAXU;i++){ unit_t*u=&g->u[i]; if(!u->on||u->hp<=0||u->weapon<0||!DG_CLASS[u->cls].ranged) continue;
+        int best=-1; float bd=1e9f;
+        for(int k=0;k<DG_MAXE;k++){ const enemy_t*e=&g->e[k]; if(!e->on||e->hp<=0) continue;
+            float d=dg_front(e)-tx[i]; if(d>-40 && d<bd){ bd=d; best=k; } }
+        float off=0;
+        if(best>=0 && bd<DG_WEAPON[u->weapon].range*1.3f){ float ideal=DG_WEAPON[u->weapon].range*0.7f;
+            off=bd-ideal; if(off<-60) off=-60; if(off>40) off=40;
+            if(melee_front>-1e8f && tx[i]+off>melee_front-24) off=melee_front-24-tx[i]; }
+        u->off=off; }
+    (void)save;
 }
 static void strike(dg_t*g){
     for(int i=0;i<DG_MAXU;i++){ unit_t*u=&g->u[i]; if(!u->on||u->hp<=0||u->weapon<0) continue;
@@ -425,15 +453,18 @@ void dg_beat(dg_t*g,int64_t beat,int cmd,int beat_in,int fever){
         if(beat_in==0){ float d=(fever?175.0f:125.0f)*(heavy(g)?0.75f:1); g->move_left=d; g->vx=d/span; }
         break;
     case CMD_RETREAT:
+        if(beat_in==0) for(int i=0;i<DG_MAXU;i++) g->u[i].off=0;   /* fall back together */
         if(beat_in==0){ g->move_left=-110; g->vx=-110/(span*0.6f); }   /* quick: dodges a telegraphed blow */
         break;
     case CMD_STRIKE:
+        if(beat_in==0) engage(g);
         if(beat_in==0 && fever && has_class(g,CL_BREAKER)){ g->move_left=30; g->vx=30/(BEAT_S*0.5f); }   /* breaker charge */
         if(beat_in>=1 || fever) strike(g);
         if(beat_in==3) for(int i=0;i<DG_MAXU;i++) g->u[i].rallied=0;
         break;
     case CMD_GUARD:
-        if(beat_in==0) g->guard_until=(int)beat+8;   /* a stance: holds while the next command is drummed */
+        if(beat_in==0){ g->guard_until=(int)beat+8;   /* a stance: holds while the next command is drummed */
+            for(int i=0;i<DG_MAXU;i++) g->u[i].off=0; }   /* close ranks: the shield wall */
         if(beat_in==2) heal_all(g,0.4f);
         break;
     case CMD_RALLY:
@@ -457,6 +488,7 @@ void dg_step(dg_t*g,float dt){
     if(g->sx>g->m->length){ g->sx=(float)g->m->length; g->move_left=0; }   /* the banner: wait there for the last foes */
     float tx[DG_MAXU]={0}; formation(g,tx);
     int calm=1; for(int k=0;k<DG_MAXE;k++){ const enemy_t*e=&g->e[k]; if(e->on&&e->hp>0&&fabsf(dg_front(e)-g->sx)<450) calm=0; }
+    if(calm) for(int i=0;i<DG_MAXU;i++){ float*o=&g->u[i].off; *o-=*o*fminf(1,dt*3); if(fabsf(*o)<0.5f) *o=0; }   /* back into formation */
     for(int i=0;i<DG_MAXU;i++){ unit_t*u=&g->u[i]; if(!u->on) continue;
         if(u->hp>0 && calm){ u->hp+=4*dt; if(u->hp>u->maxhp) u->hp=u->maxhp; }   /* catching breath between fights */
         if(u->hp>0) u->x+= (tx[i]-u->x)*fminf(1,dt*10);

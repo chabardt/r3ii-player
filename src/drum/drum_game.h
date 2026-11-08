@@ -74,7 +74,7 @@ int  dg_weapon_ok(int cls,int w);            /* class may wield it */
 int  dg_shield_ok(int cls,int s);
 float dg_mult(int dtype,int elem,int traits); /* damage multiplier vs a foe's traits */
 
-typedef struct { int on, cls, weapon, shield; float hp, maxhp, x, flash, swing; int rallied; } unit_t;
+typedef struct { int on, cls, weapon, shield; float hp, maxhp, x, flash, swing; int rallied; float off; } unit_t;   /* off: combat step from the formation spot */
 typedef struct { int on, type, traits; float x, y, hp, maxhp, burn, flash, bob;
                  int frost, next, windup;              /* beats: countdown, telegraph */
                  int move, enraged, grounded, summoned, spawns; /* bosses: move telegraphed (-1), phase 2, dive; minion; summons made */
