@@ -11,6 +11,7 @@
 #include "z_zone.h"
 #include "tinyalsa/pcm.h"
 #include "tinyalsa/mixer.h"
+#include "r3hw.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
@@ -33,7 +34,7 @@ static void route_and_volume(void){
                     *l=mixer_get_ctl_by_name(mx,"Left Playback Volume"),*r=mixer_get_ctl_by_name(mx,"Right Playback Volume");
     int vol=160; FILE*f=fopen("/usr/data/r3_vol","r"); if(f){ if(fscanf(f,"%d",&vol)!=1) vol=160; fclose(f); }
     int hw=255-(vol<0?0:vol>255?255:vol);
-    if(mo) mixer_ctl_set_value(mo,0,0); if(sm) mixer_ctl_set_value(sm,0,0); if(op) mixer_ctl_set_value(op,0,1);
+    (void)mo; (void)sm; (void)op; r3_dac_route(mx);     /* balanced 4.4 mm or 3.5 mm, like r3player */
     if(l) mixer_ctl_set_value(l,0,hw); if(r) mixer_ctl_set_value(r,0,hw);
     mixer_close(mx);
 }
@@ -60,7 +61,7 @@ static boolean snd_init(boolean prefix){
     struct pcm_config cfg; memset(&cfg,0,sizeof cfg);
     cfg.channels=2; cfg.rate=RATE; cfg.period_size=PERIOD; cfg.period_count=4; cfg.format=PCM_FORMAT_S16_LE;
     cfg.start_threshold=PERIOD; cfg.stop_threshold=PERIOD*4; cfg.avail_min=PERIOD;
-    pcm=pcm_open(0,0,PCM_OUT,&cfg);
+    pcm=r3_pcm_open(&cfg);
     if(!pcm || !pcm_is_ready(pcm)){ fprintf(stderr,"[r3snd] no DAC: %s\n",pcm?pcm_get_error(pcm):"?");
         if(pcm) pcm_close(pcm); pcm=NULL; return false; }
     route_and_volume();

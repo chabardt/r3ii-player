@@ -14,6 +14,7 @@
 #include "libretro.h"
 #include "pad.h"
 #include "volbar.h"
+#include "r3hw.h"
 #include "tinyalsa/pcm.h"
 #include "tinyalsa/mixer.h"
 #include <stdio.h>
@@ -199,21 +200,14 @@ static unsigned hit(int x,int y){
     if(y>=664 && x>=284 && x<382) return K_START;
     return 0;
 }
-#define NS 10
-static struct { int x,y,down; } sl[NS]; static int cur_slot, mt_seen;
+#define NS R3_NS
+static r3_contact_t sl[NS]; static r3_touch_t tstate;     /* r3hw.h: protocol A or B */
 static int ts_fd=-1, kp_fd=-1, km_fd=-1;
 static void poll_touch(void){
-    struct input_event e; static int sx,sy,sdown;
+    struct input_event e;
     while(read(ts_fd,&e,sizeof e)==sizeof e){
         if(landscape) continue;                          /* touch off in landscape */
-        if(e.type==EV_ABS){
-            if(e.code==ABS_MT_SLOT){ cur_slot=e.value<0||e.value>=NS?0:e.value; mt_seen=1; }
-            else if(e.code==ABS_MT_TRACKING_ID){ mt_seen=1; sl[cur_slot].down = e.value>=0; }
-            else if(e.code==ABS_MT_POSITION_X){ sl[cur_slot].x=e.value; sx=e.value; }
-            else if(e.code==ABS_MT_POSITION_Y){ sl[cur_slot].y=e.value; sy=e.value; }
-            else if(e.code==ABS_X) sx=e.value; else if(e.code==ABS_Y) sy=e.value;
-        } else if(e.type==EV_KEY && e.code==BTN_TOUCH && !mt_seen) sdown=e.value;
-        else if(e.type==EV_SYN && !mt_seen){ sl[0].x=sx; sl[0].y=sy; sl[0].down=sdown; }
+        r3_touch_event(&tstate,&e,sl);
     }
     if(landscape){ held_touch=0; return; }
     unsigned b=0; for(int i=0;i<NS;i++) if(sl[i].down) b|=hit(sl[i].x,sl[i].y);
@@ -225,9 +219,7 @@ static struct mixer *mx;
 static void hw_volume(void){ if(!mx) return; int hw=255-(vol<0?0:vol>255?255:vol);
     struct mixer_ctl*l=mixer_get_ctl_by_name(mx,"Left Playback Volume"),*r=mixer_get_ctl_by_name(mx,"Right Playback Volume");
     if(l) mixer_ctl_set_value(l,0,hw); if(r) mixer_ctl_set_value(r,0,hw); }
-static void dac_route(void){ if(!mx) return;
-    struct mixer_ctl*mo=mixer_get_ctl_by_name(mx,"Mute Output"),*sm=mixer_get_ctl_by_name(mx,"Soft Mute"),*op=mixer_get_ctl_by_name(mx,"Output Port Switch");
-    if(mo) mixer_ctl_set_value(mo,0,0); if(sm) mixer_ctl_set_value(sm,0,0); if(op) mixer_ctl_set_value(op,0,1); }
+static void dac_route(void){ r3_dac_route(mx); }     /* balanced 4.4 mm or 3.5 mm, like r3player */
 
 /* ---------- keys + controllers ---------- */
 static uint32_t pwr_t; static int pwr_down;
@@ -371,7 +363,7 @@ int main(int argc,char**argv){
     cfg.channels=2; cfg.rate=OUT_HZ; cfg.period_size=1024; cfg.period_count=4; cfg.format=PCM_FORMAT_S16_LE;
     cfg.start_threshold=1024; cfg.stop_threshold=4096; cfg.avail_min=1024;
     { struct sigaction sa; memset(&sa,0,sizeof sa); sa.sa_handler=on_alarm; sigaction(SIGALRM,&sa,NULL); }   /* no SA_RESTART */
-    struct pcm*pcm=pcm_open(0,0,PCM_OUT,&cfg);
+    struct pcm*pcm=r3_pcm_open(&cfg);
     if(pcm && !pcm_is_ready(pcm)){ fprintf(stderr,"[r3gba] no sound: %s\n",pcm_get_error(pcm)); pcm_close(pcm); pcm=NULL; }
     mx=mixer_open(0); dac_route();
 
