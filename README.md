@@ -44,6 +44,9 @@ for this one model.
 **Controls**
 - **Power button:** short press → Now Playing; press again → back; **long press → power off**
   (saves the current track to resume on next boot).
+- **Touch lock:** press **Power + Volume** together (either volume key, either order) to lock
+  the touchscreen — touches are ignored and can't wake the screen, so it's safe in a pocket,
+  while the hardware keys keep working. A padlock shows in the corner; the same combo unlocks.
 - **Volume rocker:** changes volume with a top overlay; **◀◀ / ▶❚❚ / ▶▶** hardware keys for
   previous / play-pause / next (plus on-screen transport).
 
