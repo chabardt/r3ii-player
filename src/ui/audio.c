@@ -182,7 +182,7 @@ static void* play_thread(void*arg){
         else if(type==D_WAV)drwav_uninit(&wav); else if(type==D_M4A)m4a_close(m4a);
         a_playing=0; a_active=0; return 0; }
     static short buf[8192];               /* interleaved s16 */
-    int cur=0, applied=-1;                /* cur = ramped loudness; starts at 0 => fade-in, no start pop */
+    int cur=0, applied=-1, reapply=0;                /* cur = ramped loudness; starts at 0 => fade-in, no start pop */
     const int STEP=10;                    /* loudness units per buffer (~85ms) => smooth, no dropout */
     const int FR=4096/ch<1?1:4096/ch;     /* frames per read (<=4096 samples) */
     while(!a_stop){
@@ -190,7 +190,8 @@ static void* play_thread(void*arg){
           while(a_pause && !a_stop){ usleep(40000);
               if(++pw==50 && pcm && bt_receiver()){ jack_close(pcm); pcm=0; } }
           if(!a_stop && !usebt && !pcm){ usebt=sink_open(hz,ch,&pcm);
-              if(usebt<0){ a_btfail=1; break; } cur=0; applied=-1; } }
+              if(usebt<0){ a_btfail=1; break; } cur=0; applied=-1; }
+          if(pw) applied=-1; }   /* the codec may have reset its volume while idle */
         if(a_stop) break;
         if(gen!=a_out_gen){            /* output changed mid-track: swap sinks, keep position */
             gen=a_out_gen;
@@ -219,7 +220,7 @@ static void* play_thread(void*arg){
           if(cur<tgt){ cur+=STEP; if(cur>tgt)cur=tgt; }
           else if(cur>tgt){ cur-=STEP; if(cur<tgt)cur=tgt; }
           if(usebt){ softvol(buf,frames*ch,cur); }
-          else if(cur!=applied){ apply_hwvol(cur); applied=cur; } }
+          else if(cur!=applied || ++reapply%12==0){ apply_hwvol(cur); applied=cur; } }
         if(usebt){ if(bt_write(bt_fd,buf,frames*ch*sizeof(short))){
                 fprintf(stderr,"[audio] BT sink gone (speaker off?), stop\n"); a_btfail=1; break; }
             totframes+=frames; a_pos_ms=(long)(totframes*1000/hz); continue; }
@@ -254,7 +255,10 @@ int  audio_is_playing(void){ return a_playing; }
 int  audio_finished(void){ if(a_done){ a_done=0; return 1; } return 0; }
 void audio_seek(long ms){ a_seek_ms = ms<0?0:ms; }
 int  audio_is_paused(void){ return a_pause; }
-void audio_set_volume(int v){ a_vol = v<0?0:(v>255?255:v); }
+static volatile int a_vmax=255;
+void audio_set_volume(int v){ a_vol = v<0?0:(v>a_vmax?a_vmax:v); }
+void audio_set_volume_max(int m){ a_vmax = m<24?24:(m>255?255:m); if(a_vol>a_vmax) a_vol=a_vmax; }
+int  audio_get_volume_max(void){ return a_vmax; }
 int  audio_get_volume(void){ return a_vol; }
 long audio_pos_ms(void){ return a_pos_ms; }
 long audio_dur_ms(void){ return a_dur_ms; }

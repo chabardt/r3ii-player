@@ -164,7 +164,7 @@ static void poll_keys(void){
         if(e.code==164) key(KEY_USE,e.value);                              /* play = use */
         else if(e.code==163 && e.value!=2){ if(e.value) tapkey(']'); }         /* next = next weapon */
         else if(e.value && (e.code==115||e.code==114)){                     /* volume, like r3player */
-            vb_vol+= e.code==115?12:-12; if(vb_vol<0)vb_vol=0; if(vb_vol>255)vb_vol=255;
+            vb_vol+= e.code==115?12:-12; if(vb_vol<0)vb_vol=0; if(vb_vol>vb_max())vb_vol=vb_max();
             vb_save(vb_vol); r3snd_apply_volume(); vb_until=now_ms()+2000; }
     }
 }
