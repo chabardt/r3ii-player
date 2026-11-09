@@ -42,6 +42,8 @@ static uint32_t g_last_input;   /* last touch/key (idle -> watch face / Now Play
 static void screen_wake(void);
 static int g_scr_off;             /* backlight off (screen timeout) */
 static volatile int g_wake_swallow;   /* the touch that woke the screen must not click */
+static int g_locked;              /* touch lock (Power + Volume): the screen ignores touches */
+static volatile int g_lock_hint;  /* a touch arrived while locked -> show the lock toast */
 
 #define MUSIC_ROOT "/usr/data/mnt/sd_0/Music"
 #define PODCAST_ROOT "/usr/data/mnt/sd_0/Others"
@@ -84,11 +86,12 @@ static void ts_read(lv_indev_drv_t*drv,lv_indev_data_t*d){ (void)drv;
     while(read(tsfd,&e,sizeof e)==sizeof e){
         if(e.type==EV_ABS){ if(e.code==ABS_MT_POSITION_X||e.code==ABS_X)t_x=e.value;
             else if(e.code==ABS_MT_POSITION_Y||e.code==ABS_Y)t_y=e.value; }
-        else if(e.type==EV_KEY&&e.code==BTN_TOUCH){ t_down=e.value; if(!e.value) g_wake_swallow=0; }
-        g_last_input=r3_tick_ms();
+        else if(e.type==EV_KEY&&e.code==BTN_TOUCH){ t_down=e.value; if(!e.value) g_wake_swallow=0;
+            if(e.value && g_locked) g_lock_hint=1; }
+        if(!g_locked) g_last_input=r3_tick_ms();   /* locked: a touch doesn't keep the screen on */
     }
     d->point.x=t_x; d->point.y=t_y;
-    d->state=(t_down&&!g_wake_swallow)?LV_INDEV_STATE_PRESSED:LV_INDEV_STATE_RELEASED;
+    d->state=(t_down&&!g_wake_swallow&&!g_locked)?LV_INDEV_STATE_PRESSED:LV_INDEV_STATE_RELEASED;
 }
 
 /* ---- dark palette (black + orange) ---- */
@@ -1602,6 +1605,7 @@ static void show_home(void){
 /* ---- physical keys ---- */
 static int kf_pwr=-1, kf_media=-1;      /* event0 (power/prev), event2 (vol/play/next) */
 static uint32_t pwr_down=0, pwr_tap_t=0; static int pwr_held=0, pwr_tap=0;
+static int pwr_phys=0, vol_phys=0 /* bit0 up, bit1 down */, combo=0, vol_pre=-1;   /* Power+Volume lock combo */
 static void bump_vol(int d){ int v=audio_get_volume()+d; if(v<0)v=0; if(v>255)v=255;
     audio_set_volume(v);
     if(g_volbar){ lv_bar_set_value(g_volbar,v,LV_ANIM_OFF);
@@ -1621,6 +1625,58 @@ static void make_vol_overlay(void){   /* top-layer bar shown only while volume i
     lv_obj_set_style_bg_color(g_volbar,lv_color_hex(C_ACCENT),LV_PART_INDICATOR);
     lv_obj_add_flag(g_volov,LV_OBJ_FLAG_HIDDEN);
 }
+/* ---- touch lock: Power + Volume (either key, either order) toggles it ----
+ * Locked: touches are dropped (no clicks, no wake from screen-off, don't reset the idle timer);
+ * physical keys keep working so music can be controlled in a pocket. */
+static lv_obj_t *g_lockov, *g_lock_title, *g_lock_sub, *g_lockbadge; static uint32_t g_lock_hide;
+static lv_obj_t* mk_padlock(lv_obj_t*p,int s,uint32_t col){   /* s = body width; drawn, no font glyph */
+    lv_obj_t*w=lv_obj_create(p); lv_obj_remove_style_all(w); lv_obj_set_size(w,s,s*5/4);
+    lv_obj_clear_flag(w,LV_OBJ_FLAG_CLICKABLE|LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t*sh=lv_obj_create(w); lv_obj_remove_style_all(sh);          /* shackle */
+    lv_obj_set_size(sh,s*3/5,s*3/4); lv_obj_align(sh,LV_ALIGN_TOP_MID,0,0);
+    lv_obj_set_style_border_width(sh,s/7<2?2:s/7,0); lv_obj_set_style_border_color(sh,lv_color_hex(col),0);
+    lv_obj_set_style_radius(sh,LV_RADIUS_CIRCLE,0);
+    lv_obj_t*b=lv_obj_create(w); lv_obj_remove_style_all(b);            /* body */
+    lv_obj_set_size(b,s,s*3/4); lv_obj_align(b,LV_ALIGN_BOTTOM_MID,0,0);
+    lv_obj_set_style_bg_opa(b,LV_OPA_COVER,0); lv_obj_set_style_bg_color(b,lv_color_hex(col),0);
+    lv_obj_set_style_radius(b,s/6,0);
+    lv_obj_t*k=lv_obj_create(b); lv_obj_remove_style_all(k);            /* keyhole */
+    lv_obj_set_size(k,s/5<3?3:s/5,s/5<3?3:s/5); lv_obj_center(k);
+    lv_obj_set_style_bg_opa(k,LV_OPA_COVER,0); lv_obj_set_style_bg_color(k,lv_color_hex(C_BAR),0);
+    lv_obj_set_style_radius(k,LV_RADIUS_CIRCLE,0);
+    return w; }
+static void make_lock_overlay(void){   /* top layer: a toast (on toggle / touch while locked) + a corner badge */
+    lv_obj_t*top=lv_layer_top();
+    g_lockov=lv_obj_create(top); lv_obj_set_size(g_lockov,340,LV_SIZE_CONTENT); lv_obj_center(g_lockov);
+    lv_obj_set_style_bg_color(g_lockov,lv_color_hex(C_BAR),0); lv_obj_set_style_bg_opa(g_lockov,LV_OPA_90,0);
+    lv_obj_set_style_border_color(g_lockov,lv_color_hex(C_ACCENT),0); lv_obj_set_style_border_width(g_lockov,2,0);
+    lv_obj_set_style_radius(g_lockov,R_BTN*2,0); lv_obj_set_style_pad_all(g_lockov,18,0); lv_obj_set_style_pad_row(g_lockov,10,0);
+    lv_obj_set_flex_flow(g_lockov,LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(g_lockov,LV_FLEX_ALIGN_CENTER,LV_FLEX_ALIGN_CENTER,LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(g_lockov,LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_CLICKABLE);
+    mk_padlock(g_lockov,40,C_ACCENT);
+    g_lock_title=lv_label_create(g_lockov); lv_obj_set_style_text_font(g_lock_title,&lv_font_montserrat_20,0);
+    lv_obj_set_style_text_color(g_lock_title,lv_color_hex(C_FG),0);
+    g_lock_sub=lv_label_create(g_lockov); lv_label_set_text(g_lock_sub,"Power + Volume to unlock");
+    lv_obj_set_style_text_color(g_lock_sub,lv_color_hex(C_DIM),0);
+    lv_obj_add_flag(g_lockov,LV_OBJ_FLAG_HIDDEN);
+    g_lockbadge=lv_obj_create(top); lv_obj_set_size(g_lockbadge,32,32); lv_obj_align(g_lockbadge,LV_ALIGN_BOTTOM_RIGHT,-3,-3);
+    lv_obj_set_style_bg_color(g_lockbadge,lv_color_hex(C_BAR),0); lv_obj_set_style_bg_opa(g_lockbadge,LV_OPA_70,0);
+    lv_obj_set_style_border_width(g_lockbadge,0,0); lv_obj_set_style_radius(g_lockbadge,LV_RADIUS_CIRCLE,0);
+    lv_obj_set_style_pad_all(g_lockbadge,0,0);
+    lv_obj_clear_flag(g_lockbadge,LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_center(mk_padlock(g_lockbadge,14,C_ACCENT));
+    lv_obj_add_flag(g_lockbadge,LV_OBJ_FLAG_HIDDEN);
+}
+static void lock_toast(void){ if(!g_lockov) return;
+    lv_label_set_text(g_lock_title,g_locked?"Screen locked":"Screen unlocked");
+    if(g_locked) lv_obj_clear_flag(g_lock_sub,LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(g_lock_sub,LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(g_lockov,LV_OBJ_FLAG_HIDDEN); g_lock_hide=r3_tick_ms()+1500; }
+static void lock_toggle(void){
+    g_locked=!g_locked; DBG("touch lock %s\n",g_locked?"on":"off");
+    lv_indev_reset(NULL,NULL);   /* a finger already down must not turn into a click */
+    if(g_lockbadge){ if(g_locked) lv_obj_clear_flag(g_lockbadge,LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(g_lockbadge,LV_OBJ_FLAG_HIDDEN); }
+    screen_wake(); lock_toast(); }
 static void power_short(void){
     if(g_scr==SCR_PLAYER) show_browser(g_pldir[0]?g_pldir:MUSIC_ROOT);
     else if(g_pln>0)      show_player(g_pltitle,g_pldir);
@@ -1633,8 +1689,13 @@ static void keys_poll(void){
         if(e.type!=EV_KEY) continue;
         g_last_input=r3_tick_ms();
         if(e.code==116){ /* power */
-            if(e.value==1){ pwr_down=r3_tick_ms(); pwr_held=1; }
-            else if(e.value==0 && pwr_held){ pwr_held=0;
+            if(e.value==1){ pwr_phys=1;
+                if(vol_phys && !combo){ combo=1; pwr_tap=0;          /* volume held first: undo its step */
+                    if(vol_pre>=0){ audio_set_volume(vol_pre); if(g_volbar) lv_bar_set_value(g_volbar,vol_pre,LV_ANIM_OFF); }
+                    lock_toggle(); }
+                else if(!combo){ pwr_down=r3_tick_ms(); pwr_held=1; } }
+            else if(e.value==0){ pwr_phys=0; if(!vol_phys) combo=0; }
+            if(e.value==0 && pwr_held){ pwr_held=0;
                 if(r3_tick_ms()-pwr_down < 1200){
                     if(g_scr_off){ screen_wake(); pwr_tap=0; }           /* first press only wakes */
                     else if(pwr_tap){ pwr_tap=0; show_home(); }         /* double press -> Home */
@@ -1644,6 +1705,13 @@ static void keys_poll(void){
     if(kf_media>=0) while(read(kf_media,&e,sizeof e)==sizeof e){
         if(e.type!=EV_KEY) continue;
         g_last_input=r3_tick_ms();
+        if(e.code==115||e.code==114){ int bit=e.code==115?1:2;
+            if(e.value==0){ vol_phys&=~bit; if(!vol_phys && !pwr_phys) combo=0; continue; }
+            if(e.value==1){ vol_phys|=bit;
+                if(pwr_phys && !combo){ combo=1; pwr_held=0; pwr_tap=0; lock_toggle(); continue; }   /* Power held: lock combo */
+                if(!combo) vol_pre=audio_get_volume(); }
+            if(combo) continue;                                  /* keys of the combo don't change volume */
+        }
         if(e.code==115 && e.value){ bump_vol(+12); }        /* vol up (incl. autorepeat) */
         else if(e.code==114 && e.value){ bump_vol(-12); }   /* vol down */
         else if(g_scr==SCR_GAME && e.value==1 && (e.code==163||e.code==164) && (game_key(e.code)||brick_key(e.code)||coil_key(e.code))){}   /* game controls */
@@ -2037,6 +2105,8 @@ static void tick_ui(void){
     static uint32_t lr=0;
     if(bt_receiver() && now-lr>=120){ lr=now; audio_dac_follow(); }   /* cheap: cached mixer ctls */
     if(audio_bt_failed()){ g_resume_ms=audio_pos_ms(); if(np_play) lv_label_set_text(np_play,LV_SYMBOL_PLAY); }
+    if(g_lock_hint){ g_lock_hint=0; lock_toast(); }
+    if(g_lockov && !lv_obj_has_flag(g_lockov,LV_OBJ_FLAG_HIDDEN) && now>g_lock_hide) lv_obj_add_flag(g_lockov,LV_OBJ_FLAG_HIDDEN);
     if(g_volov && !lv_obj_has_flag(g_volov,LV_OBJ_FLAG_HIDDEN) && now>g_vol_hide)
         { lv_obj_add_flag(g_volov,LV_OBJ_FLAG_HIDDEN);   /* auto-hide the volume overlay */
           FILE*vf=fopen(VOL_FILE,"w"); if(vf){ fprintf(vf,"%d\n",audio_get_volume()); fclose(vf); } }   /* remember it */
@@ -2088,7 +2158,7 @@ int main(int argc,char**argv){
     id.type=LV_INDEV_TYPE_POINTER; id.read_cb=ts_read; lv_indev_drv_register(&id);
     { FILE*vf=fopen(VOL_FILE,"r"); int v; if(vf){ if(fscanf(vf,"%d",&v)==1) audio_set_volume(v); fclose(vf); } }   /* last volume, else default 160 */
     prefs_load(); bl_set(p_bright); audio_set_dac_filter(p_filter,p_nos);
-    make_vol_overlay();
+    make_vol_overlay(); make_lock_overlay();
     show_home();
     load_resume();                 /* if a track was playing at power-off, open it ready */
     if(argc>2 && (!strcmp(argv[1],"-t")||!strcmp(argv[1],"-a")||!strcmp(argv[1],"-u"))){
@@ -2105,7 +2175,7 @@ int main(int argc,char**argv){
     for(;;){
         if(g_scr_off){ struct input_event e;
             while(read(tsfd,&e,sizeof e)==sizeof e)
-                if(e.type==EV_KEY && e.code==BTN_TOUCH && e.value){ g_wake_swallow=1; t_down=1; screen_wake(); }
+                if(e.type==EV_KEY && e.code==BTN_TOUCH && e.value && !g_locked){ g_wake_swallow=1; t_down=1; screen_wake(); }
         }
         if(!g_scr_off) lv_timer_handler();
         if(!g_scr_off && p_timeout && r3_tick_ms()-g_last_input >= (uint32_t)p_timeout*1000) screen_off();
