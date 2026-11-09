@@ -1,3 +1,5 @@
+#include "fonts.h"
+#include "i18n.h"
 #include "hiscore.h"
 #include <stdio.h>
 #include <string.h>
@@ -23,9 +25,9 @@ int hs_add(hiscore_t*h,int score){
     hs_save(h); return r;
 }
 void hs_format(const hiscore_t*h,int rank,int score,char*b,int cap){
-    int n=snprintf(b,cap,"GAME OVER\n%s%d\n\nHIGH SCORES\n",rank==0?"NEW BEST  ":"",score);
+    int n=snprintf(b,cap,"%s\n%s%d\n\n%s\n",_("GAME OVER"),rank==0?_("NEW BEST  "):"",score,_("HIGH SCORES"));
     for(int i=0;i<h->n && n<cap;i++)
         n+=snprintf(b+n,cap-n,i==rank?"#E8731C %d.  %6d   %s#\n":"%d.  %6d   %s\n",i+1,h->s[i],h->d[i]);
     if(!h->n && n<cap) n+=snprintf(b+n,cap-n,"-\n");
-    if(n<cap) snprintf(b+n,cap-n,"\ntap to play again");
+    if(n<cap) snprintf(b+n,cap-n,"\n%s",_("tap to play again"));
 }

@@ -7,6 +7,8 @@
  * Touch on the board: tap = rotate, drag sideways = move (one cell per 32 px).
  * Keys: next = drop, prev = turn, play = pause.
  * Top-5 high scores (with dates) in /usr/data/r3_blockfall, shown at game over. */
+#include "fonts.h"
+#include "i18n.h"
 #include "game.h"
 #include "r3_tick.h"
 #include "pad.h"
@@ -81,7 +83,7 @@ static void lvl_opa_cb(void*o,int32_t v){ lv_obj_set_style_opa((lv_obj_t*)o,(lv_
 static void lvl_done_cb(lv_anim_t*a){ lv_obj_add_flag((lv_obj_t*)a->var,LV_OBJ_FLAG_HIDDEN); }
 static void level_popup_hide(void){ if(!g_lvl) return; lv_anim_del(g_lvl,lvl_opa_cb); lv_obj_add_flag(g_lvl,LV_OBJ_FLAG_HIDDEN); }
 static void level_popup(int lvl){
-    if(!g_lvl) return; char b[48]; snprintf(b,sizeof b,"LEVEL %d\n#8A6A4A faster!#",lvl); lv_label_set_text(g_lvl_lbl,b);
+    if(!g_lvl) return; char b[48]; snprintf(b,sizeof b,_("LEVEL %d\n#8A6A4A faster!#"),lvl); lv_label_set_text(g_lvl_lbl,b);
     lv_anim_del(g_lvl,lvl_opa_cb); lv_obj_set_style_opa(g_lvl,LV_OPA_TRANSP,0); lv_obj_clear_flag(g_lvl,LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(g_lvl);
     lv_anim_t a; lv_anim_init(&a); lv_anim_set_var(&a,g_lvl); lv_anim_set_exec_cb(&a,lvl_opa_cb);
@@ -101,18 +103,18 @@ static void game_end(void){
         } else rank=-1;
     }
     best = nhs?hs[0]:0;
-    char b[512]; int n=snprintf(b,sizeof b,"GAME OVER\n%s%d\n\nHIGH SCORES\n",rank==0?"NEW BEST  ":"",score);
+    char b[512]; int n=snprintf(b,sizeof b,"%s\n%s%d\n\n%s\n",_("GAME OVER"),rank==0?_("NEW BEST  "):"",score,_("HIGH SCORES"));
     for(int i=0;i<nhs;i++)
         n+=snprintf(b+n,sizeof b-n,i==rank?"#E8731C %d.  %6d   %s#\n":"%d.  %6d   %s\n",i+1,hs[i],hsd[i]);
     if(!nhs) n+=snprintf(b+n,sizeof b-n,"-\n");
-    snprintf(b+n,sizeof b-n,"\ntap to play again");
+    snprintf(b+n,sizeof b-n,_("\ntap to play again"));
     lv_label_set_text(g_over_lbl,b);
     lv_obj_clear_flag(g_over,LV_OBJ_FLAG_HIDDEN);
 }
 static void update_labels(void){
     char b[96];
     snprintf(b,sizeof b,"%d",score); lv_label_set_text(g_score,b);
-    snprintf(b,sizeof b,"ROWS %d\nLEVEL %d\nBEST %d",rows_done,level,best); lv_label_set_text(g_info,b);
+    snprintf(b,sizeof b,_("ROWS %d\nLEVEL %d\nBEST %d"),rows_done,level,best); lv_label_set_text(g_info,b);
 }
 static void spawn(void){
     cur=nxt; gen(&nxt); px=(COLS-width(&cur))/2; py=-1; piece_no++;
@@ -199,7 +201,7 @@ static void board_input_cb(lv_event_t*e){
 int game_key(int code){
     if(!g_scr) return 0;
     if(over){ if(code==164||code==163) reset(); return 1; }
-    if(code==164){ paused=!paused; lv_label_set_text(g_pause, paused?"PAUSED":"");
+    if(code==164){ paused=!paused; lv_label_set_text(g_pause, paused?_("PAUSED"):"");
         if(!paused) last_fall=r3_tick_ms(); return 1; }
     if(paused) return 1;
     if(code==163) hard_drop(); else if(code==165) rotate(); else return 0;
@@ -258,7 +260,7 @@ lv_obj_t* game_create(void (*on_exit)(void),int resume){
     lv_obj_t*bl=lv_label_create(bk); lv_label_set_text(bl,LV_SYMBOL_LEFT);
     lv_obj_set_style_text_color(bl,lv_color_hex(0xE8731C),0); lv_obj_center(bl);
     lv_obj_t*t=lv_label_create(scr); lv_label_set_text(t,"BLOCKFALL");
-    lv_obj_set_style_text_color(t,lv_color_hex(0xE8731C),0); lv_obj_set_style_text_font(t,&lv_font_montserrat_20,0);
+    lv_obj_set_style_text_color(t,lv_color_hex(0xE8731C),0); lv_obj_set_style_text_font(t,&r3_font_20,0);
     lv_obj_set_pos(t,66,16);
     /* board */
     g_board=lv_obj_create(scr); lv_obj_set_size(g_board,COLS*CELL,ROWS*CELL); lv_obj_set_pos(g_board,BX,BY);
@@ -273,24 +275,24 @@ lv_obj_t* game_create(void (*on_exit)(void),int resume){
     lv_obj_add_event_cb(g_board,board_input_cb,LV_EVENT_CLICKED,NULL);
     /* side panel */
     int sx=BX+COLS*CELL+14, sw=480-sx-8;
-    lv_obj_t*nl=lv_label_create(scr); lv_label_set_text(nl,"NEXT");
+    lv_obj_t*nl=lv_label_create(scr); lv_label_set_text(nl,_("NEXT"));
     lv_obj_set_style_text_color(nl,lv_color_hex(0x8A6A4A),0); lv_obj_set_pos(nl,sx,BY);
     g_next=lv_obj_create(scr); lv_obj_set_size(g_next,sw,sw); lv_obj_set_pos(g_next,sx,BY+24);
     lv_obj_set_style_bg_color(g_next,lv_color_hex(0x15110D),0); lv_obj_set_style_radius(g_next,0,0);
     lv_obj_set_style_border_width(g_next,0,0); lv_obj_clear_flag(g_next,LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(g_next,next_draw_cb,LV_EVENT_DRAW_MAIN_END,NULL);
-    lv_obj_t*sl=lv_label_create(scr); lv_label_set_text(sl,"SCORE");
+    lv_obj_t*sl=lv_label_create(scr); lv_label_set_text(sl,_("SCORE"));
     lv_obj_set_style_text_color(sl,lv_color_hex(0x8A6A4A),0); lv_obj_set_pos(sl,sx,BY+sw+44);
-    g_score=lv_label_create(scr); lv_obj_set_style_text_font(g_score,&lv_font_montserrat_28,0);
+    g_score=lv_label_create(scr); lv_obj_set_style_text_font(g_score,&r3_font_28,0);
     lv_obj_set_style_text_color(g_score,lv_color_hex(0xF4E4D0),0); lv_obj_set_pos(g_score,sx,BY+sw+66);
     g_info=lv_label_create(scr); lv_obj_set_style_text_color(g_info,lv_color_hex(0x8A6A4A),0);
     lv_obj_set_style_text_line_space(g_info,6,0); lv_obj_set_pos(g_info,sx,BY+sw+120);
     lv_obj_t*help=lv_label_create(scr);
-    lv_label_set_text(help,"tap: turn\ndrag: move\n\nkeys:\nnext: drop\nprev: turn\nplay: pause");
-    lv_obj_set_style_text_color(help,lv_color_hex(0x5A4632),0); lv_obj_set_style_text_font(help,&lv_font_montserrat_12,0);
+    lv_label_set_text(help,_("tap: turn\ndrag: move\n\nkeys:\nnext: drop\nprev: turn\nplay: pause"));
+    lv_obj_set_style_text_color(help,lv_color_hex(0x5A4632),0); lv_obj_set_style_text_font(help,&r3_font_12,0);
     lv_obj_set_pos(help,sx,BY+ROWS*CELL-150);
     g_pause=lv_label_create(scr); lv_label_set_text(g_pause,"");
-    lv_obj_set_style_text_font(g_pause,&lv_font_montserrat_28,0);
+    lv_obj_set_style_text_font(g_pause,&r3_font_28,0);
     lv_obj_set_style_text_color(g_pause,lv_color_hex(0xE8731C),0);
     lv_obj_align(g_pause,LV_ALIGN_TOP_LEFT,BX+COLS*CELL/2-58,BY+ROWS*CELL/2-20);
     /* game over */
@@ -309,7 +311,7 @@ lv_obj_t* game_create(void (*on_exit)(void),int resume){
     lv_obj_set_style_border_color(g_lvl,lv_color_hex(0xE8731C),0); lv_obj_set_style_border_width(g_lvl,2,0);
     lv_obj_set_style_radius(g_lvl,18,0); lv_obj_clear_flag(g_lvl,LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_CLICKABLE);
     g_lvl_lbl=lv_label_create(g_lvl); lv_label_set_recolor(g_lvl_lbl,true);
-    lv_obj_set_style_text_font(g_lvl_lbl,&lv_font_montserrat_28,0); lv_obj_set_style_text_color(g_lvl_lbl,lv_color_hex(0xE8731C),0);
+    lv_obj_set_style_text_font(g_lvl_lbl,&r3_font_28,0); lv_obj_set_style_text_color(g_lvl_lbl,lv_color_hex(0xE8731C),0);
     lv_obj_set_style_text_align(g_lvl_lbl,LV_TEXT_ALIGN_CENTER,0); lv_obj_center(g_lvl_lbl);
     lv_obj_add_flag(g_lvl,LV_OBJ_FLAG_HIDDEN);
     reset();
@@ -317,7 +319,7 @@ lv_obj_t* game_create(void (*on_exit)(void),int resume){
     if(resume && load_save(&sv)){   /* continue where we left off, paused until a tap */
         memcpy(board,sv.board,sizeof board); cur=sv.cur; nxt=sv.nxt; px=sv.px; py=sv.py;
         score=sv.score; rows_done=sv.rows_done; level=sv.level; piece_no=sv.piece_no;
-        paused=1; lv_label_set_text(g_pause,"PAUSED"); update_labels();
+        paused=1; lv_label_set_text(g_pause,_("PAUSED")); update_labels();
     }
     unlink(SAVE_FILE);              /* the live game owns the state now (saved again on leave) */
     g_tmr=lv_timer_create(tick_cb,20,NULL);

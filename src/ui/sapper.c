@@ -2,6 +2,8 @@
  * Tap = dig (or flag, in FLAG mode), hold = flag, tap a number with all its flags = open around it.
  * Keys: play toggles DIG / FLAG. Controller: d-pad moves a cursor, A digs, B flags, + new game.
  * The clock starts on the first dig. Wins go into a top-5 table (bigger boards, faster = more). */
+#include "fonts.h"
+#include "i18n.h"
 #include "sapper.h"
 #include "sapper_core.h"
 #include "hiscore.h"
@@ -22,7 +24,7 @@ static lv_obj_t *s_scr,*s_board,*s_title,*s_left,*s_clock,*s_mode,*s_mode_lbl,*s
 static lv_timer_t *s_tmr; static void (*s_exit)(void);
 static int s_cs, s_ox;                     /* cell size, board x offset */
 static int s_press_x=-1, s_press_y=-1, s_held, s_rank=-1, s_score;
-static const char *LEVEL_NAMES[SP_NLEVELS]={"Easy","Medium","Hard"};
+static const char *LEVEL_NAMES[SP_NLEVELS]={N_("Easy"),N_("Medium"),N_("Hard")};
 static const uint32_t NUM_COL[9]={0,0x6C8CD5,0x7BB662,0xE04848,0xA77BE0,0xD08A3A,0x3AB0B0,0xD0D0D0,0x9A9A9A};
 
 static int level_load(void){ int l=0; FILE*f=fopen(LEVEL_FILE,"r"); if(f){ if(fscanf(f,"%d",&l)!=1) l=0; fclose(f); } return l<0||l>=SP_NLEVELS?0:l; }
@@ -48,7 +50,7 @@ static void draw_mine(lv_draw_ctx_t*dc,int x,int y,int cs){
     rect(dc,x+c-r/2,y+c-r/2,x+c-r/2+cs/12+1,y+c-r/2+cs/12+1,0xF4E4D0,LV_RADIUS_CIRCLE); }
 static void board_draw_cb(lv_event_t*e){
     lv_draw_ctx_t*dc=lv_event_get_draw_ctx(e); lv_area_t a; lv_obj_get_coords(lv_event_get_target(e),&a);
-    int cs=s_cs; const lv_font_t*f= cs>=48?&lv_font_montserrat_28:cs>=36?&lv_font_montserrat_20:&lv_font_montserrat_16;
+    int cs=s_cs; const lv_font_t*f= cs>=48?&r3_font_28:cs>=36?&r3_font_20:&r3_font_16;
     for(int y=0;y<G.rows;y++) for(int x=0;x<G.cols;x++){
         int px=a.x1+x*cs, py=a.y1+y*cs;
         if(G.open[y][x]){
@@ -72,10 +74,10 @@ static void board_draw_cb(lv_event_t*e){
 static void hud(void){
     char b[32]; snprintf(b,sizeof b,"%d",G.mines-G.flags); lv_label_set_text(s_left,b);
     unsigned s=s_elapsed/1000; snprintf(b,sizeof b,"%u:%02u",s/60,s%60); lv_label_set_text(s_clock,b);
-    lv_label_set_text(s_mode_lbl,s_flagmode?"FLAG":"DIG");
+    lv_label_set_text(s_mode_lbl,s_flagmode?_("FLAG"):_("DIG"));
     lv_obj_set_style_bg_color(s_mode,lv_color_hex(s_flagmode?0xE8731C:0x1A1510),0);
     lv_obj_set_style_text_color(s_mode_lbl,lv_color_hex(s_flagmode?0x0A0A0A:0xE8731C),0);
-    lv_label_set_text(s_title, !G.over?"SAPPER":G.won?"CLEARED!":"BOOM!"); }
+    lv_label_set_text(s_title, !G.over?"SAPPER":G.won?_("CLEARED!"):_("BOOM!")); }
 static void redraw(void){ hud(); lv_obj_invalidate(s_board); }
 
 /* ---- game flow ---- */
@@ -96,14 +98,14 @@ static void show_chooser(void){
     static char b[640]; int n=0;
     if(G.over){
         unsigned s=s_elapsed/1000;
-        if(G.won) n+=snprintf(b+n,sizeof b-n,"%sCLEARED in %u:%02u\n%d points\n\n",s_rank==0?"NEW BEST  ":"",s/60,s%60,s_score);
-        else n+=snprintf(b+n,sizeof b-n,"BOOM - %d of %d cleared\n\n",G.opened,G.cols*G.rows-G.mines);
-        n+=snprintf(b+n,sizeof b-n,"HIGH SCORES\n");
+        if(G.won) n+=snprintf(b+n,sizeof b-n,_("%sCLEARED in %u:%02u\n%d points\n\n"),s_rank==0?"NEW BEST  ":"",s/60,s%60,s_score);
+        else n+=snprintf(b+n,sizeof b-n,_("BOOM - %d of %d cleared\n\n"),G.opened,G.cols*G.rows-G.mines);
+        n+=snprintf(b+n,sizeof b-n,_("HIGH SCORES\n"));
         for(int i=0;i<HS.n && n<(int)sizeof b;i++)
             n+=snprintf(b+n,sizeof b-n,i==s_rank?"#E8731C %d.  %6d   %s#\n":"%d.  %6d   %s\n",i+1,HS.s[i],HS.d[i]);
         if(!HS.n && n<(int)sizeof b) n+=snprintf(b+n,sizeof b-n,"-\n");
-        if(n<(int)sizeof b) snprintf(b+n,sizeof b-n,"\nnew game:");
-    } else snprintf(b,sizeof b,"SAPPER\nclear the field without\ndigging up a mine\n\ntap: dig   hold: flag\ntap a number to open around it\n\nchoose a field:");
+        if(n<(int)sizeof b) snprintf(b+n,sizeof b-n,_("\nnew game:"));
+    } else snprintf(b,sizeof b,_("SAPPER\nclear the field without\ndigging up a mine\n\ntap: dig   hold: flag\ntap a number to open around it\n\nchoose a field:"));
     lv_label_set_text(s_over_lbl,b); lv_obj_clear_flag(s_over,LV_OBJ_FLAG_HIDDEN); lv_obj_move_foreground(s_over); }
 static void act(int x,int y,int flag){            /* dig / flag / chord at a square */
     if(G.over) return;
@@ -172,13 +174,13 @@ lv_obj_t* sapper_create(void (*on_exit)(void),int resume){
     lv_obj_add_event_cb(scr,del_cb,LV_EVENT_DELETE,NULL);
     lv_obj_t*bk=btn(scr,46,40,0xE8731C); lv_obj_set_pos(bk,8,7); lv_obj_add_event_cb(bk,back_cb,LV_EVENT_CLICKED,NULL);
     lv_obj_t*bl=lv_label_create(bk); lv_label_set_text(bl,LV_SYMBOL_LEFT); lv_obj_set_style_text_color(bl,lv_color_hex(0xE8731C),0); lv_obj_center(bl);
-    s_title=label(scr,&lv_font_montserrat_20,0xE8731C); lv_obj_set_pos(s_title,64,16);
-    lv_obj_t*ml=label(scr,&lv_font_montserrat_12,0x8A6A4A); lv_label_set_text(ml,"MINES"); lv_obj_set_pos(ml,206,8);
-    s_left=label(scr,&lv_font_montserrat_20,0xF4E4D0); lv_obj_set_pos(s_left,206,22);
-    lv_obj_t*tl=label(scr,&lv_font_montserrat_12,0x8A6A4A); lv_label_set_text(tl,"TIME"); lv_obj_set_pos(tl,282,8);
-    s_clock=label(scr,&lv_font_montserrat_20,0xF4E4D0); lv_obj_set_pos(s_clock,282,22);
-    s_mode=btn(scr,86,40,0xE8731C); lv_obj_set_pos(s_mode,480-86-8,7); lv_obj_add_event_cb(s_mode,mode_cb,LV_EVENT_CLICKED,NULL);
-    s_mode_lbl=label(s_mode,&lv_font_montserrat_16,0xE8731C); lv_obj_center(s_mode_lbl);
+    s_title=label(scr,&r3_font_20,0xE8731C); lv_obj_set_pos(s_title,64,16);
+    lv_obj_t*ml=label(scr,&r3_font_12,0x8A6A4A); lv_label_set_text(ml,_("MINES")); lv_obj_set_pos(ml,206,8);
+    s_left=label(scr,&r3_font_20,0xF4E4D0); lv_obj_set_pos(s_left,206,22);
+    lv_obj_t*tl=label(scr,&r3_font_12,0x8A6A4A); lv_label_set_text(tl,_("TIME")); lv_obj_set_pos(tl,282,8);
+    s_clock=label(scr,&r3_font_20,0xF4E4D0); lv_obj_set_pos(s_clock,282,22);
+    s_mode=btn(scr,104,40,0xE8731C); lv_obj_set_pos(s_mode,480-104-8,7);   /* room for CREUSER / DRAPEAU */ lv_obj_add_event_cb(s_mode,mode_cb,LV_EVENT_CLICKED,NULL);
+    s_mode_lbl=label(s_mode,&r3_font_16,0xE8731C); lv_obj_center(s_mode_lbl);
     s_board=lv_obj_create(scr);
     lv_obj_set_style_bg_color(s_board,lv_color_hex(0x0F0C09),0); lv_obj_set_style_radius(s_board,0,0);
     lv_obj_set_style_border_width(s_board,0,0); lv_obj_set_style_pad_all(s_board,0,0);
@@ -194,12 +196,12 @@ lv_obj_t* sapper_create(void (*on_exit)(void),int resume){
     lv_obj_set_style_radius(s_over,18,0); lv_obj_set_style_pad_all(s_over,16,0); lv_obj_set_style_pad_row(s_over,10,0);
     lv_obj_set_flex_flow(s_over,LV_FLEX_FLOW_COLUMN); lv_obj_set_flex_align(s_over,LV_FLEX_ALIGN_START,LV_FLEX_ALIGN_CENTER,LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(s_over,LV_OBJ_FLAG_SCROLLABLE);
-    s_over_lbl=label(s_over,&lv_font_montserrat_16,0xF4E4D0); lv_label_set_recolor(s_over_lbl,true);
+    s_over_lbl=label(s_over,&r3_font_16,0xF4E4D0); lv_label_set_recolor(s_over_lbl,true);
     lv_obj_set_style_text_align(s_over_lbl,LV_TEXT_ALIGN_CENTER,0); lv_obj_set_style_text_line_space(s_over_lbl,4,0);
     for(long i=0;i<SP_NLEVELS;i++){ int c,r,m; sp_level_dims((int)i,&c,&r,&m);
         lv_obj_t*b=btn(s_over,LV_PCT(100),58,0xE8731C); lv_obj_add_event_cb(b,level_btn_cb,LV_EVENT_CLICKED,(void*)i);
-        lv_obj_t*l=label(b,&lv_font_montserrat_20,0xF4E4D0); char t[48];
-        snprintf(t,sizeof t,"%s   #8A6A4A %dx%d, %d mines#",LEVEL_NAMES[i],c,r,m); lv_label_set_recolor(l,true);
+        lv_obj_t*l=label(b,&r3_font_20,0xF4E4D0); char t[48];
+        snprintf(t,sizeof t,_("%s   #8A6A4A %dx%d, %d mines#"),_(LEVEL_NAMES[i]),c,r,m); lv_label_set_recolor(l,true);
         lv_label_set_text(l,t); lv_obj_center(l); }
     lv_obj_add_flag(s_over,LV_OBJ_FLAG_HIDDEN);
     sp_save_t sv;

@@ -2,6 +2,7 @@
  * gcc -O1 -Wall -I src/ui -o build/pet_test tests/pet_core_test.c src/ui/pet_core.c && build/pet_test */
 #include "pet_core.h"
 #include <stdio.h>
+#include <string.h>
 static int fail;
 #define CHECK(c,...) do{ if(!(c)){ printf("FAIL: " __VA_ARGS__); printf("\n"); fail++; return; } }while(0)
 

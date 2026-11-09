@@ -1,5 +1,7 @@
 /* pet.c — Moko screen: vector-drawn pet in a day/night scene + care actions.
  * Life rules live in pet_core.c; this file draws, animates and saves. */
+#include "fonts.h"
+#include "i18n.h"
 #include "pet.h"
 #include "pet_core.h"
 #include "r3_tick.h"
@@ -35,11 +37,11 @@ void pet_tick(void){                     /* called every ~30 s from the main loo
 }
 int pet_needs_you(void){ pet_load(); return pet_attention(&P)!=0 && P.stage!=PS_GONE; }
 const char* pet_summary(void){ static char b[64]; pet_load();
-    if(P.stage==PS_GONE){ snprintf(b,sizeof b,"went back to the stars"); return b; }
-    if(P.stage==PS_EGG){ snprintf(b,sizeof b,"an egg, about to hatch"); return b; }
+    if(P.stage==PS_GONE){ snprintf(b,sizeof b,_("went back to the stars")); return b; }
+    if(P.stage==PS_EGG){ snprintf(b,sizeof b,_("an egg, about to hatch")); return b; }
     int a=pet_attention(&P);
-    snprintf(b,sizeof b,"%s, %s%s",pet_form_name(&P), P.asleep?"asleep":"awake",
-        a&PA_SICK?" - sick!":a&PA_HUNGRY?" - hungry!":a&PA_POOP?" - needs cleaning":a&PA_SAD?" - bored":a?" - calling":"");
+    snprintf(b,sizeof b,_("%s, %s%s"),_(pet_form_name(&P)), P.asleep?_("asleep"):_("awake"),
+        a&PA_SICK?_(" - sick!"):a&PA_HUNGRY?_(" - hungry!"):a&PA_POOP?_(" - needs cleaning"):a&PA_SAD?_(" - bored"):a?_(" - calling"):"");
     return b; }
 
 /* ---------- screen state ---------- */
@@ -53,8 +55,8 @@ typedef struct { float x,y,v; int on; } bubble_t; static bubble_t bub[10]; stati
 static void toast(const char*t){ lv_label_set_text(s_toast,t); lv_obj_clear_flag(s_toast,LV_OBJ_FLAG_HIDDEN); toast_until=r3_tick_ms()+1800; }
 static void title(void){ char b[80];
     if(P.stage==PS_GONE) snprintf(b,sizeof b,"MOKO");
-    else if(P.stage==PS_EGG) snprintf(b,sizeof b,"MOKO  -  egg");
-    else snprintf(b,sizeof b,"%s  -  %s, day %d",pet_form_name(&P),pet_stage_name(&P),P.age_days+1);
+    else if(P.stage==PS_EGG) snprintf(b,sizeof b,_("MOKO  -  egg"));
+    else snprintf(b,sizeof b,_("%s  -  %s, day %d"),_(pet_form_name(&P)),_(pet_stage_name(&P)),P.age_days+1);
     lv_label_set_text(s_title,b); }
 
 /* ---------- drawing helpers ---------- */
@@ -127,7 +129,7 @@ static void draw_pet(float cx,float base){
     else arc(cx,my+er*0.9f,er*0.6f,205,335,4,0x5A2E22);
     if(sick){ circ(cx+rx+16,cy-ry-6,15,0xFFFFFF,LV_OPA_90); box((int)cx+(int)rx+10,(int)(cy-ry-8),(int)cx+(int)rx+22,(int)(cy-ry-4),0xE04848,0xE04848,1);
         box((int)cx+(int)rx+14,(int)(cy-ry-12),(int)cx+(int)rx+18,(int)(cy-ry),0xE04848,0xE04848,1); }
-    if(pet_attention(&P)&~PA_SICK && !P.asleep){ circ(cx-rx-14,cy-ry-8,14,0xFFFFFF,LV_OPA_90); text((int)(cx-rx-18),(int)(cy-ry-19),"!",0xE8731C,&lv_font_montserrat_20); }
+    if(pet_attention(&P)&~PA_SICK && !P.asleep){ circ(cx-rx-14,cy-ry-8,14,0xFFFFFF,LV_OPA_90); text((int)(cx-rx-18),(int)(cy-ry-19),"!",0xE8731C,&r3_font_20); }
     if(eat_ms>0){ float k=eat_ms/1500.0f, fx=cx+rx+6, fy=my;           /* the food shrinking */
         if(eat_kind==0){ ell(fx,fy,14*k+2,10*k+2,0xC9763C,LV_OPA_COVER); circ(fx+10*k,fy-6*k,5*k+1,0xF4E4D0,LV_OPA_COVER); }
         else { circ(fx,fy,12*k+2,0xF29AB6,LV_OPA_COVER); circ(fx,fy-10*k,4*k+1,0xE04848,LV_OPA_COVER); } }
@@ -157,13 +159,13 @@ static void scene_draw_cb(lv_event_t*e){
     else if(P.stage==PS_EGG) draw_egg(px,GROUND+10);
     else draw_pet(px,GROUND+10);
     if(P.asleep && P.stage!=PS_GONE){ for(int i=0;i<3;i++){ float k=fmodf(phase*0.6f+i*0.33f,1.0f);
-        text((int)(px+40+k*40),(int)(GROUND-120-k*70),"z",0xF4E4D0,i==1?&lv_font_montserrat_28:&lv_font_montserrat_20); } }
+        text((int)(px+40+k*40),(int)(GROUND-120-k*70),"z",0xF4E4D0,i==1?&r3_font_28:&r3_font_20); } }
     /* need pips: food and joy */
-    if(P.stage!=PS_EGG && P.stage!=PS_GONE){ text(10,8,"food",0xF4E4D0,&lv_font_montserrat_14); text(10,30,"joy",0xF4E4D0,&lv_font_montserrat_14);
+    if(P.stage!=PS_EGG && P.stage!=PS_GONE){ text(10,8,_("food"),0xF4E4D0,&r3_font_14); text(10,30,_("joy"),0xF4E4D0,&r3_font_14);
         for(int i=0;i<4;i++){ circ(66+i*20,17,7,i<P.hunger?0xE8731C:0x000000,i<P.hunger?LV_OPA_COVER:LV_OPA_30);
                               circ(66+i*20,39,7,i<P.happy?0xF29AB6:0x000000,i<P.happy?LV_OPA_COVER:LV_OPA_30); } }
     for(int i=0;i<10;i++) if(bub[i].on){ circ(bub[i].x,bub[i].y,22,0xCFEAF5,LV_OPA_50); circ(bub[i].x-7,bub[i].y-8,5,0xFFFFFF,LV_OPA_90); }
-    if(game_on){ char b[32]; snprintf(b,sizeof b,"popped %d  -  %ds",popped,(int)((game_end-r3_tick_ms()+999)/1000)); text(300,10,b,0xFFFFFF,&lv_font_montserrat_16); }
+    if(game_on){ char b[32]; snprintf(b,sizeof b,_("popped %d  -  %ds"),popped,(int)((game_end-r3_tick_ms()+999)/1000)); text(300,10,b,0xFFFFFF,&r3_font_16); }
 }
 
 /* ---------- animation ---------- */
@@ -181,7 +183,7 @@ static void tick_cb(lv_timer_t*t){ (void)t;
         if(now%700<(uint32_t)dt){ for(int i=0;i<10;i++) if(!bub[i].on){ bub[i].on=1; bub[i].x=40+(float)((now*7919)%400); bub[i].y=SH+20; bub[i].v=90+(float)(now%90); break; } }
         if(now>=game_end){ game_on=0; memset(bub,0,sizeof bub); int won=popped>=5;
             pet_play_result(&P,won); P_dirty=1; happy_ms=won?2500:0;
-            toast(won?"Moko had fun!":"Moko wants a rematch"); lv_obj_invalidate(s_scene); } }
+            toast(won?_("Moko had fun!"):_("Moko wants a rematch")); lv_obj_invalidate(s_scene); } }
     /* redraw: whole scene while playing/asleep (z's), else just around the pet */
     if(game_on || P.asleep || P.stage==PS_GONE) lv_obj_invalidate(s_scene);
     else { lv_area_t c; lv_obj_get_coords(s_scene,&c);
@@ -190,7 +192,7 @@ static void tick_cb(lv_timer_t*t){ (void)t;
         lv_area_t pips={c.x1,c.y1,c.x1+160,c.y1+50}; lv_obj_invalidate_area(s_scene,&pips); }
     /* the simulation keeps going while we watch */
     static uint32_t lsim; if(now-lsim>5000){ lsim=now; int st=P.stage; pet_tick();
-        if(P.events&2) toast("It hatched!"); else if(P.events&1 && P.stage!=PS_GONE){ char b[48]; snprintf(b,sizeof b,"Evolved into %s!",pet_form_name(&P)); toast(b); }
+        if(P.events&2) toast(_("It hatched!")); else if(P.events&1 && P.stage!=PS_GONE){ char b[48]; snprintf(b,sizeof b,_("Evolved into %s!"),_(pet_form_name(&P))); toast(b); }
         P.events=0; if(P.stage!=st){ title(); lv_obj_invalidate(s_scene); }
         if(P.stage==PS_GONE) lv_obj_clear_flag(s_gone,LV_OBJ_FLAG_HIDDEN); }
 }
@@ -201,28 +203,28 @@ static void scene_input_cb(lv_event_t*e){
 }
 
 /* ---------- actions ---------- */
-static const char*MSG[]={0,"Not now","Not needed","Shh... asleep","",""};
-static void after(int r,const char*ok){ if(r==PR_OK){ if(ok) toast(ok); } else if(r<5 && MSG[r]) toast(MSG[r]);
+static const char*MSG[]={0,N_("Not now"),N_("Not needed"),N_("Shh... asleep"),"",""};
+static void after(int r,const char*ok){ if(r==PR_OK){ if(ok) toast(ok); } else if(r<5 && MSG[r]) toast(_(MSG[r]));
     P_dirty=1; pet_save(); lv_obj_invalidate(s_scene); }
 static void act_cb(lv_event_t*e){ long a=(long)lv_event_get_user_data(e); int r;
     if(P.stage==PS_GONE || game_on) return;
     switch(a){
-    case 0: r=pet_meal(&P); if(r==PR_OK){ eat_ms=1500; eat_kind=0; } after(r,r==PR_REFUSED?"Full!":"Yum!"); if(r==PR_REFUSED) toast("Full - no more"); break;
-    case 1: r=pet_snack(&P); if(r==PR_OK){ eat_ms=1500; eat_kind=1; happy_ms=2000; } after(r,"Sweet!"); break;
-    case 2: if(P.asleep){ toast("Shh... asleep"); break; } if(P.stage==PS_EGG){ toast("Still an egg"); break; }
-            game_on=1; popped=0; memset(bub,0,sizeof bub); game_end=r3_tick_ms()+12000; toast("Pop 5 bubbles!"); break;
-    case 3: after(pet_clean(&P),"All clean"); break;
-    case 4: after(pet_medicine(&P),"Feeling better"); break;
-    case 5: after(pet_lights(&P),P.lights?"Lights on":"Lights off"); break;
-    case 6: r=pet_scold(&P); after(r,"Behaving now"); if(r==PR_NOTNEEDED) toast("That was unfair..."); break;
-    case 7: { char b[200]; snprintf(b,sizeof b,"%s (%s)\nage %d days\nweight %d\ndiscipline %d%%\ncare mistakes %d\n\ntap to close",
-                pet_form_name(&P),pet_stage_name(&P),P.age_days,P.weight,P.discipline,P.mistakes_total);
+    case 0: r=pet_meal(&P); if(r==PR_OK){ eat_ms=1500; eat_kind=0; } after(r,r==PR_REFUSED?_("Full!"):_("Yum!")); if(r==PR_REFUSED) toast(_("Full - no more")); break;
+    case 1: r=pet_snack(&P); if(r==PR_OK){ eat_ms=1500; eat_kind=1; happy_ms=2000; } after(r,_("Sweet!")); break;
+    case 2: if(P.asleep){ toast(_("Shh... asleep")); break; } if(P.stage==PS_EGG){ toast(_("Still an egg")); break; }
+            game_on=1; popped=0; memset(bub,0,sizeof bub); game_end=r3_tick_ms()+12000; toast(_("Pop 5 bubbles!")); break;
+    case 3: after(pet_clean(&P),_("All clean")); break;
+    case 4: after(pet_medicine(&P),_("Feeling better")); break;
+    case 5: after(pet_lights(&P),P.lights?_("Lights on"):_("Lights off")); break;
+    case 6: r=pet_scold(&P); after(r,_("Behaving now")); if(r==PR_NOTNEEDED) toast(_("That was unfair...")); break;
+    case 7: { char b[200]; snprintf(b,sizeof b,_("%s (%s)\nage %d days\nweight %d\ndiscipline %d%%\ncare mistakes %d\n\ntap to close"),
+                _(pet_form_name(&P)),_(pet_stage_name(&P)),P.age_days,P.weight,P.discipline,P.mistakes_total);
               lv_label_set_text(lv_obj_get_child(s_status,0),b); lv_obj_clear_flag(s_status,LV_OBJ_FLAG_HIDDEN); } break;
     }
 }
 static void status_close_cb(lv_event_t*e){ (void)e; lv_obj_add_flag(s_status,LV_OBJ_FLAG_HIDDEN); }
 static void new_egg_cb(lv_event_t*e){ (void)e; pet_new(&P,time(0),(unsigned)time(0)^r3_tick_ms()); pet_save();
-    lv_obj_add_flag(s_gone,LV_OBJ_FLAG_HIDDEN); title(); px=ptx=SW/2; lv_obj_invalidate(s_scene); toast("A new egg!"); }
+    lv_obj_add_flag(s_gone,LV_OBJ_FLAG_HIDDEN); title(); px=ptx=SW/2; lv_obj_invalidate(s_scene); toast(_("A new egg!")); }
 static void back_cb(lv_event_t*e){ (void)e; if(s_exit) s_exit(); }
 static void del_cb(lv_event_t*e){ (void)e; pet_save(); if(s_tmr){ lv_timer_del(s_tmr); s_tmr=0; } s_scr=0; game_on=0; }
 
@@ -237,24 +239,24 @@ lv_obj_t* pet_create(void (*on_exit)(void)){
     lv_obj_add_event_cb(bk,back_cb,LV_EVENT_CLICKED,NULL);
     lv_obj_t*bl=lv_label_create(bk); lv_label_set_text(bl,LV_SYMBOL_LEFT); lv_obj_set_style_text_color(bl,lv_color_hex(0xE8731C),0); lv_obj_center(bl);
     s_title=lv_label_create(scr); lv_obj_set_style_text_color(s_title,lv_color_hex(0xE8731C),0);
-    lv_obj_set_style_text_font(s_title,&lv_font_montserrat_20,0); lv_obj_set_pos(s_title,64,16); title();
+    lv_obj_set_style_text_font(s_title,&r3_font_20,0); lv_obj_set_pos(s_title,64,16); title();
     s_scene=lv_obj_create(scr); lv_obj_set_size(s_scene,SW,SH); lv_obj_set_pos(s_scene,0,SY);
     lv_obj_set_style_radius(s_scene,0,0); lv_obj_set_style_border_width(s_scene,0,0); lv_obj_set_style_pad_all(s_scene,0,0);
     lv_obj_set_style_bg_opa(s_scene,LV_OPA_TRANSP,0); lv_obj_clear_flag(s_scene,LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(s_scene,scene_draw_cb,LV_EVENT_DRAW_MAIN,NULL);
     lv_obj_add_event_cb(s_scene,scene_input_cb,LV_EVENT_PRESSED,NULL);
     /* actions: 2 rows x 4 */
-    static const char*NAMES[8]={"Meal","Snack","Play","Clean","Medicine","Lights","Scold","Status"};
+    static const char*NAMES[8]={N_("Meal"),N_("Snack"),N_("Play"),N_("Clean"),N_("Medicine"),N_("Lights"),N_("Scold"),N_("Status")};
     for(long i=0;i<8;i++){ lv_obj_t*b=lv_btn_create(scr); lv_obj_set_size(b,114,108);
         lv_obj_set_pos(b,6+(i%4)*118,SY+SH+8+(i/4)*114);
         lv_obj_set_style_radius(b,18,0); lv_obj_set_style_shadow_width(b,0,0);
         lv_obj_set_style_bg_color(b,lv_color_hex(0x1A1510),0); lv_obj_set_style_bg_color(b,lv_color_hex(0xE8731C),LV_STATE_PRESSED);
         lv_obj_set_style_border_color(b,lv_color_hex(0x5A4632),0); lv_obj_set_style_border_width(b,2,0);
         lv_obj_add_event_cb(b,act_cb,LV_EVENT_CLICKED,(void*)i);
-        lv_obj_t*l=lv_label_create(b); lv_label_set_text(l,NAMES[i]); lv_obj_center(l);
-        lv_obj_set_style_text_color(l,lv_color_hex(0xF4E4D0),0); lv_obj_set_style_text_font(l,&lv_font_montserrat_16,0); }
+        lv_obj_t*l=lv_label_create(b); lv_label_set_text(l,_(NAMES[i])); lv_obj_center(l);
+        lv_obj_set_style_text_color(l,lv_color_hex(0xF4E4D0),0); lv_obj_set_style_text_font(l,&r3_font_16,0); }
     s_toast=lv_label_create(scr); lv_obj_set_width(s_toast,480); lv_obj_set_style_text_align(s_toast,LV_TEXT_ALIGN_CENTER,0);
-    lv_obj_set_style_text_font(s_toast,&lv_font_montserrat_28,0); lv_obj_set_style_text_color(s_toast,lv_color_hex(0xFFFFFF),0);
+    lv_obj_set_style_text_font(s_toast,&r3_font_28,0); lv_obj_set_style_text_color(s_toast,lv_color_hex(0xFFFFFF),0);
     lv_obj_set_pos(s_toast,0,SY+60); lv_obj_add_flag(s_toast,LV_OBJ_FLAG_HIDDEN); lv_obj_clear_flag(s_toast,LV_OBJ_FLAG_CLICKABLE);
     /* status card + gone card */
     s_status=lv_obj_create(scr); lv_obj_set_size(s_status,360,300); lv_obj_set_pos(s_status,60,SY+60);
@@ -262,15 +264,15 @@ lv_obj_t* pet_create(void (*on_exit)(void)){
     lv_obj_set_style_border_color(s_status,lv_color_hex(0xE8731C),0); lv_obj_set_style_border_width(s_status,2,0);
     lv_obj_add_event_cb(s_status,status_close_cb,LV_EVENT_CLICKED,NULL); lv_obj_add_flag(s_status,LV_OBJ_FLAG_HIDDEN);
     lv_obj_t*sl=lv_label_create(s_status); lv_obj_set_style_text_color(sl,lv_color_hex(0xF4E4D0),0);
-    lv_obj_set_style_text_font(sl,&lv_font_montserrat_20,0); lv_obj_set_style_text_align(sl,LV_TEXT_ALIGN_CENTER,0); lv_obj_center(sl);
+    lv_obj_set_style_text_font(sl,&r3_font_20,0); lv_obj_set_style_text_align(sl,LV_TEXT_ALIGN_CENTER,0); lv_obj_center(sl);
     s_gone=lv_obj_create(scr); lv_obj_set_size(s_gone,400,220); lv_obj_set_pos(s_gone,40,SY+170);
     lv_obj_set_style_bg_color(s_gone,lv_color_hex(0x000000),0); lv_obj_set_style_bg_opa(s_gone,LV_OPA_80,0);
     lv_obj_set_style_border_color(s_gone,lv_color_hex(0xFFE27A),0); lv_obj_set_style_border_width(s_gone,2,0);
     lv_obj_add_event_cb(s_gone,new_egg_cb,LV_EVENT_CLICKED,NULL);
     { lv_obj_t*gl=lv_label_create(s_gone); char b[160];
-      snprintf(b,sizeof b,"Moko went back\nto the stars after %d days.\n\ntap for a new egg",P.age_days);
+      snprintf(b,sizeof b,_("Moko went back\nto the stars after %d days.\n\ntap for a new egg"),P.age_days);
       lv_label_set_text(gl,b); lv_obj_set_style_text_color(gl,lv_color_hex(0xF4E4D0),0);
-      lv_obj_set_style_text_font(gl,&lv_font_montserrat_20,0); lv_obj_set_style_text_align(gl,LV_TEXT_ALIGN_CENTER,0); lv_obj_center(gl); }
+      lv_obj_set_style_text_font(gl,&r3_font_20,0); lv_obj_set_style_text_align(gl,LV_TEXT_ALIGN_CENTER,0); lv_obj_center(gl); }
     if(P.stage!=PS_GONE) lv_obj_add_flag(s_gone,LV_OBJ_FLAG_HIDDEN);
     last_ms=r3_tick_ms(); next_wander=last_ms+1500; next_blink=last_ms+2000; px=ptx=SW/2;
     lv_area_t z={0,0,0,0}; prev_box=z;
