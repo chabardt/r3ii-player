@@ -1072,7 +1072,7 @@ static void draw_camp(void){
     const mission_t*m=&DG_MISSION[sel]; int seen[ET_N]={0};
     for(int pass=0;pass<2;pass++) for(int i=m->ne-1;i>=0;i--){ int t=m->e[i].type; if(seen[t]) continue;
         int boss=DG_ETYPE[t].boss>=0; if(pass==0 && !boss) continue; if(pass==1 && boss) continue; seen[t]=1;
-        if(y>TOP+446) break;
+        if(y+9>TOP+448) break;   /* a line is 7 px: keep clear of the SQUAD heading below */
         text(16,y,DG_ETYPE[t].name,1,boss?0xFF7050:0xF4E4D0); text(130,y,DG_ETYPE[t].hint,1,0xA08870); y+=13; }
     /* squad */
     y=TOP+462; text(16,y-14,"SQUAD - TAP TO EQUIP",1,0xE8731C);
