@@ -82,10 +82,14 @@ static void game_over(void){
     hs_format(&HS,rank,G.score,b,sizeof b); lv_label_set_text(s_over_lbl,b);
     lv_obj_clear_flag(s_over,LV_OBJ_FLAG_HIDDEN);
 }
+/* remember where the paddle and balls are drawn now, so their first move erases the right pixels */
+static void sync_prev(void){
+    for(int i=0;i<BK_MAXB;i++){ prev_ball_on[i]=G.b[i].on; if(G.b[i].on) prev_ball[i]=ball_area(&G.b[i]); }
+    prev_pad=pad_area(); }
 static void new_game(void){
     bk_new_game(&G,(unsigned)time(0)^r3_tick_ms()); paused=0;
     lv_label_set_text(s_pause,""); lv_obj_add_flag(s_over,LV_OBJ_FLAG_HIDDEN);
-    memset(prev_ball_on,0,sizeof prev_ball_on); prev_pad=pad_area();
+    sync_prev();
     hud(); toast(_("TAP TO LAUNCH")); lv_obj_invalidate(s_field); s_last=r3_tick_ms();
 }
 
@@ -196,12 +200,15 @@ lv_obj_t* brick_create(void (*on_exit)(void),int resume){
     s_over_lbl=label(s_over,&r3_font_16,0xF4E4D0); lv_label_set_recolor(s_over_lbl,true);
     lv_obj_set_style_text_align(s_over_lbl,LV_TEXT_ALIGN_CENTER,0); lv_obj_set_style_text_line_space(s_over_lbl,4,0);
     lv_obj_center(s_over_lbl);
+    /* the field's screen coordinates only exist after a layout pass: without it the paddle's
+     * starting area was taken at y=0 instead of y=FY, so its first move left a copy behind */
+    lv_obj_update_layout(scr);
     new_game();
     struct { uint32_t magic; bk_t g; } sv;
     if(resume && load_save(&sv.magic,&sv.g)){   /* continue where we left off, paused until a tap */
         G=sv.g; paused=1; lv_label_set_text(s_pause,_("PAUSED - tap to go on"));
         lv_obj_add_flag(s_toast,LV_OBJ_FLAG_HIDDEN); s_toast_until=0;
-        hud(); prev_pad=pad_area(); lv_obj_invalidate(s_field); }
+        hud(); sync_prev(); lv_obj_invalidate(s_field); }
     unlink(BK_SAVE);              /* the live game owns the state now (saved again on leave) */
     s_tmr=lv_timer_create(tick_cb,16,NULL);
     return scr;
