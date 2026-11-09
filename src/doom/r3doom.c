@@ -21,6 +21,7 @@
 #include "i_video.h"
 #include "pad.h"
 #include "volbar.h"
+#include "r3hw.h"
 static uint32_t vb_until; static int vb_vol=160;      /* volume bar */
 void r3snd_apply_volume(void);
 #include <stdio.h>
@@ -123,29 +124,15 @@ static void touch_up(int i){
         if(!moved && now_ms()-sl[i].t<300) tapkey(KEY_USE); }
     else if(r==R_GAME){ if(now_ms()-sl[i].t<400) tapkey(KEY_ENTER); }
 }
-static int mt_b_seen;
+/* contacts per frame from r3hw.h (the R3 speaks protocol A: lifted fingers just vanish) */
 static void poll_touch(void){
-    struct input_event e; static int pending_down[NS], st_x, st_y, st_down;
+    static r3_touch_t tst; static r3_contact_t c[R3_NS]; struct input_event e;
     while(read(ts_fd,&e,sizeof e)==sizeof e){
-        if(e.type==EV_ABS){
-            switch(e.code){
-            case ABS_MT_SLOT: cur_slot = e.value<0||e.value>=NS?0:e.value; mt_b_seen=1; break;
-            case ABS_MT_TRACKING_ID: mt_b_seen=1;
-                if(e.value<0){ if(sl[cur_slot].down){ sl[cur_slot].down=0; touch_up(cur_slot); } }
-                else { sl[cur_slot].id=e.value; sl[cur_slot].down=1; pending_down[cur_slot]=1; } break;
-            case ABS_MT_POSITION_X: sl[cur_slot].x=e.value; st_x=e.value; break;
-            case ABS_MT_POSITION_Y: sl[cur_slot].y=e.value; st_y=e.value; break;
-            case ABS_X: st_x=e.value; break;
-            case ABS_Y: st_y=e.value; break; }
-        } else if(e.type==EV_KEY && e.code==BTN_TOUCH && !mt_b_seen){   /* single-touch fallback */
-            if(e.value){ sl[0].x=st_x; sl[0].y=st_y; sl[0].down=1; pending_down[0]=1; st_down=1; }
-            else if(st_down){ st_down=0; sl[0].down=0; touch_up(0); }
-        } else if(e.type==EV_SYN && e.code==SYN_REPORT){
-            if(!mt_b_seen && st_down){ sl[0].x=st_x; sl[0].y=st_y; }
-            for(int i=0;i<NS;i++){
-                if(pending_down[i]){ pending_down[i]=0; touch_down(i); }
-                if(sl[i].down) touch_move(i); }
-        }
+        if(!r3_touch_event(&tst,&e,c)) continue;
+        for(int i=0;i<NS && i<R3_NS;i++){
+            if(c[i].down && !sl[i].down){ sl[i].x=c[i].x; sl[i].y=c[i].y; sl[i].down=1; touch_down(i); }
+            else if(!c[i].down && sl[i].down){ sl[i].down=0; touch_up(i); }
+            else if(c[i].down){ sl[i].x=c[i].x; sl[i].y=c[i].y; touch_move(i); } }
     }
 }
 
