@@ -111,15 +111,20 @@ static void set_mode(int l){
     land=l; if(l){ CW=720; CH=480; PF_Y=0; GROUND=372; PLAY_BOT=420; UW=CW-28; } else { CW=SW; CH=SH; PF_Y=TOP; GROUND=392; PLAY_BOT=TOP+420; UW=SW; }
     memset(cvbuf,0,sizeof cvbuf); if(fb) for(int y=0;y<SH;y++) memset(fb+y*fbstride,0,SW*2);
     fprintf(stderr,"[r3drum] %s\n",l?"landscape (controller)":"portrait"); }
+static uint32_t vb_until;
 static void present(void){
-    if(!land){ for(int y=TOP;y<SH;y++) memcpy(fb+y*fbstride,&cvbuf[y*SW],SW*2); return; }
+    /* never paint under a visible volume bar: drawing the game there and the bar on top every
+     * frame made the strip flicker (it is redrawn by the next frame once the bar hides) */
+    int vb=r3_tick_ms()<vb_until;
+    if(!land){ for(int y=vb&&VB_THICK>TOP?VB_THICK:TOP;y<SH;y++) memcpy(fb+y*fbstride,&cvbuf[y*SW],SW*2); return; }
     /* landscape, R3 turned clockwise: viewer (vx,vy) -> panel (x=vy, y=719-vx); 8 panel rows at a time
      * so the canvas is read along its rows (the transpose stays in cache) */
     static uint16_t rows[8][SW];
     for(int py0=0;py0<SH;py0+=8){
         for(int px=0;px<SW;px++){ const uint16_t*src=&cvbuf[px*720+(SH-1-py0-7)];
             for(int k=0;k<8;k++) rows[7-k][px]=src[k]; }
-        for(int k=0;k<8;k++) memcpy(fb+(py0+k)*fbstride,rows[k],SW*2); }
+        int x0=vb?VB_THICK:0;   /* landscape: the bar runs along the physical left edge */
+        for(int k=0;k<8;k++) memcpy(fb+(py0+k)*fbstride+x0,rows[k]+x0,(SW-x0)*2); }
 }
 
 /* ======================================================================= audio */
@@ -336,7 +341,6 @@ enum { SRC_TOUCH, SRC_PAD, SRC_KEYS, SRC_N };
 static int off_src[SRC_N]={30,30,30};      /* timing offset per input, ms (measured on the rhythm test) */
 static const char*const SRC_NAME[SRC_N]={"TOUCH","JOY-CON","R3 KEYS"};
 static armory_t A;
-static uint32_t vb_until;
 typedef struct { uint32_t magic, ver; armory_t a; int offset, sel, music, off3[3]; } save_t;   /* v1: no music, v2: one offset */
 static int music_opt;
 #define MAGIC 0x44524D46u
@@ -872,7 +876,7 @@ static void draw_battle(void){
     rect(12,PLAY_BOT-8,UW-24,3,0x2A2018); rect(12,PLAY_BOT-8,(int)((UW-24)*G.sx/G.m->length),3,0xE8731C);
     if(banner_t>0 && !mv_banner_busy()){ int a=banner_t>2.4f?(int)((2.8f-banner_t)/0.4f*255):255; (void)a;
         textcs(UW/2,PF_Y+120,banner,4,0xFFE0A0); if(banner2) textcs(UW/2,PF_Y+160,banner2,2,0xF4E4D0); }
-    if(G.time<10 || paused) legend(PF_Y+40);
+    if(G.time<10 && !paused) legend(PF_Y+40);   /* paused: the pause screen draws it (once) */
     if(music_live && G.time<12){ char b[80]; snprintf(b,sizeof b,"MUSIC: %s",song_title); textcs(UW/2,PLAY_BOT-24,b,1,0xF4E4D0); }
     if(land) hud_land(); else { hud(); draw_pads(); }
     if(paused){ dim(0,PF_Y,CW,CH-PF_Y); legend(PF_Y+(land?16:92)); textcs(UW/2,PF_Y+(land?206:286),"PAUSED",4,0xF4E4D0);
