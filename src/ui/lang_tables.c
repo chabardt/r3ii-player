@@ -171,6 +171,7 @@ static const lang_entry_t L_fr[] = {
     { "Playlists", "Playlists" },
     { "Podcasts", "Podcasts" },
     { "Pop 5 bubbles!", "\303\211clate 5 bulles !" },
+    { "Power + Volume to unlock", "Power + Volume pour d\303\251verrouiller" },
     { "Press buttons: the matching action lights up.\nPair a Joy-Con: hold its small sync button\nuntil the lights run, then Scan.", "Appuyez sur les boutons : l\342\200\231action\ncorrespondante s\342\200\231allume.\nAppairer un Joy-Con : maintenez son petit\nbouton de synchro jusqu\342\200\231au d\303\251filement\ndes voyants, puis Rechercher." },
     { "RECEIVE FROM PHONE", "RECEVOIR DU T\303\211L\303\211PHONE" },
     { "ROWS %d\nLEVEL %d\nBEST %d", "LIGNES %d\nNIVEAU %d\nRECORD %d" },
@@ -195,6 +196,8 @@ static const lang_entry_t L_fr[] = {
     { "Scanning...", "Recherche..." },
     { "Scanning... (put the speaker in pairing mode)", "Recherche... (mettez l\342\200\231enceinte en appairage)" },
     { "Scold", "Gronder" },
+    { "Screen locked", "\303\211cran verrouill\303\251" },
+    { "Screen unlocked", "\303\211cran d\303\251verrouill\303\251" },
     { "September", "septembre" },
     { "Set clock", "R\303\251gler l\342\200\231horloge" },
     { "Settings", "R\303\251glages" },
@@ -301,6 +304,6 @@ static const lang_entry_t L_fr[] = {
     { "went back to the stars", "est reparti vers les \303\251toiles" },
 };
 const lang_t LANGS[] = {
-    { "fr", "Fran\303\247ais", 297, L_fr },
+    { "fr", "Fran\303\247ais", 300, L_fr },
 };
 const int LANG_N = 1;

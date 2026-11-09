@@ -1732,9 +1732,9 @@ static void make_lock_overlay(void){   /* top layer: a toast (on toggle / touch 
     lv_obj_set_flex_align(g_lockov,LV_FLEX_ALIGN_CENTER,LV_FLEX_ALIGN_CENTER,LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(g_lockov,LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_CLICKABLE);
     mk_padlock(g_lockov,40,C_ACCENT);
-    g_lock_title=lv_label_create(g_lockov); lv_obj_set_style_text_font(g_lock_title,&lv_font_montserrat_20,0);
+    g_lock_title=lv_label_create(g_lockov); lv_obj_set_style_text_font(g_lock_title,&r3_font_20,0);
     lv_obj_set_style_text_color(g_lock_title,lv_color_hex(C_FG),0);
-    g_lock_sub=lv_label_create(g_lockov); lv_label_set_text(g_lock_sub,"Power + Volume to unlock");
+    g_lock_sub=lv_label_create(g_lockov); lv_obj_set_style_text_font(g_lock_sub,&r3_font_14,0);
     lv_obj_set_style_text_color(g_lock_sub,lv_color_hex(C_DIM),0);
     lv_obj_add_flag(g_lockov,LV_OBJ_FLAG_HIDDEN);
     g_lockbadge=lv_obj_create(top); lv_obj_set_size(g_lockbadge,32,32); lv_obj_align(g_lockbadge,LV_ALIGN_BOTTOM_RIGHT,-3,-3);
@@ -1746,7 +1746,8 @@ static void make_lock_overlay(void){   /* top layer: a toast (on toggle / touch 
     lv_obj_add_flag(g_lockbadge,LV_OBJ_FLAG_HIDDEN);
 }
 static void lock_toast(void){ if(!g_lockov) return;
-    lv_label_set_text(g_lock_title,g_locked?"Screen locked":"Screen unlocked");
+    lv_label_set_text(g_lock_title,g_locked?_("Screen locked"):_("Screen unlocked"));   /* set here: follows a language change */
+    lv_label_set_text(g_lock_sub,_("Power + Volume to unlock"));
     if(g_locked) lv_obj_clear_flag(g_lock_sub,LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(g_lock_sub,LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(g_lockov,LV_OBJ_FLAG_HIDDEN); g_lock_hide=r3_tick_ms()+1500; }
 static void lock_toggle(void){
