@@ -7,10 +7,12 @@ ARCH="-march=mips32r2 -mabi=32 -mhard-float -EL"
 INC="-DLV_CONF_INCLUDE_SIMPLE -I vendor/lvgl -I src/ui -I vendor/tinyalsa/include -I vendor/minimp3 -I vendor/dr_libs -I vendor/minimp4 -I vendor/faad2/include -I vendor/faad2/libfaad -I vendor/lvgl/src/extra/libs/sjpg -I vendor/stb"
 CFLAGS="$ARCH -DHAVE_CONFIG_H -O2 -ffunction-sections -fdata-sections -fno-pie $INC"
 mkdir -p build
+# translations: lang/*.po -> src/ui/lang_tables.c (the committed copy is used when python3 is missing)
+command -v python3 >/dev/null && python3 scripts/lang.py gen
 
 TA="vendor/tinyalsa/src/pcm.c vendor/tinyalsa/src/pcm_hw.c vendor/tinyalsa/src/pcm_plugin.c vendor/tinyalsa/src/snd_card_plugin.c vendor/tinyalsa/src/mixer.c vendor/tinyalsa/src/mixer_hw.c vendor/tinyalsa/src/mixer_plugin.c vendor/tinyalsa/src/limits.c"
 FAAD="$(find vendor/faad2/libfaad -name '*.c')"
-SRCS="$(find vendor/lvgl/src -name '*.c') $TA $FAAD src/ui/audio.c src/ui/m4a.c src/ui/bt.c src/ui/cover.c src/ui/game.c src/ui/hiscore.c src/ui/brick_core.c src/ui/brick.c src/ui/coil_core.c src/ui/coil.c src/ui/pet_core.c src/ui/pet.c src/ui/pad.c src/ui/wifi.c src/ui/share.c src/ui/heart_img.c src/ui/smartmix.c src/ui/main.c"
+SRCS="$(find vendor/lvgl/src -name '*.c') $TA $FAAD src/ui/audio.c src/ui/m4a.c src/ui/bt.c src/ui/cover.c src/ui/game.c src/ui/hiscore.c src/ui/brick_core.c src/ui/brick.c src/ui/coil_core.c src/ui/coil.c src/ui/sapper_core.c src/ui/sapper.c src/ui/pet_core.c src/ui/pet.c src/ui/pad.c src/ui/wifi.c src/ui/share.c src/ui/heart_img.c src/ui/smartmix.c src/ui/fonts.c src/ui/i18n.c src/ui/lang_tables.c src/ui/main.c"
 
 N=$(nproc 2>/dev/null || echo 4); i=0
 for s in $SRCS; do
@@ -23,7 +25,7 @@ $CC $CFLAGS -c src/ui/audio.c -o src/ui/audio.c.o
 $CC $CFLAGS -c src/ui/bt.c   -o src/ui/bt.c.o
 $CC $CFLAGS -c src/ui/cover.c -o src/ui/cover.c.o
 $CC $CFLAGS -c src/ui/game.c  -o src/ui/game.c.o
-for f in hiscore brick_core brick coil_core coil pet_core pet pad wifi share heart_img smartmix; do $CC $CFLAGS -c src/ui/$f.c -o src/ui/$f.c.o; done
+for f in hiscore brick_core brick coil_core coil sapper_core sapper pet_core pet pad wifi share heart_img smartmix fonts i18n lang_tables; do $CC $CFLAGS -c src/ui/$f.c -o src/ui/$f.c.o; done
 $CC $CFLAGS -c src/ui/main.c  -o src/ui/main.c.o
 
 OBJS=""; for s in $SRCS; do OBJS="$OBJS $s.o"; done

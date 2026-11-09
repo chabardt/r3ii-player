@@ -2,6 +2,8 @@
  * Swipe on the board to steer (or tap the left / right half to turn that way).
  * Keys: prev / next = turn left / right, play = pause (new game after game over).
  * Controller: stick / d-pad steer, A pause. Top-5 scores, resume or new game. */
+#include "fonts.h"
+#include "i18n.h"
 #include "coil.h"
 #include "coil_core.h"
 #include "hiscore.h"
@@ -53,7 +55,7 @@ static void board_draw_cb(lv_event_t*e){
       rect(dc,ex2,ey2,ex2+4,ey2+4,0x0A0A0A,LV_RADIUS_CIRCLE,LV_OPA_COVER); }
 }
 static void hud(void){ char b[32]; snprintf(b,sizeof b,"%d",G.score); lv_label_set_text(s_score,b);
-    snprintf(b,sizeof b,"LEVEL %d",G.level); lv_label_set_text(s_level,b); }
+    snprintf(b,sizeof b,_("LEVEL %d"),G.level); lv_label_set_text(s_level,b); }
 static void toast(const char*t){ lv_label_set_text(s_toast,t); lv_obj_clear_flag(s_toast,LV_OBJ_FLAG_HIDDEN); s_toast_until=r3_tick_ms()+1200; }
 static void game_over(void){
     static char b[512]; int rank=hs_add(&HS,G.score); hs_format(&HS,rank,G.score,b,sizeof b);
@@ -61,9 +63,9 @@ static void game_over(void){
 static void new_game(void){
     coil_new(&G,(unsigned)time(0)^r3_tick_ms()); paused=0;
     lv_label_set_text(s_pause,""); lv_obj_add_flag(s_over,LV_OBJ_FLAG_HIDDEN);
-    hud(); lv_obj_invalidate(s_board); s_last_step=r3_tick_ms(); toast("SWIPE TO STEER");
+    hud(); lv_obj_invalidate(s_board); s_last_step=r3_tick_ms(); toast(_("SWIPE TO STEER"));
 }
-static void set_pause(int p){ paused=p; lv_label_set_text(s_pause,p?"PAUSED":""); s_last_step=r3_tick_ms(); }
+static void set_pause(int p){ paused=p; lv_label_set_text(s_pause,p?_("PAUSED"):""); s_last_step=r3_tick_ms(); }
 static void tick_cb(lv_timer_t*t){ (void)t;
     uint32_t now=r3_tick_ms();
     if(s_toast_until && now>s_toast_until){ s_toast_until=0; lv_obj_add_flag(s_toast,LV_OBJ_FLAG_HIDDEN); }
@@ -72,8 +74,8 @@ static void tick_cb(lv_timer_t*t){ (void)t;
     if(now-s_last_step < (uint32_t)coil_tick_ms(&G)) return;
     s_last_step=now;
     int sc=G.score, lv=G.level; coil_step(&G);
-    if(G.ate==F_GOLD) toast("GOLDEN! +2"); else if(G.ate==F_BERRY) toast("TRIMMED -3");
-    else if(G.level!=lv) toast("FASTER!");
+    if(G.ate==F_GOLD) toast(_("GOLDEN! +2")); else if(G.ate==F_BERRY) toast(_("TRIMMED -3"));
+    else if(G.level!=lv) toast(_("FASTER!"));
     if(G.score!=sc||G.level!=lv) hud();
     lv_obj_invalidate(s_board);
     if(G.over) game_over();
@@ -135,9 +137,9 @@ lv_obj_t* coil_create(void (*on_exit)(void),int resume){
     lv_obj_set_style_border_width(bk,2,0); lv_obj_set_style_border_color(bk,lv_color_hex(0xE8731C),0);
     lv_obj_add_event_cb(bk,back_cb,LV_EVENT_CLICKED,NULL);
     lv_obj_t*bl=lv_label_create(bk); lv_label_set_text(bl,LV_SYMBOL_LEFT); lv_obj_set_style_text_color(bl,lv_color_hex(0xE8731C),0); lv_obj_center(bl);
-    lv_obj_t*t=label(scr,&lv_font_montserrat_20,0xE8731C); lv_label_set_text(t,"COIL"); lv_obj_set_pos(t,64,16);
-    s_level=label(scr,&lv_font_montserrat_14,0x8A6A4A); lv_obj_align(s_level,LV_ALIGN_TOP_RIGHT,-110,20);
-    s_score=label(scr,&lv_font_montserrat_28,0xF4E4D0); lv_obj_align(s_score,LV_ALIGN_TOP_RIGHT,-12,10);
+    lv_obj_t*t=label(scr,&r3_font_20,0xE8731C); lv_label_set_text(t,"COIL"); lv_obj_set_pos(t,64,16);
+    s_level=label(scr,&r3_font_14,0x8A6A4A); lv_obj_align(s_level,LV_ALIGN_TOP_RIGHT,-110,20);
+    s_score=label(scr,&r3_font_28,0xF4E4D0); lv_obj_align(s_score,LV_ALIGN_TOP_RIGHT,-12,10);
     s_board=lv_obj_create(scr); lv_obj_set_size(s_board,CW*CS,CH*CS); lv_obj_set_pos(s_board,0,BY);
     lv_obj_set_style_bg_color(s_board,lv_color_hex(0x0F0C09),0); lv_obj_set_style_radius(s_board,0,0);
     lv_obj_set_style_border_width(s_board,1,0); lv_obj_set_style_border_color(s_board,lv_color_hex(0x5A3A1E),0);
@@ -147,21 +149,21 @@ lv_obj_t* coil_create(void (*on_exit)(void),int resume){
     lv_obj_add_event_cb(s_board,board_input_cb,LV_EVENT_PRESSED,NULL);
     lv_obj_add_event_cb(s_board,board_input_cb,LV_EVENT_RELEASED,NULL);
     lv_obj_add_event_cb(s_board,board_input_cb,LV_EVENT_CLICKED,NULL);
-    s_toast=label(scr,&lv_font_montserrat_28,0xE8731C); lv_obj_set_width(s_toast,480);
+    s_toast=label(scr,&r3_font_28,0xE8731C); lv_obj_set_width(s_toast,480);
     lv_obj_set_style_text_align(s_toast,LV_TEXT_ALIGN_CENTER,0); lv_obj_set_pos(s_toast,0,BY+260);
     lv_obj_add_flag(s_toast,LV_OBJ_FLAG_HIDDEN); lv_obj_clear_flag(s_toast,LV_OBJ_FLAG_CLICKABLE);
-    s_pause=label(scr,&lv_font_montserrat_28,0xF4E4D0); lv_obj_set_width(s_pause,480);
+    s_pause=label(scr,&r3_font_28,0xF4E4D0); lv_obj_set_width(s_pause,480);
     lv_obj_set_style_text_align(s_pause,LV_TEXT_ALIGN_CENTER,0); lv_obj_set_pos(s_pause,0,BY+300);
     lv_obj_clear_flag(s_pause,LV_OBJ_FLAG_CLICKABLE);
     s_over=lv_obj_create(scr); lv_obj_set_size(s_over,400,340); lv_obj_set_pos(s_over,40,BY+140);
     lv_obj_set_style_bg_color(s_over,lv_color_hex(0x000000),0); lv_obj_set_style_bg_opa(s_over,LV_OPA_80,0);
     lv_obj_set_style_border_color(s_over,lv_color_hex(0xE8731C),0); lv_obj_set_style_border_width(s_over,2,0);
     lv_obj_set_style_radius(s_over,18,0); lv_obj_clear_flag(s_over,LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_CLICKABLE);
-    s_over_lbl=label(s_over,&lv_font_montserrat_16,0xF4E4D0); lv_label_set_recolor(s_over_lbl,true);
+    s_over_lbl=label(s_over,&r3_font_16,0xF4E4D0); lv_label_set_recolor(s_over_lbl,true);
     lv_obj_set_style_text_align(s_over_lbl,LV_TEXT_ALIGN_CENTER,0); lv_obj_set_style_text_line_space(s_over_lbl,4,0);
     lv_obj_center(s_over_lbl);
     new_game();
-    if(resume && load_save(&G)){ hud(); set_pause(1); lv_label_set_text(s_pause,"PAUSED - tap to go on");
+    if(resume && load_save(&G)){ hud(); set_pause(1); lv_label_set_text(s_pause,_("PAUSED - tap to go on"));
         lv_obj_add_flag(s_toast,LV_OBJ_FLAG_HIDDEN); s_toast_until=0; lv_obj_invalidate(s_board); }
     unlink(SAVE);
     s_tmr=lv_timer_create(tick_cb,15,NULL);

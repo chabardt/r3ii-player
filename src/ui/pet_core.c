@@ -1,5 +1,6 @@
 /* Moko life simulation — see pet_core.h. One step = one real minute. */
 #include "pet_core.h"
+#include "i18n.h"   /* N_() marks only: names are translated where shown */
 #include <string.h>
 
 #define PET_MAGIC 0x4D4F4B31u   /* "MOK1" */
@@ -18,9 +19,9 @@ void pet_new(pet_t*p,time_t now,unsigned seed){
     p->hunger=3; p->happy=3; p->weight=5; p->discipline=0; p->lights=1; p->attn_min=-1;
 }
 const char* pet_stage_name(const pet_t*p){
-    static const char*n[]={"egg","baby","child","teen","adult","elder","gone"}; return n[p->stage]; }
+    static const char*n[]={N_("egg"),N_("baby"),N_("child"),N_("teen"),N_("adult"),N_("elder"),N_("gone")}; return n[p->stage]; }
 const char* pet_form_name(const pet_t*p){
-    if(p->stage==PS_EGG) return "Egg";
+    if(p->stage==PS_EGG) return N_("Egg");
     if(p->stage<=PS_CHILD) return p->stage==PS_BABY?"Mokopip":"Mokolet";
     static const char*n[]={"Moko","Lumi","Bramble","Grub"}; return n[p->form]; }
 

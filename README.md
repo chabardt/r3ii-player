@@ -68,10 +68,22 @@ for this one model.
 - Wi-Fi settings; **r3srv**, a UPnP/DLNA + HTTP server that serves your library (incl. album art)
   over the network.
 
+**Languages**
+- **English** and **Français** (Settings → Language); accents and non-ASCII names display
+  properly (Montserrat with a TTF fallback for Latin, Cyrillic, Vietnamese).
+- **Chinese / Japanese / Korean** names: put a TrueType font in `Fonts/` on the card (e.g.
+  `DroidSansFallbackFull.ttf`, Apache-2.0); it is memory-mapped, not loaded into RAM.
+- Lists sort ignoring accents (Édith Piaf sits with the E's).
+- Translations are plain gettext `.po` files in `lang/` — adding a language is one file:
+  see [docs/TRANSLATING.md](docs/TRANSLATING.md).
+
 **Games** (bring your own data files)
 - **Doom** (`doomgeneric`) — supply your own `doom.wad` / `doom2.wad`.
-- **Blockfall** (Tetris-style), **Brickstorm** (breakout), both from scratch.
+- **Blockfall** (Tetris-style), **Brickstorm** (breakout), **Coil** (snake-style),
+  **Sapper** (minesweeper-style), all from scratch.
 - **Game Boy** emulator (`Peanut-GB`) — supply your own ROMs.
+- **Game Boy Advance** emulator (`gpSP` with its MIPS dynarec, full speed) — your own ROMs in
+  `Games/GBA`, optional `gba_bios.bin`; landscape with a controller, save + resume on quit.
 - Portrait on-screen controls + full Bluetooth-controller support; per-game **high scores**.
 
 ---
@@ -100,8 +112,10 @@ Put your content on the microSD like this:
 ```
 /Music/<Artist>/<Album>/<NN. Title>.<mp3|flac|wav|m4a>
 /Others/<Show>/<episode>.<mp3|m4a|…>     # Podcasts tab
-/Games/doom/{doom.wad,doom2.wad}         # your WADs
-/Games/gb/*.gb                           # your Game Boy ROMs
+/Games/Doom/{doom.wad,doom2.wad}         # your WADs
+/Games/GameBoy/*.gb                      # your Game Boy ROMs
+/Games/GBA/*.gba                         # your GBA ROMs (+ optional gba_bios.bin)
+/Fonts/*.ttf                             # optional: font for CJK names
 ```
 
 Album art is read from the audio files' embedded tags (no separate cover files needed).
@@ -117,6 +131,7 @@ download a `mipsel-linux-musl-cross` build, e.g. from musl.cc, and extract it th
 sh scripts/build.sh        # the player UI + audio  -> build/r3player
 sh scripts/build_doom.sh   # Doom                   -> build/r3doom
 sh scripts/build_gb.sh     # Game Boy               -> build/r3gb
+sh scripts/build_gba.sh    # Game Boy Advance       -> build/r3gba
 sh scripts/build_srv.sh    # music server           -> build/r3srv
 ```
 
@@ -181,7 +196,8 @@ vendor/      third-party libraries (see Credits)
 This project bundles the following open-source libraries under `vendor/` (each keeps its own
 license):
 
-- [LVGL](https://lvgl.io/) — UI toolkit (MIT)
+- [LVGL](https://lvgl.io/) — UI toolkit (MIT), incl. tiny_ttf / stb_truetype and the
+  Montserrat font it ships (SIL Open Font License)
 - [minimp3](https://github.com/lieff/minimp3), [dr_libs](https://github.com/mackron/dr_libs)
   (dr_flac/dr_wav), [stb_image](https://github.com/nothings/stb) — decoders (public domain / MIT)
 - [faad2](https://github.com/knik0/faad2) + [minimp4](https://github.com/lieff/minimp4) —
@@ -189,6 +205,7 @@ license):
 - [tinyalsa](https://github.com/tinyalsa/tinyalsa) — ALSA (BSD)
 - [doomgeneric](https://github.com/ozkl/doomgeneric) — Doom port (GPLv2)
 - [Peanut-GB](https://github.com/deltabeard/Peanut-GB) + minigb_apu — Game Boy (MIT)
+- [gpSP](https://github.com/libretro/gpsp) (libretro) — Game Boy Advance (GPLv2), see `vendor/gpsp/R3_PATCHES.md`
 
 No HiBy firmware, Doom WADs, or game ROMs are included — bring your own data files.
 Reverse-engineered purely for interoperability on hardware you own.
