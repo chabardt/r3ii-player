@@ -45,6 +45,15 @@ const weapon_t DG_WEAPON[]={
     {"GLACIER PIKE",     L, DT_PIERCE, EL_FROST, 12, 240, 0},   /* 19 m3 */
     {"SKY BOW",          S, DT_PIERCE, EL_STORM,  9, 380, 0},   /* 20 m3 */
     {"MAGMA HAMMER",     B, DT_CRUSH,  EL_FIRE,  19,  70, 0},   /* 21 m2 */
+    /* act II */
+    {"BOG HARPOON",      L, DT_PIERCE, EL_FROST, 14, 250, 0},   /* 22 m5 */
+    {"CHAIN FLAIL",      W, DT_CRUSH,  EL_STORM, 15,  65, 0},   /* 23 m6 */
+    {"WISPFIRE BOW",     S, DT_PIERCE, EL_FIRE,  10, 380, 0},   /* 24 m5 */
+    {"IRONBREAKER",      B, DT_CRUSH,  EL_NONE,  24,  70, 0},   /* 25 m8 */
+    {"LIFE BELL",        M, DT_CRUSH,  EL_NONE,   4,  50, 15},  /* 26 m7 */
+    {"STORM SPEAR",      L, DT_PIERCE, EL_STORM, 16, 260, 0},   /* 27 m9 */
+    {"OBSIDIAN MAUL",    B, DT_CRUSH,  EL_FIRE,  23,  75, 0},   /* 28 m11 */
+    {"HEARTWOOD STAFF",  M, DT_CRUSH,  EL_FROST,  7,  50, 14},  /* 29 m10 */
 };
 const int DG_NWEAPON=(int)(sizeof DG_WEAPON/sizeof DG_WEAPON[0]);
 const shield_t DG_SHIELD[]={
@@ -55,6 +64,8 @@ const shield_t DG_SHIELD[]={
     {"TOWER SHIELD",  W,         50, SH_HEAVY},   /* 4 m4: march slower */
     {"MIRROR SHIELD", L|W,       25, SH_REFLECT}, /* 5 m2: guard reflects missiles */
     {"THORN SHIELD",  L|W,       20, SH_THORNS},  /* 6 m3: melee attackers get hurt */
+    {"IRON KITE",     L|W,       42, 0},          /* 7 m8 */
+    {"SPIKED BUCKLER",L|W,       30, SH_THORNS},  /* 8 m9 */
 };
 const int DG_NSHIELD=(int)(sizeof DG_SHIELD/sizeof DG_SHIELD[0]);
 
@@ -84,6 +95,19 @@ const etype_t DG_ETYPE[ET_N]={
     {"GLOOMWING",     460, TR_FLYING,                       20, 400, 2, 0x4A3A6A, "BOSS: FLIES; LANDS AFTER A DIVE",    100,  5},
     {"GLACIER WYRM",  580, TR_FROSTBORN,                    28, 150, 2, 0x9AD0F0, "BOSS: FROSTBORN, ICE BREATH",        130,  6},
     {"EMBERMAW",      660, TR_FIREPROOF,                    30, 150, 2, 0xD04A20, "BOSS: FIREPROOF, INFERNO",           130,  7},
+    /* act II */
+    {"BOG LURKER",     95, 0,                               14,  70, 5, 0x4A6A3A, "MARSH BRUTE: SLOW, HITS HARD",         0, -1},
+    {"WISP",           40, TR_FLYING|TR_RANGED|TR_FIREPROOF, 7, 280, 3, 0x80E0C0, "FLIES, FIREPROOF: RANGED, NO FIRE",    0, -1},
+    {"BLASTCAP",       30, TR_EXPLODE,                      22,  50, 2, 0xC04040, "EXPLODES: KILL IT FROM AFAR",          0, -1},
+    {"SHIELDBEARER",  120, TR_ARMORED|TR_DEFLECT,           10,  70, 5, 0x707A88, "MISSILES BOUNCE OFF: GO MELEE",        0, -1},
+    {"CROSSBOWMAN",    70, TR_ARMORED|TR_RANGED,            11, 360, 5, 0x6A6A5A, "ARMOURED ARCHER, SHOOTS FAR",          0, -1},
+    {"PRISON CAGE",    80, TR_WOODEN|TR_STATIC|TR_CAGE,      0,   0, 0, 0x7A5A30, "PRISONERS: BREAK IT, THEY JOIN YOU",  14, -1},
+    {"CHAINWARDEN",   270, TR_ARMORED,                      22,  90, 3, 0x5A5A6A, "SUB-BOSS: JAILER, CALLS GUARDS",      40,  8},
+    {"BLASTMASTER",   230, 0,                               16, 320, 3, 0xA03A2A, "SUB-BOSS: BOMBS, CALLS BLASTCAPS",    30,  9},
+    {"MIRE HYDRA",    640, 0,                               28, 170, 2, 0x4A8A5A, "BOSS: THREE HEADS, REGROWS",         120, 10},
+    {"IRON COLOSSUS", 780, TR_ARMORED,                      32, 160, 2, 0x6A6E78, "BOSS: ARMOURED, BRING CRUSH",        120, 11},
+    {"STORM ROC",     620, TR_FLYING,                       26, 430, 2, 0x5A70A8, "BOSS: FLIES, CALLS LIGHTNING",       110, 12},
+    {"HOLLOW KING",   940, 0,                               34, 180, 2, 0x4A3A6A, "BOSS: THE KING UNDER THE HILL",      120, 13},
 };
 
 const boss_t DG_BOSS[]={
@@ -134,6 +158,46 @@ const boss_t DG_BOSS[]={
         {"ROAR",         MV_ROAR,   1,  0, 999, 0, 0, 0},
         {"INFERNO",      MV_SWEEP,  2, 28, 620, 0, 0, 1},
         {"MAGMA CHARGE", MV_CHARGE, 2, 24, 360, 80, 0, 1}}, 3, 2, 0, "THE FIREPROOF BEAST"},
+    /* act II */
+    {"CHAINWARDEN", 3, {
+        {"CHAIN LASH",   MV_SWEEP,  2, 11, 150, 0, 0, 0},
+        {"SHACKLE",      MV_MELEE,  1, 22,  90, 0, 0, 0},
+        {"CALL GUARDS",  MV_SUMMON, 1,  0, 600, 0, ET_SHIELDBEARER, 0}}, 3, 2, 1, "KEEPER OF THE KEYS"},
+    {"BLASTMASTER", 3, {
+        {"POWDER KEGS",  MV_VOLLEY, 1, 10, 340, 3, 0, 0},
+        {"SEND THE CAPS",MV_SUMMON, 1,  0, 600, 0, ET_BLASTCAP, 0},
+        {"BIG BANG",     MV_QUAKE,  2, 10, 200, 50, 0, 0}}, 3, 2, 1, "LIGHTS THE FUSES"},
+    {"MIRE HYDRA", 7, {
+        {"TRIPLE BITE",  MV_MELEE,  1, 28, 170, 0, 0, 0},
+        {"BILE SPRAY",   MV_SWEEP,  2, 14, 300, 0, 0, 0},
+        {"SPIT VOLLEY",  MV_VOLLEY, 1,  8, 420, 4, 0, 0},
+        {"REGROW",       MV_HEAL,   1,  0, 600, 14, 0, 0},
+        {"CALL LURKERS", MV_SUMMON, 1,  0, 650, 0, ET_BOGLURKER, 0},
+        {"HISS",         MV_ROAR,   1,  0, 999, 0, 0, 0},
+        {"DROWNING COIL",MV_QUAKE,  2, 16, 260, 70, 0, 1}}, 3, 2, 0, "IT GROWS A HEAD FOR EVERY ONE LOST"},
+    {"IRON COLOSSUS", 6, {
+        {"HAMMER FIST",  MV_MELEE,  1, 32, 160, 0, 0, 0},
+        {"QUAKE STOMP",  MV_QUAKE,  2, 14, 260, 70, 0, 0},
+        {"MARCH",        MV_CHARGE, 2, 22, 340, 80, 0, 0},
+        {"CALL THE WALL",MV_SUMMON, 1,  0, 650, 0, ET_SHIELDBEARER, 0},
+        {"FURNACE HEART",MV_ROAR,   1,  0, 999, 0, 0, 0},
+        {"MOLTEN SWEEP", MV_SWEEP,  2, 24, 380, 0, 0, 1}}, 3, 2, 0, "THE GATE THAT WALKS"},
+    {"STORM ROC", 6, {
+        {"TALON DIVE",   MV_DIVE,   2, 22, 440, 0, 4, 0},
+        {"THUNDERCLAP",  MV_QUAKE,  2, 10, 440, 70, 0, 0},
+        {"LIGHTNING",    MV_VOLLEY, 2,  9, 460, 5, 0, 0},
+        {"CALL WISPS",   MV_SUMMON, 1,  0, 650, 0, ET_WISP, 0},
+        {"STORM CRY",    MV_ROAR,   1,  0, 999, 0, 0, 0},
+        {"TEMPEST",      MV_SWEEP,  2, 24, 520, 0, 0, 1}}, 3, 2, 0, "LORD OF THE CREST"},
+    {"HOLLOW KING", 8, {
+        {"CROWN STRIKE", MV_MELEE,  1, 34, 180, 0, 0, 0},
+        {"HOLLOW WAVE",  MV_SWEEP,  2, 18, 340, 0, 0, 0},
+        {"SPEAR RAIN",   MV_VOLLEY, 2,  9, 480, 6, 0, 0},
+        {"EARTH SPLIT",  MV_QUAKE,  2, 14, 260, 70, 0, 0},
+        {"CALL THE DEAD",MV_SUMMON, 1,  0, 650, 0, ET_CROSSBOW, 0},
+        {"ROAR",         MV_ROAR,   1,  0, 999, 0, 0, 0},
+        {"ROYAL CHARGE", MV_CHARGE, 2, 26, 380, 90, 0, 1},
+        {"ECLIPSE",      MV_SWEEP,  2, 30, 640, 0, 0, 1}}, 3, 2, 0, "HE WAITS UNDER THE HILL"},
 };
 const int DG_NBOSS=(int)(sizeof DG_BOSS/sizeof DG_BOSS[0]);
 
@@ -145,21 +209,21 @@ const mission_t DG_MISSION[]={
          {ET_BRISTLER,1800},{ET_GRUNT,1880},
          {ET_PALISADE,2300},{ET_WATCHTOWER,2340},{ET_GRUNT,2400},{ET_CHIEFTAIN,2520},
          {ET_STONESLINGER,2900},{ET_GRUNT,3000},{ET_THORNHIDE,3600}},
-        4, {1, 7, 100+3, 2}, {ET_GRUNT,ET_BRISTLER}, BIOME_FOREST},
+        4, {1, 7, 100+3, 2}, {ET_GRUNT,ET_BRISTLER}, BIOME_FOREST,   4, 0,0, -1,  86,624},
     {"SUNSCAR DUNES", "BEETLES, A DESERT FORTRESS, WINGS", 4400, 19,
         {{ET_SCOUT,450},{ET_WINGSPITE,700},{ET_IRONBACK,850},
          {ET_WATCHTOWER,1150},{ET_GATE,1200},{ET_GOURDTHROWER,1280},{ET_TOTEM,1330},
          {ET_SCOUT,1650},{ET_WINGSPITE,1800},{ET_IRONBACK,1950},
          {ET_BALLISTA,2350},{ET_IRONGATE,2450},{ET_BULWARK,2560},{ET_STONESLINGER,2620},{ET_RUSTJAW,3000},   /* first fortress: one ballista */
          {ET_WINGSPITE,3250},{ET_GOURDTHROWER,3350},{ET_IRONBACK,3450},{ET_GLOOMWING,3950}},
-        7, {11, 14, 100+5, 12, 3, 17, 8}, {ET_BRISTLER,ET_GRUNT}, BIOME_DESERT},
+        7, {11, 14, 100+5, 12, 3, 17, 8}, {ET_BRISTLER,ET_GRUNT}, BIOME_DESERT,   4, 0,0, 0,  214,584},
     {"RIME PASS", "FROSTBORN, THE HEX MOTHER'S HOLD", 4600, 20,
         {{ET_SCOUT,450},{ET_SCOUT,500},{ET_FROSTLING,750},{ET_HEXCALLER,900},
          {ET_WATCHTOWER,1250},{ET_GATE,1300},{ET_FROSTLING,1360},{ET_WINGSPITE,1400},
          {ET_BRISTLER,1750},{ET_FROSTLING,1850},{ET_TOTEM,1950},
          {ET_BALLISTA,2400},{ET_IRONGATE,2500},{ET_BULWARK,2580},{ET_BALLISTA,2600},{ET_HEXCALLER,2660},{ET_HEXMOTHER,3050},
          {ET_FROSTLING,3400},{ET_WINGSPITE,3500},{ET_GLACIERWYRM,4050}},
-        6, {4, 15, 100+6, 19, 20, 21}, {ET_FROSTLING,ET_FROSTLING}, BIOME_SNOW},
+        6, {4, 15, 100+6, 19, 20, 21}, {ET_FROSTLING,ET_FROSTLING}, BIOME_SNOW,   4, 0,0, 1,  128,500},
     {"EMBERMAW'S DEN", "THE BLACK FORTRESS, THE BEAST", 4800, 21,
         {{ET_SCOUT,450},{ET_GOURDTHROWER,700},{ET_GRUNT,800},
          {ET_WATCHTOWER,1150},{ET_GATE,1200},{ET_IRONBACK,1260},{ET_HEXCALLER,1320},
@@ -167,12 +231,73 @@ const mission_t DG_MISSION[]={
          {ET_BALLISTA,2300},{ET_WATCHTOWER,2340},{ET_IRONGATE,2450},{ET_BALLISTA,2520},{ET_BULWARK,2560},{ET_STONESLINGER,2620},
          {ET_CINDERHORN,3100},
          {ET_GRUNT,3450},{ET_WINGSPITE,3550},{ET_GOURDTHROWER,3650},{ET_EMBERMAW,4250}},
-        2, {100+4, 18}, {ET_GRUNT,ET_BRISTLER}, BIOME_VOLCANO},
+        2, {100+4, 18}, {ET_GRUNT,ET_BRISTLER}, BIOME_VOLCANO,   4, 0,0, 2,  250,446},
+    /* ---- act II: the northern reach. Rescues (cages) win soldier slots: 4 -> 8 ---- */
+    {"MIRE CROSSING", "RESCUE: CAGED WARDENS IN THE MARSH", 4400, 18,
+        {{ET_SCOUT,450},{ET_BOGLURKER,720},{ET_WISP,860},
+         {ET_CAGE,1150},{ET_BOGLURKER,1260},
+         {ET_WATCHTOWER,1600},{ET_GATE,1650},{ET_BOGLURKER,1710},{ET_STONESLINGER,1770},
+         {ET_WISP,2100},{ET_BLASTCAP,2250},{ET_BOGLURKER,2350},
+         {ET_CAGE,2650},{ET_SHIELDBEARER,2760},{ET_CHAINWARDEN,3050},
+         {ET_WISP,3350},{ET_BOGLURKER,3450},{ET_GLOOMWING,3950}},
+        4, {22, 24, 17, 12}, {ET_BOGLURKER,ET_BOGLURKER}, BIOME_SWAMP,   4, 1,CL_WARDEN, 3,  92,336},
+    {"BOGLIGHT HOLLOW", "WISPS, BLASTCAPS, THE MIRE HYDRA", 4800, 21,
+        {{ET_SCOUT,450},{ET_WISP,760},{ET_BOGLURKER,880},{ET_HEXCALLER,960},
+         {ET_WATCHTOWER,1300},{ET_GATE,1350},{ET_BOGLURKER,1410},{ET_WISP,1460},{ET_TOTEM,1520},
+         {ET_BLASTCAP,1850},{ET_BLASTCAP,1900},{ET_BOGLURKER,2000},
+         {ET_PALISADE,2350},{ET_WATCHTOWER,2390},{ET_SHIELDBEARER,2460},{ET_HEXMOTHER,2800},
+         {ET_WISP,3150},{ET_BOGLURKER,3250},{ET_BLASTCAP,3350},{ET_WISP,3500},{ET_HYDRA,4250}},
+        5, {22, 24, 23, 100+2, 17}, {ET_BRISTLER,ET_GRUNT}, BIOME_SWAMP,   5, 0,0, 3,  304,352},
+    {"SALT MINES", "RESCUE: BREAKERS WORKED IN CHAINS", 4800, 21,
+        {{ET_SCOUT,450},{ET_BLASTCAP,700},{ET_IRONBACK,820},{ET_CROSSBOW,900},
+         {ET_CAGE,1200},{ET_BULWARK,1300},
+         {ET_WATCHTOWER,1600},{ET_GATE,1650},{ET_CROSSBOW,1720},{ET_BLASTCAP,1780},{ET_GOURDTHROWER,1840},
+         {ET_CAGE,2200},{ET_SHIELDBEARER,2300},{ET_BLASTMASTER,2650},
+         {ET_BALLISTA,3000},{ET_IRONGATE,3100},{ET_IRONBACK,3180},{ET_CROSSBOW,3240},
+         {ET_BLASTCAP,3550},{ET_GOURDTHROWER,3650},{ET_THORNHIDE,4300}},
+        4, {23, 21, 15, 100+6}, {ET_BLASTCAP,ET_IRONBACK}, BIOME_DESERT,   5, 1,CL_BREAKER, 5,  408,440},
+    {"IRONHOLD GATE", "SHIELD WALLS, CROSSBOWS, THE COLOSSUS", 5200, 24,
+        {{ET_SCOUT,450},{ET_SCOUT,500},{ET_CROSSBOW,760},{ET_SHIELDBEARER,860},{ET_IRONBACK,940},
+         {ET_WATCHTOWER,1300},{ET_GATE,1350},{ET_CROSSBOW,1420},{ET_BULWARK,1480},{ET_HEXCALLER,1540},
+         {ET_SCOUT,1850},{ET_BLASTCAP,2000},{ET_SHIELDBEARER,2100},{ET_CROSSBOW,2160},
+         {ET_BALLISTA,2500},{ET_IRONGATE,2600},{ET_BULWARK,2680},{ET_BALLISTA,2720},{ET_CROSSBOW,2780},{ET_CHAINWARDEN,3150},
+         {ET_SHIELDBEARER,3500},{ET_IRONBACK,3600},{ET_CROSSBOW,3700},{ET_COLOSSUS,4500}},
+        4, {26, 25, 100+7, 23}, {ET_SHIELDBEARER,ET_CROSSBOW}, BIOME_PEAKS,   6, 0,0, 5,  336,256},
+    {"STORMCREST", "WINGS AND WISPS, THE STORM ROC", 5200, 22,
+        {{ET_SCOUT,450},{ET_WINGSPITE,700},{ET_WISP,800},{ET_FROSTLING,900},
+         {ET_WATCHTOWER,1250},{ET_GATE,1300},{ET_FROSTLING,1360},{ET_WINGSPITE,1420},{ET_CROSSBOW,1480},
+         {ET_WISP,1800},{ET_WINGSPITE,1880},{ET_BLASTCAP,1980},{ET_TOTEM,2080},
+         {ET_BALLISTA,2450},{ET_IRONGATE,2550},{ET_SHIELDBEARER,2630},{ET_WISP,2680},{ET_BLASTMASTER,3050},
+         {ET_WINGSPITE,3400},{ET_WISP,3480},{ET_FROSTLING,3560},{ET_STORMROC,4400}},
+        4, {27, 100+8, 20, 4}, {ET_FROSTLING,ET_WINGSPITE}, BIOME_PEAKS,   6, 0,0, 7,  224,178},
+    {"PRISON BARGES", "RESCUE: SLINGERS ON THE BLACK RIVER", 5000, 21,
+        {{ET_SCOUT,450},{ET_BOGLURKER,700},{ET_CROSSBOW,800},
+         {ET_CAGE,1100},{ET_SHIELDBEARER,1200},{ET_WISP,1260},
+         {ET_WATCHTOWER,1550},{ET_GATE,1600},{ET_BOGLURKER,1660},{ET_CROSSBOW,1720},
+         {ET_CAGE,2050},{ET_BLASTCAP,2150},{ET_BOGLURKER,2250},
+         {ET_PALISADE,2550},{ET_WATCHTOWER,2590},{ET_SHIELDBEARER,2650},{ET_CHAINWARDEN,3000},
+         {ET_CAGE,3350},{ET_WISP,3450},{ET_BOGLURKER,3550},{ET_HYDRA,4300}},
+        3, {27, 29, 100+8}, {ET_BOGLURKER,ET_CROSSBOW}, BIOME_SWAMP,   6, 1,CL_SLINGER, 7,  416,212},
+    {"ASHEN CITADEL", "RESCUE: MENDERS IN THE FIRE KEEP", 5400, 25,
+        {{ET_SCOUT,450},{ET_GOURDTHROWER,700},{ET_BLASTCAP,780},{ET_GRUNT,860},
+         {ET_CAGE,1150},{ET_BULWARK,1250},
+         {ET_WATCHTOWER,1550},{ET_GATE,1600},{ET_CROSSBOW,1670},{ET_HEXCALLER,1730},{ET_SHIELDBEARER,1790},
+         {ET_WISP,2100},{ET_BLASTCAP,2200},{ET_TOTEM,2300},
+         {ET_BALLISTA,2650},{ET_WATCHTOWER,2690},{ET_IRONGATE,2800},{ET_BALLISTA,2860},{ET_BULWARK,2920},{ET_CROSSBOW,2980},{ET_CINDERHORN,3350},
+         {ET_CAGE,3700},{ET_GOURDTHROWER,3800},{ET_BLASTCAP,3900},{ET_EMBERMAW,4700}},
+        4, {29, 28, 100+8, 25}, {ET_GRUNT,ET_BLASTCAP}, BIOME_VOLCANO,   7, 1,CL_MENDER, 8,  80,180},
+    {"THE HOLLOW THRONE", "EVERYTHING THEY HAVE, THE HOLLOW KING", 6000, 27,
+        {{ET_SCOUT,450},{ET_SCOUT,520},{ET_CROSSBOW,760},{ET_SHIELDBEARER,850},{ET_WISP,920},
+         {ET_WATCHTOWER,1250},{ET_GATE,1300},{ET_BOGLURKER,1360},{ET_CROSSBOW,1420},{ET_HEXCALLER,1480},
+         {ET_BLASTCAP,1800},{ET_BLASTCAP,1850},{ET_FROSTLING,1950},{ET_TOTEM,2050},
+         {ET_BALLISTA,2400},{ET_IRONGATE,2500},{ET_BULWARK,2580},{ET_BALLISTA,2620},{ET_SHIELDBEARER,2680},{ET_CROSSBOW,2740},{ET_BLASTMASTER,3100},
+         {ET_WISP,3450},{ET_WINGSPITE,3520},{ET_BOGLURKER,3620},{ET_SHIELDBEARER,3720},{ET_CROSSBOW,3800},{ET_HOLLOWKING,4900}},
+        4, {28, 25, 27, 29}, {ET_SHIELDBEARER,ET_BLASTCAP}, BIOME_PEAKS,   8, 0,0, 8,  240,104},
 };
 const int DG_NMISSION=(int)(sizeof DG_MISSION/sizeof DG_MISSION[0]);
 
 void dg_armory_default(armory_t*a){
-    memset(a,0,sizeof *a);
+    memset(a,0,sizeof *a); a->slots=DG_SLOTS0;
     const int w[]={0,5,6,9,10,13,16}; for(unsigned i=0;i<sizeof w/sizeof w[0];i++) a->weapons|=1u<<w[i];
     a->shields=(1u<<0)|(1u<<1)|(1u<<2);
     a->nsquad=4;
@@ -181,6 +306,9 @@ void dg_armory_default(armory_t*a){
     a->squad[2]=(loadout_t){CL_SLINGER,9,0};
     a->squad[3]=(loadout_t){CL_MENDER,16,0};
 }
+int dg_mission_open(const armory_t*a,int m){ if(m<0||m>=DG_NMISSION) return 0; int r=DG_MISSION[m].req; return r<0 || (a->done>>r&1); }
+int dg_deploy(const armory_t*a,int m){ int n=a->nsquad, c=DG_MISSION[m].cap; return n<c?n:c; }
+int dg_starter_weapon(int cls){ static const int W0[CL_N]={0,5,9,16,13}; return W0[cls]; }
 int dg_weapon_ok(int cls,int w){ return w>=0 && w<DG_NWEAPON && (DG_WEAPON[w].classes>>cls&1); }
 int dg_shield_ok(int cls,int s){ if(s<0||s>=DG_NSHIELD) return 0; if(DG_CLASS[cls].two_handed) return s==0; return (DG_SHIELD[s].classes>>cls&1)!=0; }
 float dg_mult(int dtype,int elem,int traits){
@@ -204,23 +332,27 @@ const bmove_t* dg_boss_move(const dg_t*g,int k){
 
 static uint32_t rnd(dg_t*g){ g->rng=g->rng*1664525u+1013904223u; return g->rng>>8; }
 static const int RANK[CL_N]={2,0,4,3,1};      /* front to back: warden, breaker, lancer, mender, slinger */
-#define SPACING 36.0f
+static float spacing(int n){ return n<=4 ? 36.0f : n>=8 ? 24.0f : 36.0f-(n-4)*3.0f; }   /* a big squad closes up */
 #define BEAT_S (g->beat_s)                     /* the song's tempo; 0.5 s at 120 BPM */
 #define FOE_DMG 0.5f                          /* tuning knobs (tests/drum_game_test.c) */
 #define BOSS_HP 0.75f
 #define BOSS_DMG 0.75f
 #define HEAL 1.5f
+#define ACT2 4                                /* missions from here on: the northern reach, tougher foes */
+static float foe_hp(const dg_t*g){ return g->mission>=ACT2 ? 1.35f : 1.0f; }
+static float foe_dmg(const dg_t*g){ return g->mission>=ACT2 ? 1.2f : 1.0f; }
 
 static void formation(dg_t*g,float*tx){
     int order[DG_MAXU],n=0;
     for(int i=0;i<DG_MAXU;i++) if(g->u[i].on && g->u[i].hp>0) order[n++]=i;
     for(int i=0;i<n;i++) for(int j=i+1;j<n;j++) if(RANK[g->u[order[j]].cls]<RANK[g->u[order[i]].cls]){ int t=order[i]; order[i]=order[j]; order[j]=t; }
-    for(int k=0;k<n;k++) tx[order[k]]=g->sx-SPACING*k+g->u[order[k]].off;
+    float sp=spacing(n);
+    for(int k=0;k<n;k++) tx[order[k]]=g->sx-sp*k+g->u[order[k]].off;
 }
 static void enemy_init(dg_t*g,int i,int type,float x){
     enemy_t*e=&g->e[i]; const etype_t*t=&DG_ETYPE[type];
     memset(e,0,sizeof *e);
-    e->on=1; e->type=type; e->traits=t->traits; e->x=x; e->maxhp=e->hp=(float)t->hp*(t->boss>=0?BOSS_HP:1); e->move=-1;
+    e->on=1; e->type=type; e->traits=t->traits; e->x=x; e->maxhp=e->hp=(float)t->hp*(t->boss>=0?BOSS_HP:1)*foe_hp(g); e->move=-1;
     e->next=t->period? t->period+(i%t->period) : 0;
     e->y=(t->traits&TR_FLYING) ? (t->boss>=0?-150.0f:-120.0f) : 0.0f; e->bob=(float)i; e->home=x;
 }
@@ -228,7 +360,8 @@ void dg_start(dg_t*g,int mission,const armory_t*a,uint32_t seed){
     memset(g,0,sizeof *g);
     g->mission=mission; g->m=&DG_MISSION[mission]; g->rng=seed?seed:1; g->cmd=CMD_NONE; g->guard_until=-1000;
     g->sx=160; g->beat_s=0.5f;
-    for(int i=0;i<a->nsquad && i<DG_MAXU;i++){ unit_t*u=&g->u[i]; const loadout_t*l=&a->squad[i];
+    int n=dg_deploy(a,mission);
+    for(int i=0;i<n && i<DG_MAXU;i++){ unit_t*u=&g->u[i]; const loadout_t*l=&a->squad[i];
         u->on=1; u->cls=l->cls; u->weapon=dg_weapon_ok(l->cls,l->weapon)?l->weapon:-1;
         u->shield=dg_shield_ok(l->cls,l->shield)?l->shield:0;
         u->maxhp=u->hp=(float)DG_CLASS[l->cls].hp; }
@@ -249,6 +382,24 @@ static void drop(dg_t*g){
     if(rnd(g)%100>=30) return;
     const mission_t*m=g->m; g->ev_drop=m->reward[rnd(g)%m->nreward]+1;
 }
+static float unit_hurt(dg_t*g,int i,float dmg);
+static void blast(dg_t*g,enemy_t*e){                  /* blastcap: everyone near it is caught */
+    const float D=DG_ETYPE[e->type].dmg*FOE_DMG*foe_dmg(g)*1.2f; g->ev_blast++; e->act=1;
+    for(int i=0;i<DG_MAXU;i++){ unit_t*u=&g->u[i]; if(u->on&&u->hp>0&&fabsf(u->x-dg_front(e))<100) unit_hurt(g,i,D); } }
+static void recruit(dg_t*g,int cls){                 /* a freed prisoner falls in at the back */
+    g->rescued++; g->ev_rescue++;
+    for(int i=0;i<DG_MAXU;i++){ unit_t*u=&g->u[i]; if(u->on) continue;
+        float back=1e9f; for(int j=0;j<DG_MAXU;j++) if(g->u[j].on&&g->u[j].hp>0&&g->u[j].x<back) back=g->u[j].x;
+        memset(u,0,sizeof *u); u->on=1; u->cls=cls; u->weapon=dg_starter_weapon(cls);
+        u->shield= cls==CL_WARDEN?2 : cls==CL_LANCER?1 : 0; u->maxhp=u->hp=(float)DG_CLASS[cls].hp;
+        u->x=(back<1e8f?back:g->sx)-40; return; } }
+static void foe_dies(dg_t*g,int k){
+    enemy_t*e=&g->e[k]; e->hp=0; g->ev_kill++;
+    if(DG_ETYPE[e->type].boss>=0) g->ev_boss_down++;
+    if(e->traits&TR_GATE) g->ev_gate_down++;
+    if(e->traits&TR_EXPLODE) blast(g,e);
+    if(e->traits&TR_CAGE) recruit(g,g->m->rescue_cls);
+    if(!e->summoned && !(e->traits&(TR_GATE|TR_STATIC))) drop(g); }
 static int totem_up(const dg_t*g){ for(int k=0;k<DG_MAXE;k++) if(g->e[k].on&&g->e[k].hp>0&&(g->e[k].traits&TR_TOTEM)) return 1; return 0; }
 static void fx(dg_t*g,float x,float y,float amt,int kind,int arg){
     if(g->nfx<DG_MAXFX) g->fx[g->nfx++]=(dg_fx_t){x,y,(int)(amt+0.5f),kind,arg}; }
@@ -264,8 +415,7 @@ static void enemy_hurt(dg_t*g,int k,float dmg,int elem,int chain,int crit){
     if(elem==EL_STORM && chain){ int best=-1; float bd=140;
         for(int j=0;j<DG_MAXE;j++){ enemy_t*o=&g->e[j]; if(j==k||!o->on||o->hp<=0) continue; float d=fabsf(o->x-e->x); if(d<bd){ bd=d; best=j; } }
         if(best>=0) enemy_hurt(g,best,dmg*0.5f,EL_NONE,0,0); }
-    if(e->hp<=0){ e->hp=0; g->ev_kill++; if(DG_ETYPE[e->type].boss>=0) g->ev_boss_down++; if(e->traits&TR_GATE) g->ev_gate_down++;
-        if(!e->summoned && !(e->traits&(TR_GATE|TR_STATIC))) drop(g); }
+    if(e->hp<=0) foe_dies(g,k);
 }
 static int guarding(const dg_t*g){ return g->beat<=g->guard_until; }
 static int warden_up(const dg_t*g){ for(int i=0;i<DG_MAXU;i++) if(g->u[i].on && g->u[i].hp>0 && g->u[i].cls==CL_WARDEN) return 1; return 0; }
@@ -371,7 +521,7 @@ static void summon(dg_t*g,enemy_t*by,int type){
 }
 static void boss_land(dg_t*g,int k,const bmove_t*mv){
     enemy_t*e=&g->e[k]; int f=front_unit(g); if(f<0) return;
-    const float D=mv->dmg*BOSS_DMG;
+    const float D=mv->dmg*BOSS_DMG*foe_dmg(g);
     float dist=dg_front(e)-g->u[f].x;
     int reach = mv->kind==MV_SUMMON || mv->kind==MV_ROAR || mv->kind==MV_HEAL || (dist>-200 && dist<=mv->range);
     e->act=1; g->ev_boss_land++;
@@ -431,10 +581,11 @@ static void enemies_beat(dg_t*g){
         e->windup=0; e->next=t->period;
         if(!in_range) continue;
         e->act=1;
-        if(t->traits&TR_HEAVYSHOT) shoot(g,1,f,e->x,e->y-90,t->dmg*FOE_DMG,DT_PIERCE,EL_NONE,5,dx);
+        if(t->traits&TR_HEAVYSHOT) shoot(g,1,f,e->x,e->y-90,t->dmg*FOE_DMG*foe_dmg(g),DT_PIERCE,EL_NONE,5,dx);
         else if(t->traits&TR_HEALER) mend_foes(g,e->x,0.15f,25);
-        else if(t->traits&TR_RANGED){ int v=random_unit(g); if(v>=0) shoot(g,1,v,e->x,e->y-20,t->dmg*FOE_DMG,DT_CRUSH,EL_NONE,(t->traits&TR_BOMB)?4:3,dx); }
-        else { unit_hurt(g,f,t->dmg*FOE_DMG);
+        else if(t->traits&TR_RANGED){ int v=random_unit(g); if(v>=0) shoot(g,1,v,e->x,e->y-20,t->dmg*FOE_DMG*foe_dmg(g),DT_CRUSH,EL_NONE,(t->traits&TR_BOMB)?4:3,dx); }
+        else if(t->traits&TR_EXPLODE){ e->summoned=1; foe_dies(g,k); }      /* it goes off at the front line (no loot) */
+        else { unit_hurt(g,f,t->dmg*FOE_DMG*foe_dmg(g));
             if(DG_SHIELD[g->u[f].shield].special&SH_THORNS) enemy_hurt(g,k,6,EL_NONE,0,0); }
     }
 }
@@ -533,7 +684,8 @@ void dg_beat(dg_t*g,int64_t beat,int cmd,int beat_in,int fever){
  * range; the garrison waits behind its standing gate; bosses stalk the squad but keep near their lair */
 static float foe_speed(int type){
     switch(type){ case ET_GRUNT: return 38; case ET_IRONBACK: return 24; case ET_STONESLINGER: return 30; case ET_BRISTLER: return 60;
-    case ET_HEXCALLER: return 26; case ET_GOURDTHROWER: return 28; case ET_BULWARK: return 18; case ET_FROSTLING: return 34; default: return 0; } }
+    case ET_HEXCALLER: return 26; case ET_GOURDTHROWER: return 28; case ET_BULWARK: return 18; case ET_FROSTLING: return 34;
+    case ET_BOGLURKER: return 22; case ET_BLASTCAP: return 55; case ET_SHIELDBEARER: return 20; case ET_CROSSBOW: return 26; default: return 0; } }
 static void foes_move(dg_t*g,float dt){
     int f=front_unit(g); if(f<0) return;
     float ux=g->u[f].x, base=fmaxf(g->sx+48,ux+28);
@@ -578,11 +730,13 @@ void dg_step(dg_t*g,float dt){
         if(e->flash>0) e->flash-=dt; if(e->act>0) e->act-=dt*4;
         e->bob+=dt;
         if(e->hp>0 && e->burn>0){ e->burn-=dt; e->hp-=3*dt*((e->traits&TR_WOODEN)?2:1);
-            if(e->hp<=0){ e->hp=0; g->ev_kill++; if(DG_ETYPE[e->type].boss>=0) g->ev_boss_down++; if(!e->summoned) drop(g); } } }
+            if(e->hp<=0) foe_dies(g,k); } }
     for(int k=0;k<DG_MAXP;k++){ proj_t*p=&g->p[k]; if(!p->on) continue;
         p->t+=dt; if(p->t<p->dur) continue;
         p->on=0;
-        if(!p->foe){ const enemy_t*e=&g->e[p->target]; enemy_hurt(g,p->target,p->dmg,p->elem,1,p->kind==6||dg_mult(p->dtype,p->elem,e->traits)>=1.4f); continue; }
+        if(!p->foe){ const enemy_t*e=&g->e[p->target]; float d=p->dmg;
+            if((e->traits&TR_DEFLECT) && p->kind!=6){ d*=0.3f; g->ev_block++; }    /* glances off; the piercing shot goes through */
+            enemy_hurt(g,p->target,d,p->elem,1,p->kind==6||dg_mult(p->dtype,p->elem,e->traits)>=1.4f); continue; }
         unit_t*u=&g->u[p->target];
         if(u->on && u->hp>0 && guarding(g) && (DG_SHIELD[u->shield].special&SH_REFLECT)){   /* mirror: send it back */
             int best=-1; float bd=1e9f; for(int j=0;j<DG_MAXE;j++){ enemy_t*e=&g->e[j]; if(!e->on||e->hp<=0) continue; float d=fabsf(e->x-u->x); if(d<bd){ bd=d; best=j; } }
