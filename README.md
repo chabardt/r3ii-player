@@ -101,6 +101,12 @@ for this one model.
 - **Doom** (`doomgeneric`) — supply your own `doom.wad` / `doom2.wad`.
 - **Blockfall** (Tetris-style), **Brickstorm** (breakout), **Coil** (snake-style),
   **Sapper** (minesweeper-style), all from scratch.
+- **Drumfolk**, a rhythm-marching battle game: drum commands on the beat (or the beat of your
+  own songs) to lead a squad through 12 missions on a world map, two acts and six lands.
+  Gear beats foes (crush cracks armour, fire burns wood, only ranged hits flyers…), bosses
+  telegraph their blows, and in fever the squad dances on the beat. Rescue missions free caged
+  prisoners: they fight with you on the spot and win a soldier slot for good (squad of 4 → 8);
+  each mission sets how many march.
 - **Game Boy** emulator (`Peanut-GB`) — supply your own ROMs.
 - **Game Boy Advance** emulator (`gpSP` with its MIPS dynarec, full speed) — your own ROMs in
   `Games/GBA`, optional `gba_bios.bin`; landscape with a controller, save + resume on quit.

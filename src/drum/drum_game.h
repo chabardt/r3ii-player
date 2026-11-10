@@ -14,8 +14,9 @@
 #define DRUM_GAME_H
 #include <stdint.h>
 
-#define DG_MAXU 4                 /* squad size */
-#define DG_MAXE 40
+#define DG_MAXU 8                 /* squad size: up to 8 (slots are won by rescues, missions cap how many deploy) */
+#define DG_SLOTS0 4               /* soldier slots at the start */
+#define DG_MAXE 48
 #define DG_MAXP 48
 enum { CL_LANCER, CL_WARDEN, CL_SLINGER, CL_MENDER, CL_BREAKER, CL_N };
 enum { DT_PIERCE, DT_SLASH, DT_CRUSH };
@@ -27,13 +28,19 @@ enum { TR_ARMORED=1, TR_FLYING=2, TR_WOODEN=4, TR_FIREPROOF=8, TR_RANGED=16, TR_
        TR_TOTEM=512,       /* while one stands, foes take x0.7 damage */
        TR_SCOUT=1024,      /* runs for the next fort when it sees the squad: if it gets there, alarm */
        TR_GATE=2048,       /* a fort's gate: blocks the way, shelters the garrison behind it */
-       TR_HEAVYSHOT=4096 };/* telegraphs 4 beats ahead (ballista): GUARD in time */
+       TR_HEAVYSHOT=4096,  /* telegraphs 4 beats ahead (ballista): GUARD in time */
+       TR_EXPLODE=8192,    /* bursts when it dies or reaches the squad: kill it from afar */
+       TR_DEFLECT=16384,   /* missiles glance off (x0.3): go melee */
+       TR_CAGE=32768 };    /* prisoners: breaking it frees a recruit who joins the squad */
 enum { SH_REFLECT=1, SH_THORNS=2, SH_HEAVY=4 };
 enum { ET_GRUNT, ET_IRONBACK, ET_WINGSPITE, ET_PALISADE, ET_STONESLINGER,
        ET_BRISTLER, ET_HEXCALLER, ET_GOURDTHROWER, ET_TOTEM, ET_BULWARK, ET_FROSTLING,
        /* forts */      ET_SCOUT, ET_GATE, ET_WATCHTOWER, ET_IRONGATE, ET_BALLISTA,
        /* sub-bosses */ ET_CHIEFTAIN, ET_RUSTJAW, ET_HEXMOTHER, ET_CINDERHORN,
-       /* bosses */     ET_THORNHIDE, ET_GLOOMWING, ET_GLACIERWYRM, ET_EMBERMAW, ET_N };
+       /* bosses */     ET_THORNHIDE, ET_GLOOMWING, ET_GLACIERWYRM, ET_EMBERMAW,
+       /* act II */     ET_BOGLURKER, ET_WISP, ET_BLASTCAP, ET_SHIELDBEARER, ET_CROSSBOW, ET_CAGE,
+       /* sub-bosses */ ET_CHAINWARDEN, ET_BLASTMASTER,
+       /* bosses */     ET_HYDRA, ET_COLOSSUS, ET_STORMROC, ET_HOLLOWKING, ET_N };
 /* visual effects reported to the frontend (it empties fx[] each frame) */
 enum { FX_HIT, FX_CRIT, FX_HURT, FX_BLOCK, FX_HEAL, FX_SPECIAL };   /* FX_SPECIAL: arg = class */
 typedef struct { float x, y; int amt, kind, arg; } dg_fx_t;
@@ -56,9 +63,13 @@ typedef struct { const char*name; int hp, traits, dmg, range, period; unsigned c
 typedef struct { const char*name; int kind, windup, dmg, range, n, arg, enraged_only; } bmove_t;
 typedef struct { const char*name; int nmv; bmove_t mv[8]; int rest, rest_enraged, elite; const char*lore; } boss_t;
 typedef struct { int type; int x; } espawn_t;
-typedef struct { const char*name; const char*brief; int length; int ne; espawn_t e[24]; int nreward; int reward[8];
-                 int alarm[2], biome; } mission_t;   /* alarm: who comes running when a scout reaches a fort */
-enum { BIOME_FOREST, BIOME_DESERT, BIOME_SNOW, BIOME_VOLCANO };
+typedef struct { const char*name; const char*brief; int length; int ne; espawn_t e[32]; int nreward; int reward[8];
+                 int alarm[2], biome;            /* alarm: who comes running when a scout reaches a fort */
+                 int cap;                        /* soldiers deployed at most */
+                 int rescue, rescue_cls;         /* rescue mission: soldier slots won (first win), class of the prisoners */
+                 int req;                        /* mission to clear first (-1: none) */
+                 int mx, my; } mission_t;        /* place on the world map (480 x 720 screen) */
+enum { BIOME_FOREST, BIOME_DESERT, BIOME_SNOW, BIOME_VOLCANO, BIOME_SWAMP, BIOME_PEAKS, BIOME_N };
 /* reward entries: weapon index w as w, shield index s as 100+s */
 
 extern const class_t  DG_CLASS[CL_N];
@@ -71,9 +82,13 @@ extern const char *const DG_DTYPE_NAME[3];
 extern const char *const DG_ELEM_NAME[4];
 
 typedef struct { int cls, weapon, shield; } loadout_t;
-/* what the player owns (persisted by the frontend) */
-typedef struct { uint32_t weapons, shields; int cleared; loadout_t squad[DG_MAXU]; int nsquad; } armory_t;
+/* what the player owns (persisted by the frontend). done/rescued: bit per mission. The squad is a
+ * roster of up to `slots` soldiers; a mission deploys the first dg_deploy() of them. */
+typedef struct { uint32_t weapons, shields, done, rescued; int slots; loadout_t squad[DG_MAXU]; int nsquad; } armory_t;
 void dg_armory_default(armory_t*a);
+int  dg_mission_open(const armory_t*a,int m);  /* its required mission is cleared */
+int  dg_deploy(const armory_t*a,int m);        /* soldiers that march on mission m */
+int  dg_starter_weapon(int cls);
 int  dg_weapon_ok(int cls,int w);            /* class may wield it */
 int  dg_shield_ok(int cls,int s);
 float dg_mult(int dtype,int elem,int traits); /* damage multiplier vs a foe's traits */
@@ -100,6 +115,8 @@ typedef struct {
     int ev_boss_move;             /* a boss started telegraphing move index+1 */
     int ev_boss_land, ev_quake, ev_roar, ev_summon, ev_boss_down;
     int ev_scout_flee, ev_alarm, ev_gate_down, ev_special;
+    int ev_rescue, ev_blast;      /* a cage broken (a recruit joined when there was room), a blastcap burst */
+    int rescued;                  /* cages broken this battle */
     dg_fx_t fx[DG_MAXFX]; int nfx;
 } dg_t;
 

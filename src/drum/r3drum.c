@@ -40,7 +40,9 @@
 #define SW 480
 #define SH 720
 #define TOP 24                         /* the bezel hides the first rows of the panel */
+#ifndef SAVE
 #define SAVE "/usr/data/r3drum.sav"
+#endif
 static uint16_t cvbuf[SW*SH];          /* the frame, drawn in RAM: CW x CH (portrait 480x720, landscape 720x480) */
 static int CW=SW, CH=SH, land;         /* landscape: R3 turned clockwise, a controller in hand */
 #define CV(x,y) cvbuf[(y)*CW+(x)]
@@ -335,24 +337,38 @@ static void dac_route(void){ if(!mx) return;
     fprintf(stderr,"[r3drum] DAC route: port %d%s\n",port,bal==1?" (balanced 4.4 mm)":hs==1?" (3.5 mm)":""); }
 
 /* ======================================================================= state */
-enum { ST_CAMP, ST_EDIT, ST_BATTLE, ST_RESULT, ST_LISTEN, ST_TEST };
-static int st=ST_CAMP, sel=0, slot=0, paused, quit;
+enum { ST_CAMP, ST_EDIT, ST_BATTLE, ST_RESULT, ST_LISTEN, ST_TEST, ST_MAP, ST_BRIEF };
+static int st=ST_MAP, sel=0, slot=0, paused, quit;   /* ST_CAMP is the squad screen; ST_MAP the hub */
 enum { SRC_TOUCH, SRC_PAD, SRC_KEYS, SRC_N };
 static int off_src[SRC_N]={30,30,30};      /* timing offset per input, ms (measured on the rhythm test) */
 static const char*const SRC_NAME[SRC_N]={"TOUCH","JOY-CON","R3 KEYS"};
 static armory_t A;
-typedef struct { uint32_t magic, ver; armory_t a; int offset, sel, music, off3[3]; } save_t;   /* v1: no music, v2: one offset */
+/* save v4: 8-soldier roster, slots, missions as bits. v1-v3 (4 soldiers, "cleared" = missions done in
+ * order) are converted on load. */
+typedef struct { uint32_t weapons, shields; int cleared; loadout_t squad[4]; int nsquad; } armory_v3_t;
+typedef struct { uint32_t magic, ver; armory_v3_t a; int offset, sel, music, off3[3]; } save_v3_t;   /* v1: no music, v2: one offset */
+typedef struct { uint32_t magic, ver; armory_t a; int sel, music, off3[3]; } save_t;
 static int music_opt;
 #define MAGIC 0x44524D46u
-static void save_game(void){ save_t s={MAGIC,3,A,off_src[0],sel,music_opt,{off_src[0],off_src[1],off_src[2]}}; FILE*f=fopen(SAVE ".tmp","wb"); if(!f) return;
+static void save_game(void){ save_t s={MAGIC,4,A,sel,music_opt,{off_src[0],off_src[1],off_src[2]}}; FILE*f=fopen(SAVE ".tmp","wb"); if(!f) return;
     int ok=fwrite(&s,sizeof s,1,f)==1; fflush(f); fsync(fileno(f)); fclose(f); if(ok) rename(SAVE ".tmp",SAVE); }
-static void load_game(void){ dg_armory_default(&A); save_t s; FILE*f=fopen(SAVE,"rb");
-    if(f){ memset(&s,0,sizeof s); size_t n=fread(&s,1,sizeof s,f);
-        if(n>=offsetof(save_t,music) && s.magic==MAGIC && s.ver>=1 && s.ver<=3){ A=s.a; sel=s.sel; music_opt=s.ver>=2?s.music:0;
-            for(int i=0;i<SRC_N;i++) off_src[i]= s.ver>=3 ? s.off3[i] : s.offset; }
-        fclose(f); }
-    if(A.nsquad<1||A.nsquad>DG_MAXU) dg_armory_default(&A);
-    if(sel<0||sel>=DG_NMISSION||sel>A.cleared) sel=0; }
+static void load_game(void){ dg_armory_default(&A);
+    union { save_v3_t v3; save_t v4; unsigned char raw[512]; } u; memset(&u,0,sizeof u);
+    FILE*f=fopen(SAVE,"rb");
+    if(f){ size_t n=fread(&u,1,sizeof u,f); fclose(f);
+        if(u.v4.magic==MAGIC && u.v4.ver==4 && n>=sizeof(save_t)){ A=u.v4.a; sel=u.v4.sel; music_opt=u.v4.music;
+            for(int i=0;i<SRC_N;i++) off_src[i]=u.v4.off3[i]; }
+        else if(u.v3.magic==MAGIC && u.v3.ver>=1 && u.v3.ver<=3 && n>=offsetof(save_v3_t,music)){
+            const armory_v3_t*o=&u.v3.a; A.weapons=o->weapons; A.shields=o->shields;
+            int c=o->cleared<0?0:o->cleared>DG_NMISSION?DG_NMISSION:o->cleared; A.done = c>=32 ? 0xFFFFFFFFu : (1u<<c)-1;
+            A.nsquad = o->nsquad>=1&&o->nsquad<=4 ? o->nsquad : 0; for(int i=0;i<A.nsquad;i++) A.squad[i]=o->squad[i];
+            if(!A.nsquad) dg_armory_default(&A);
+            sel=u.v3.sel; music_opt=u.v3.ver>=2?u.v3.music:0;
+            for(int i=0;i<SRC_N;i++) off_src[i]= u.v3.ver>=3 ? u.v3.off3[i] : u.v3.offset;
+            fprintf(stderr,"[r3drum] save v%u converted: %d missions cleared\n",u.v3.ver,c); } }
+    if(A.slots<DG_SLOTS0||A.slots>DG_MAXU) A.slots=DG_SLOTS0;
+    if(A.nsquad<1||A.nsquad>A.slots){ armory_t d; dg_armory_default(&d); A.nsquad=d.nsquad; memcpy(A.squad,d.squad,sizeof A.squad); }
+    if(sel<0||sel>=DG_NMISSION||!dg_mission_open(&A,sel)) sel=0; }
 static int owned(int code){ return code>=100 ? (A.shields>>(code-100))&1 : (A.weapons>>code)&1; }
 static const char*code_name(int code){ return code>=100 ? DG_SHIELD[code-100].name : DG_WEAPON[code].name; }
 
@@ -389,11 +405,17 @@ static void start_battle(void){
 static void unlock(int code){ if(owned(code)) return;
     if(code>=100) A.shields|=1u<<(code-100); else A.weapons|=1u<<code;
     if(nnew<24) newly[nnew++]=code; }
+static void fix_loadout(loadout_t*l);
+static int new_slots, new_recruit=-1, first_clear;     /* for the result screen */
 static void end_battle(int won){
-    victory=won; bk_on=0; music_stop();
+    victory=won; bk_on=0; music_stop(); new_slots=0; new_recruit=-1; first_clear=0;
     for(int i=0;i<ngot;i++) unlock(got[i]);                       /* finds are kept either way */
     if(won){ const mission_t*m=&DG_MISSION[sel]; for(int i=0;i<m->nreward;i++) unlock(m->reward[i]);
-        if(sel==A.cleared && A.cleared<DG_NMISSION) A.cleared++; }
+        first_clear=!(A.done>>sel&1); A.done|=1u<<sel;
+        if(m->rescue && !(A.rescued>>sel&1)){                  /* the prisoners join for good: a new slot, and them */
+            A.rescued|=1u<<sel; new_slots=m->rescue; A.slots+=m->rescue; if(A.slots>DG_MAXU) A.slots=DG_MAXU;
+            if(A.nsquad<A.slots){ loadout_t*l=&A.squad[A.nsquad++]; *l=(loadout_t){m->rescue_cls,dg_starter_weapon(m->rescue_cls),0};
+                fix_loadout(l); new_recruit=m->rescue_cls; } } }
     save_game();
     if(won){ const float mel[6]={523,659,784,1047,784,1047}; for(int i=0;i<6;i++) snd_at(S_TONE,now_sample()+DR_RATE/8*i+800,1,mel[i]); }
     else { const float mel[4]={392,330,262,196}; for(int i=0;i<4;i++) snd_at(S_TONE,now_sample()+DR_RATE/5*i+800,1,mel[i]); }
@@ -527,12 +549,13 @@ static void music_reanchor(void){                          /* lock the rhythm on
 static float cam;
 static int sxw(float wx){ return (int)(wx-cam); }
 /* ---- biomes: forest + jungle, desert, snow mountain, volcano ---- */
-static const uint32_t SKY[4][2]={{0xB8E0C0,0x3A6A5A},{0xF8D890,0xE08850},{0xD8ECF8,0x6A90B8},{0xE0602A,0x2A0E0E}};
+static const uint32_t SKY[BIOME_N][2]={{0xB8E0C0,0x3A6A5A},{0xF8D890,0xE08850},{0xD8ECF8,0x6A90B8},{0xE0602A,0x2A0E0E},
+                                       {0xA8C0A0,0x2A3A38},{0xD0DCF0,0x34405A}};
 static float hsh(float x){ float s=sinf(x*12.9898f)*43758.5453f; return s-floorf(s); }   /* stable noise per world spot */
 /* integer helpers for per-column work (no FPU): isin over 1024 steps -> Q15, ih -> 0..255 */
 static inline int isin(int a){ return SINT[a&1023]; }
 static inline int ih(int x){ uint32_t h=(uint32_t)x*2654435761u; h^=h>>15; return (int)(h&255); }
-static uint16_t SKYROW[2][4][SH]; static int sky_ok[2][4];
+static uint16_t SKYROW[2][BIOME_N][SH]; static int sky_ok[2][BIOME_N];
 static void pine(int x,int base,int h,uint32_t c,int snow){
     rect(x-2,base-h/5,4,h/5,0x3A2A1A);
     for(int k=0;k<3;k++){ int top=base-h+k*h/4, w=h/5+k*h/8; tri(x,top,x-w,top+h/3,x+w,top+h/3,c);
@@ -579,15 +602,45 @@ static void draw_world_bg(int biome,int sh){
             for(int y=top;y<GROUND+40;y++) CV(x,y)=k; } }
         for(int k=0;k<30;k++){ int x=(k*97+tms*20*(k%3+1)/1000)%CW, y=GROUND-(k*53+tms*35*(k%2+1)/1000)%(GROUND-PF_Y); px(x,y,rgb(0xFFB040)); px(x+1,y,rgb(0xFF8020)); }
         } break;
+    case BIOME_SWAMP: {
+        { uint16_t k=rgb(0x2A3A30); for(int x=0;x<CW;x++){ int wx=x+c15; int top=PF_Y+230-(26*ih(wx/30)>>8)-(10*isin(wx*7/3)>>15)+sh;   /* murky far woods */
+            for(int y=top;y<GROUND+40;y++) CV(x,y)=k; } }
+        for(int i=-1;i<8;i++){ float wx=floorf(cam*0.45f/95)*95+i*95; int x=(int)(wx-cam*0.45f); float r=hsh(wx+5);   /* dead trees */
+            int h=120+(int)(r*110), bx=x+(int)(r*30); line(bx,GROUND+sh,bx+(int)(r*10)-5,GROUND-h+sh,5,0x2A2A22);
+            line(bx,GROUND-h*2/3+sh,bx-26-(int)(r*14),GROUND-h*2/3-30+sh,2,0x2A2A22); line(bx+2,GROUND-h/2+sh,bx+30,GROUND-h/2-24+sh,2,0x2A2A22);
+            for(int k=0;k<3;k++) line(bx-10+k*10,GROUND-h*2/3+sh,bx-12+k*10,GROUND-h*2/3+24+(int)(r*20)+sh,1,0x4A6A3A); }   /* hanging moss */
+        for(int i=-1;i<6;i++){ float wx=floorf(cam*0.7f/150)*150+i*150; int x=(int)(wx-cam*0.7f); float r=hsh(wx+9);   /* pools */
+            if(r<0.6f){ int w=50+(int)(r*90); ellipse(x,GROUND-6+sh,w,8,0x2A4A4A); line(x-w/2,GROUND-8+sh,x-w/2+20,GROUND-8+sh,1,0x6A9A9A); } }
+        for(int k=0;k<4;k++){ int fy=PF_Y+250+k*28+(int)(sinf(t*0.4f+k)*6); int fx=(int)(fmodf(t*14*(k+1)+k*170-cam*0.3f,CW+300))-150;   /* fog */
+            for(int y=fy;y<fy+6;y++) for(int x=fx;x<fx+180;x+=2) if(x>=0&&x<CW&&y<GROUND) CV(x,y)=rgb(lerpc(0x2A3A38,0xC8D8C8,0.25f)); }
+        for(int k=0;k<18;k++){ int x=(int)(fmodf(k*71+sinf(t*0.7f+k)*30-cam*0.6f,CW)); if(x<0) x+=CW;   /* fireflies */
+            int y=PF_Y+150+(k*37)%200+(int)(sinf(t*1.3f+k*2)*10); if(((int)(t*3)+k)%4) circle(x,y,2,0xD0FF80); }
+        } break;
+    case BIOME_PEAKS: {
+        for(int i=-1;i<6;i++){ float wx=floorf(cam*0.08f/170)*170+i*170; int x=(int)(wx-cam*0.08f); float r=hsh(wx+2);   /* far range */
+            int h=170+(int)(r*90); tri(x,PF_Y+290-h+sh,x-120,PF_Y+290+sh,x+120,PF_Y+290+sh,0x6A7894);
+            tri(x,PF_Y+290-h+sh,x-38,PF_Y+290-h+56+sh,x+38,PF_Y+290-h+56+sh,0xF0F4FA); }
+        { int cx=(int)(330-cam*0.05f)%900; if(cx<-200) cx+=900;                    /* a citadel on a far crag */
+          rect(cx-30,PF_Y+150+sh,60,60,0x3A3A4A); for(int k=0;k<4;k++) rect(cx-30+k*18,PF_Y+140+sh,10,10,0x3A3A4A);
+          rect(cx-6,PF_Y+120+sh,12,30,0x3A3A4A); tri(cx-9,PF_Y+120+sh,cx,PF_Y+104+sh,cx+9,PF_Y+120+sh,0x2A2A3A); rect(cx-2,PF_Y+170+sh,4,8,0xFFC040); }
+        for(int i=-1;i<7;i++){ float wx=floorf(cam*0.3f/120)*120+i*120; int x=(int)(wx-cam*0.3f); float r=hsh(wx+4);   /* near ridges */
+            int h=90+(int)(r*70); tri(x,PF_Y+330-h+sh,x-100,PF_Y+340+sh,x+100,PF_Y+340+sh,0x4A5468); tri(x,PF_Y+330-h+sh,x-22,PF_Y+330-h+30+sh,x+22,PF_Y+330-h+30+sh,0xDDE6F2); }
+        rect(0,PF_Y+330+sh,CW,GROUND-PF_Y-330+40,0x5A6070);
+        for(int k=0;k<3;k++){ int cx=(int)(fmodf(t*10*(k+1)+k*260-cam*0.1f,CW+260))-130, cy=PF_Y+60+k*40;   /* clouds */
+            ellipse(cx,cy,60,14,0xF4F6FA); ellipse(cx+30,cy-8,40,12,0xFFFFFF); }
+        } break;
     }
-    uint32_t gtop = biome==0?0x3A6A2A : biome==1?0xE0B070 : biome==2?0xF0F6FA : 0x3A2018,
-             gfill= biome==0?0x3A2A1A : biome==1?0xC89858 : biome==2?0xB8CCE0 : 0x221010;
+    static const uint32_t GTOP[BIOME_N]={0x3A6A2A,0xE0B070,0xF0F6FA,0x3A2018,0x3A5030,0x8A8E9A},
+                          GFILL[BIOME_N]={0x3A2A1A,0xC89858,0xB8CCE0,0x221010,0x26302A,0x4A4E58};
+    uint32_t gtop=GTOP[biome], gfill=GFILL[biome];
     rect(0,GROUND+sh,CW,4,gtop); rect(0,GROUND+4+sh,CW,PLAY_BOT-GROUND-4,gfill);
     for(int i=-2;i<14;i++){ float wx=floorf(cam/40)*40+i*40; int x=sxw(wx); float r=hsh(wx+1);
         if(biome==0 && r<0.4f){ line(x,GROUND+sh,x-4,GROUND-10+sh,2,0x4A8A3A); line(x,GROUND+sh,x+5,GROUND-12+sh,2,0x5A9A3A); }
         if(biome==1 && r<0.12f){ rect(x-3,GROUND-34+sh,6,34,0x4A7A3A); rect(x-12,GROUND-24+sh,9,4,0x4A7A3A); rect(x-12,GROUND-30+sh,4,8,0x4A7A3A); }
         if(biome==2 && r<0.3f) ellipse(x,GROUND+2+sh,10,3,0xFFFFFF);
         if(biome==3 && r<0.35f){ line(x,GROUND+8+sh,x+18,GROUND+14+sh,2,lerpc(0xFF4010,0xFFC040,0.5f+0.5f*sinf(t*3+r*9))); }
+        if(biome==4 && r<0.35f){ for(int k=0;k<3;k++) line(x+k*4,GROUND+sh,x+k*4+(int)(sinf(t*2+k+r*7)*3),GROUND-16-k*5+sh,1,0x5A7A3A); }   /* reeds */
+        if(biome==5 && r<0.25f){ ellipse(x,GROUND+2+sh,10,6,0x6A6E78); ellipse(x-2,GROUND-1+sh,6,3,0x8A8E9A); }   /* rocks */
         if(r>0.85f) ellipse(x+12,GROUND+12+sh,5,3,shade(gfill,1.3f)); }
     /* the banner at the end */
     int bx=sxw((float)G.m->length); if(bx>-40 && bx<CW+40){ line(bx,GROUND+sh,bx,GROUND-110+sh,4,0x3A2A1A);
@@ -738,6 +791,88 @@ static void draw_enemy(const enemy_t*e,int sh){
         ellipse(hx-40,hy+24,40,10+open,0x200800); ellipse(hx-40,hy+24,30,4+open*2/3,0xFF6010);
         eyes(hx-20,hy-30,9,0xFFE000); eyes(hx+14,hy-32,8,0xFFE000);
         tri(hx+10,hy-50,hx-20,hy-120,hx+30,hy-56,0x3A1A10); tri(hx+50,hy-50,hx+50,hy-116,hx+70,hy-50,0x3A1A10); } break;
+    /* ---- act II ---- */
+    case ET_BOGLURKER: {                                                           /* hunched, mossy, long arms */
+        ellipse(x+lunge,gy-26,26,26,c); ellipse(x+6+lunge,gy-40,18,12,l);
+        for(int k=0;k<4;k++) line(x-14+k*9+lunge,gy-30,x-15+k*9+lunge,gy-14+(k%2)*6,2,0x6A8A4A);       /* dripping moss */
+        rect(x-14,gy-6-st1,9,6,d); rect(x+6,gy-6-st2,9,6,d);
+        int ax=x-26+lunge-(int)(act*16); line(x-12+lunge,gy-34,ax,gy-6+(int)(act*-14),5,d); circle(ax,gy-4+(int)(act*-14),5,d);
+        eyes(x-14+lunge,gy-36,3,0xE0D020); } break;
+    case ET_WISP: { float fl=sinf(e->bob*9);                                     /* a will-o'-wisp */
+        circle(x,gy-12,16+(int)(fl*2),shade(c,0.6f)); circle(x,gy-12,11,c); circle(x-2,gy-14,6,0xF0FFF8);
+        for(int k=1;k<4;k++) circle(x+6+k*7,gy-12+(int)(sinf(e->bob*6+k)*4),5-k,c);
+        eyes(x-5,gy-14,2,0x206050); } break;
+    case ET_BLASTCAP: {                                                          /* a walking powder mushroom */
+        rect(x-6,gy-22,12,20,0xE8D8B8); rect(x-9,gy-4-st1,6,4,0x5A3A2A); rect(x+3,gy-4-st2,6,4,0x5A3A2A);
+        ellipse(x+lunge/2,gy-28,20,13,c); circle(x-8+lunge/2,gy-31,3,0xFFFFFF); circle(x+6+lunge/2,gy-34,3,0xFFFFFF); circle(x-1+lunge/2,gy-26,2,0xFFFFFF);
+        line(x,gy-40,x+4,gy-50,1,0x3A2A1A); if(((int)(G.time*12))&1) circle(x+4,gy-52,3,0xFFE040); else circle(x+4,gy-52,2,0xFF6020);
+        eyes(x-6,gy-16,2,0); } break;
+    case ET_SHIELDBEARER: {                                                      /* a wall of iron in front */
+        line(x+2,gy-14,x+2-st1/2,gy,3,0x2A2A30); line(x+10,gy-14,x+10+st2/2,gy,3,0x2A2A30);
+        tri(x+6,gy-56,x-8,gy-12,x+20,gy-12,c); circle(x+6,gy-58,9,d); rect(x-2,gy-62,16,5,l); eyes(x+2,gy-58,2,0);
+        int bx=x-16+lunge/2; rect(bx-10,gy-66,20,62,l); frame(bx-10,gy-66,20,62,2,d); circle(bx,gy-36,5,d); } break;
+    case ET_CROSSBOW: {                                                          /* armoured archer */
+        line(x-3,gy-14,x-3-st1/2,gy,3,0x2A2A20); line(x+5,gy-14,x+5+st2/2,gy,3,0x2A2A20);
+        tri(x+1,gy-52,x-12,gy-12,x+14,gy-12,c); circle(x+1,gy-54,9,d); tri(x-9,gy-58,x+1,gy-70,x+11,gy-58,l); eyes(x-3,gy-54,2,0);
+        int cx=x-14-(int)(act*4); line(cx,gy-38,x+6,gy-36,3,0x5A3A1A); line(cx-2,gy-48,cx-2,gy-28,2,0x8A8A90);
+        line(cx-2,gy-48,cx+6,gy-38,1,0xE0E0D0); line(cx-2,gy-28,cx+6,gy-38,1,0xE0E0D0); } break;
+    case ET_CAGE: { int sh2=e->flash>0?(int)(sinf(G.time*60)*3):0; uint32_t pc=DG_CLASS[G.m->rescue_cls].color;   /* prisoners inside */
+        for(int k=0;k<2;k++){ int px2=x-10+k*20+sh2; tri(px2,gy-44,px2-9,gy-8,px2+9,gy-8,pc); circle(px2,gy-42,7,shade(pc,0.55f)); eyes(px2-2,gy-42,2,0); }
+        rect(x-30+sh2,gy-78,60,6,d); rect(x-30+sh2,gy-6,60,6,d);
+        for(int k=0;k<6;k++) rect(x-28+k*11+sh2,gy-72,4,66,c);
+        if(e->hp<e->maxhp*0.5f) line(x-20,gy-60,x+10,gy-20,2,0x1A1008);
+        if(((int)(G.time*2))&1) textcs(x,gy-100,"HELP!",1,0xFFE0A0); } break;
+    case ET_CHAINWARDEN: { int s2=2;                                             /* the jailer */
+        rect(x-10*s2,gy-6*s2-st1,8*s2,6*s2,d); rect(x+4*s2,gy-6*s2-st2,8*s2,6*s2,d);
+        ellipse(x+lunge,gy-28*s2,22*s2,24*s2,c); for(int k=-1;k<=1;k++) line(x+k*10*s2+lunge,gy-48*s2,x+k*10*s2+lunge,gy-8*s2,2,d);
+        int hx=x-8*s2+lunge, hy=gy-56*s2; circle(hx,hy,12*s2,d); rect(hx-12*s2,hy-4*s2,24*s2,4*s2,0x1A1A20); eyes(hx-5*s2,hy-2*s2,2*s2,0xFF4020);
+        float a=G.time*6+act*3; int ex=hx-30*s2+(int)(cosf(a)*26*s2*(0.6f+act)), ey=hy+10*s2+(int)(sinf(a)*20*s2);   /* swinging chain */
+        for(int k=0;k<=6;k++){ int cx2=hx-6*s2+(ex-(hx-6*s2))*k/6, cy2=hy+12*s2+(ey-(hy+12*s2))*k/6; ring(cx2,cy2,3*s2,1,0xA0A0A8); }
+        circle(ex,ey,8*s2,0x6A6A70); ring(x+14*s2,gy-30*s2,6*s2,2,0xD0B040); } break;
+    case ET_BLASTMASTER: {                                                       /* goggles and a bomb in hand */
+        rect(x-14,gy-12-st1,12,12,d); rect(x+4,gy-12-st2,12,12,d);
+        ellipse(x+lunge,gy-44,30,34,c); for(int k=0;k<5;k++) circle(x-20+k*10+lunge,gy-40-(k%2)*8,5,0x2A2A2A);
+        int hx=x-6+lunge, hy=gy-86; circle(hx,hy,16,d); rect(hx-14,hy-6,28,8,0x3A2A1A); circle(hx-6,hy-2,4,0xE0E060); circle(hx+6,hy-2,4,0xE0E060);
+        int bx=x-36-(int)(act*20), by=gy-60-(int)(act*20); circle(bx,by,10,0x2A2A2A); line(bx,by-10,bx+4,by-18,1,0x6A4A2A);
+        if(((int)(G.time*10))&1) circle(bx+4,by-20,3,0xFFC040); } break;
+    case ET_HYDRA: {                                                             /* three necks out of the bog */
+        int bx=x+lunge; ellipse(bx+20,gy-40,110,50,c); ellipse(bx+30,gy-56,70,26,l);
+        for(int h=0;h<3;h++){ float ph2=e->bob*2.4f+h*2.1f; int jaw=(int)(act*20)+(mv&&mv->kind==MV_SWEEP?(int)(6+sinf(G.time*18)*4):0);
+            static const int HX[3]={-150,-95,-30}, HY[3]={-120,-200,-160};          /* fanned out: low, high, middle */
+            int hx=bx+HX[h]+(int)(sinf(ph2)*14)+lunge, hy=gy+HY[h]+(int)(cosf(ph2)*10)+(int)(act*24);
+            for(int k=6;k>=0;k--){ float t2=k/6.0f; int sx2=hx+20+(int)(((bx-20+h*30)-(hx+20))*t2), sy2=hy+10+(int)(((gy-60)-(hy+10))*t2);
+                circle(sx2+(int)(sinf(ph2+k)*4),sy2,14+(int)(t2*8),k%2?c:d); }
+            ellipse(hx,hy,30,20,d); tri(hx-26,hy+4,hx-58,hy+10+jaw,hx-20,hy+14,l); eyes(hx-10,hy-8,5,0xE0F040);
+            if(e->enraged) tri(hx+4,hy-16,hx+10,hy-34,hx+16,hy-16,0xE0F0C0); }
+        for(int k=0;k<5;k++) ellipse(bx-60+k*40,gy-4,20,5,0x2A4A4A); } break;
+    case ET_COLOSSUS: {                                                          /* the gate that walks */
+        int bx=x+lunge*2, breath=(int)(sinf(e->bob*2)*3);
+        for(int k=0;k<2;k++){ int lift=(int)(fmaxf(0,sinf(e->walk*0.06f+k*3.14f))*12); rect(bx-50+k*60,gy-60-lift,40,60,d); rect(bx-56+k*60,gy-14-lift,52,14,shade(c,0.45f)); }
+        rect(bx-80,gy-210-breath,160,150,c); for(int r=0;r<4;r++) frame(bx-80,gy-210+r*38-breath,160,38,2,d);
+        uint32_t heart=e->enraged?lerpc(0xFF3010,0xFFC040,0.5f+0.5f*sinf(G.time*8)):0x8A4A20;
+        circle(bx,gy-150-breath,22,0x1A1210); circle(bx,gy-150-breath,16,heart);
+        rect(bx-36,gy-262-breath,72,52,d); rect(bx-30,gy-244-breath,60,10,0x101014); rect(bx-24,gy-242-breath,48,6,e->enraged?0xFF4020:0xE0A040);
+        int fx2=bx-120-(int)(act*40), fy=gy-140+(int)(act*60); rect(bx-110,gy-190,40,24,d); line(bx-100,gy-170,fx2+20,fy,18,c);
+        rect(fx2-10,fy-18,40,40,d); rect(bx+80,gy-190,30,90,c); rect(bx+76,gy-110,38,38,d); } break;
+    case ET_STORMROC: { float f=e->grounded?0.25f:sinf(e->bob*4);                 /* thunderbird */
+        tri(x,gy-60,x-170,gy-110-(int)(f*80),x-20,gy-20,d); tri(x,gy-60,x+170,gy-110-(int)(f*80),x+20,gy-20,d);
+        for(int k=0;k<4;k++){ line(x-60-k*26,gy-70-(int)(f*35)-k*6,x-70-k*26,gy-30-(int)(f*20),2,l); line(x+60+k*26,gy-70-(int)(f*35)-k*6,x+70+k*26,gy-30-(int)(f*20),2,l); }
+        ellipse(x,gy-56,40,50,c); ellipse(x+6,gy-44,24,30,l);
+        int hx=x-34+lunge/2, hy=gy-100+(int)(sinf(e->bob*3)*4)+(int)(act*10);
+        circle(hx,hy,22,c); tri(hx-18,hy-2,hx-52,hy+6+(int)(act*10),hx-16,hy+12,0xF0C040); eyes(hx-6,hy-6,6,0x40C0FF);
+        tri(hx+4,hy-18,hx+30,hy-40,hx+18,hy-14,l);
+        if(mv || e->enraged) for(int k=0;k<3;k++){ int lx=x-80+k*80+(int)(sinf(G.time*30+k)*10); if(((int)(G.time*14)+k)%3==0){
+            line(lx,PF_Y+20,lx+12,gy-140,2,0xFFFFA0); line(lx+12,gy-140,lx-4,gy-90,2,0xFFFFA0); } } } break;
+    case ET_HOLLOWKING: {                                                        /* hood, crown, a great blade */
+        int bx=x+lunge*2, sway=(int)(sinf(e->bob*1.6f)*5);
+        tri(bx+sway,gy-250,bx-90,gy,bx+90,gy,c); tri(bx+sway,gy-220,bx-60,gy,bx+20,gy,d);
+        for(int k=0;k<5;k++) tri(bx-80+k*40,gy,bx-70+k*40,gy-20-(int)(sinf(e->bob*3+k)*6),bx-60+k*40,gy,shade(c,0.5f));   /* ragged hem */
+        int hx=bx-6+sway, hy=gy-250; circle(hx,hy,34,d); ellipse(hx-4,hy+4,22,24,0x0A0810);
+        uint32_t ec=e->enraged?0xFF3020:0xB080FF; circle(hx-14,hy,5,ec); circle(hx+6,hy,5,ec);
+        for(int k=0;k<5;k++) tri(hx-30+k*15,hy-28,hx-24+k*15,hy-56-(k%2)*10,hx-18+k*15,hy-28,0xE0C040);
+        rect(hx-32,hy-32,64,6,0xE0C040);
+        float a=-1.0f+act*2.4f; int gx=bx-50, gy2=gy-150, tx=gx+(int)(cosf(a+3.14f)*150), ty=gy2+(int)(sinf(a+3.14f)*150);
+        line(gx,gy2,tx,ty,8,0xC0C8D8); line(gx,gy2,(gx+tx)/2,(gy2+ty)/2,3,0xFFFFFF); rect(gx-12,gy2-4,24,8,0xE0C040); } break;
     }
     if(e->burn>0) for(int k=0;k<3;k++) circle(x-10+k*10,gy-30-(int)(fmodf(G.time*60+k*20,40)),3,0xFF8020);
     if(e->frost>0) ring(x,gy-30,26,2,0x90E0FF);
@@ -834,7 +969,9 @@ static void legend(int y){
 static void draw_bubbles(int sh);
 static int mv_banner_busy(void){ int b=dg_boss(&G); return b>=0 && dg_boss_move(&G,b)!=0; }
 static void draw_battle(void){
-    float target=G.sx-(land?230:150); cam+= (target-cam)*0.15f;
+    /* a big squad stretches back: pull the camera so the rear stays on screen */
+    { int n=dg_alive(&G); float sp = n<=4?36.0f : n>=8?24.0f : 36.0f-(n-4)*3.0f, back=(n>1?n-1:0)*sp+50;
+      float off=fmaxf(land?230.0f:150.0f,back); float target=G.sx-off; cam+= (target-cam)*0.15f; }
     int sh = shake>0 ? (int)((rand()%9-4)*shake) : 0;
     draw_world_bg(G.m->biome,sh); draw_walls(sh);
     for(int k=0;k<DG_MAXE;k++) if(G.e[k].on && G.e[k].hp>0) draw_enemy(&G.e[k],sh);
@@ -843,10 +980,17 @@ static void draw_battle(void){
         for(int i=0;i<DG_MAXU;i++){ const unit_t*u=&G.u[i]; if(!u->on||u->hp<=0) continue; int X=sxw(u->x);
             ellipse(X,GROUND+2+sh,20,6,gc); for(int k=0;k<2;k++) px(X-14+(int)((G.time*97+i*31+k*53))%28,GROUND-10-(int)(fmodf(G.time*70+k*30+i*17,60)),rgb(0xFFF0A0)); }
         rect(0,PF_Y,3,GROUND-PF_Y,gc); rect(UW-3,PF_Y,3,GROUND-PF_Y,gc); }
+    /* fever: the squad dances on the beat (a hop that lands on each beat, swaying side to side) */
+    float ph=0; int64_t bn=0;
+    if(rc.fever){ int64_t ns=now_sample(); if(ns>=rc.t0 && rc.beat>0){ bn=(ns-rc.t0)/rc.beat; ph=(float)((ns-rc.t0)%rc.beat)/(float)rc.beat; } }
     for(int i=0;i<DG_MAXU;i++){ const unit_t*u=&G.u[i]; if(!u->on) continue;
         if(u->hp<=0){ ellipse(sxw(u->x),GROUND-4+sh,12,4,0x2A1A10); continue; }
-        draw_unit(sxw(u->x),GROUND+(int)dg_unit_y(&G,i)+sh,u->cls,u->weapon,u->shield,u->swing,guard,u->flash>0&&((int)(u->flash*30)&1),
-                  G.move_left!=0?G.time*12.566f+i:0,1,u->hp/u->maxhp); }
+        int dy=(int)dg_unit_y(&G,i), dx=0; float step=G.move_left!=0?G.time*12.566f+i:0;
+        if(rc.fever && u->swing<0.2f){ int H=rc.super?12:7; float hop=sinf(ph*3.14159f);
+            dy-=(int)(hop*H); dx=(int)(sinf(((float)(bn&1)+ph)*3.14159f)*(rc.super?5:3))*((i&1)?-1:1);
+            if(G.move_left==0) step=((float)(bn&1)+ph)*3.14159f; }
+        draw_unit(sxw(u->x)+dx,GROUND+dy+sh,u->cls,u->weapon,u->shield,u->swing,guard,u->flash>0&&((int)(u->flash*30)&1),
+                  step,1,u->hp/u->maxhp); }
     for(int k=0;k<DG_MAXP;k++) if(G.p[k].on) draw_proj(&G.p[k],sh);
     draw_bubbles(sh);
     for(int k=0;k<160;k++){ part_t*p=&P[k]; if(p->life<=0) continue;
@@ -989,8 +1133,14 @@ static void battle_events(void){
     if(G.ev_summon) snd(S_ROAR,0.5f,0);
     if(G.ev_boss_down){ snd(S_ROAR,1,0); shake=1.5f; }
     if(G.ev_drop && ngot<16){ got[ngot++]=G.ev_drop-1; snd(S_TONE,1,1320); }
+    if(G.ev_rescue){ static char who[48]; snprintf(who,sizeof who,"A %s FIGHTS WITH YOU",DG_CLASS[G.m->rescue_cls].name);
+        show_banner("PRISONERS FREED!",who); for(int i=0;i<5;i++) snd_at(S_TONE,now_sample()+DR_RATE/10*i,0.9f,523+i*131);
+        for(int i=0;i<DG_MAXU;i++) if(G.u[i].on&&G.u[i].hp>0) burst(G.u[i].x,-40,5,0x90F090,60,3,1); }
+    if(G.ev_blast){ snd(S_QUAKE,1,0); snd(S_HURT,0.8f,0); if(shake<1.1f) shake=1.1f;
+        int f=-1; for(int i=0;i<DG_MAXU;i++) if(G.u[i].on&&G.u[i].hp>0&&(f<0||G.u[i].x>G.u[f].x)) f=i;
+        if(f>=0){ burst(G.u[f].x+60,-20,22,0xFF8020,220,4,1); ring_add(G.u[f].x+60,-20,40,0xFFD040); } }
     G.ev_attack=G.ev_hit=G.ev_kill=G.ev_hurt=G.ev_heal=G.ev_windup=G.ev_boss_move=G.ev_roar=G.ev_quake=G.ev_boss_land=G.ev_summon=G.ev_boss_down=G.ev_drop=0;
-    G.ev_scout_flee=G.ev_alarm=G.ev_gate_down=0;
+    G.ev_scout_flee=G.ev_alarm=G.ev_gate_down=0; G.ev_rescue=G.ev_blast=0;
     G.ev_block=0;
 }
 static void resume_play(void){
@@ -1021,12 +1171,33 @@ static void drum(int d,int64_t t,int src){
     if(rc.ev_not_ready){ rc.ev_not_ready=0; show_banner("NOT READY","SPECIAL NEEDS 8 IN A ROW"); snd(S_MISS,1,0); }
     if(rc.ev_break||rc.ev_fever_off){ if(rc.ev_break) say(SAY_BREAK); rc.ev_break=0; rc.ev_fever_off=0; bk_fever=0; }
 }
+/* R3DRUM_DEMO=1: the game drums by itself, in time (testing on the device without a drummer):
+ * guard when a boss winds up, rally when hurt, strike when foes are close, march otherwise,
+ * the special in super fever */
+static int demo;
+static int demo_choose(void){
+    int k=dg_boss(&G); const bmove_t*mv=k>=0?dg_boss_move(&G,k):0;
+    if(mv && mv->kind!=MV_SUMMON && mv->kind!=MV_HEAL && mv->kind!=MV_ROAR && G.e[k].windup>=4 && G.e[k].windup<=11) return CMD_GUARD;
+    float h=0,m=0; int mender=0; for(int i=0;i<DG_MAXU;i++) if(G.u[i].on&&G.u[i].hp>0){ h+=G.u[i].hp; m+=G.u[i].maxhp; mender|=G.u[i].cls==CL_MENDER; }
+    if(m>0 && h<m*0.5f && mender) return CMD_RALLY;
+    for(int j=0;j<DG_MAXE;j++){ const enemy_t*e=&G.e[j]; if(e->on&&e->hp>0&&dg_front(e)-G.sx<320) return rc.super?CMD_SPECIAL:CMD_STRIKE; }
+    return CMD_MARCH; }
+static void drum(int d,int64_t t,int src);
+static void demo_tick(int64_t ns){
+    static int64_t done=-1; static int cmd=CMD_MARCH;
+    if(paused || end_t>0) return;
+    int64_t b=rc_nearest_beat(&rc,ns), tb=rc_beat_time(&rc,b);
+    if(ns<tb || b<=done || b<0) return;                         /* once per beat, as it sounds */
+    if(rc_responding(&rc,tb,0)!=CMD_NONE || (rc.next_start>=0 && b<rc.next_start)) return;
+    done=b; if(rc.nseq==0) cmd=demo_choose();
+    drum(DR_PATTERN[cmd][rc.nseq],tb+(int64_t)off_src[SRC_KEYS]*DR_RATE/1000,SRC_KEYS); }
 static void battle_tick(float dt){
     if(paused) return;
     int64_t ns=now_sample();
     { static int seen; if(music_live && beat_ver!=seen && rc.nseq==0 && rc_responding(&rc,ns,0)==CMD_NONE){ seen=beat_ver; music_reanchor(); } }
     { int mo=off_src[0]; for(int i=1;i<SRC_N;i++) if(off_src[i]>mo) mo=off_src[i];   /* lenient: the latest input */
       rc_tick(&rc,ns-(int64_t)mo*DR_RATE/1000); }
+    if(demo) demo_tick(ns);
     if(rc.ev_break||rc.ev_fever_off){ rc.ev_break=0; rc.ev_fever_off=0; bk_fever=0; }
     int64_t cb=(ns-rc.t0)>=0 ? (ns-rc.t0)/rc.beat : -1;
     while(last_beat<cb && end_t<=0){ last_beat++;
@@ -1055,40 +1226,106 @@ static const char*matchup(const weapon_t*w){
     const char*t = w->dtype==DT_PIERCE?"PIERCE: WEAK VS ARMOUR" : w->dtype==DT_CRUSH?"CRUSH: BREAKS ARMOUR" : "SLASH: ALL-ROUND";
     const char*e = w->elem==EL_FIRE?", BURNS" : w->elem==EL_FROST?", SLOWS FOES" : w->elem==EL_STORM?", CHAINS" : "";
     snprintf(b,sizeof b,"%s%s",t,e); return b; }
+static const char*const BIOME_NAME[BIOME_N]={"FOREST","DESERT","SNOW","VOLCANO","SWAMP","PEAKS"};
+static const uint32_t BIOME_C[BIOME_N]={0x2E5A3A,0x9A7040,0x6A80A0,0x6A2A1A,0x3A5A44,0x5A6478};
+static int64_t map_msg_until; static char map_msg[64];
+static int done_n(void){ int n=0; for(int m=0;m<DG_NMISSION;m++) n+=A.done>>m&1; return n; }
+static void boss_of(const mission_t*m,char*b,int cap){ b[0]=0;
+    for(int i=0;i<m->ne;i++){ int t=m->e[i].type, bo=DG_ETYPE[t].boss; if(bo>=0 && !DG_BOSS[bo].elite) snprintf(b,cap,"%s",DG_ETYPE[t].name); } }
+/* the hub: missions as a path across the land; rescue missions branch off it */
+static void draw_map(void){
+    rect(0,TOP,CW,CH-TOP,0x16110C);
+    rbox(8,56,464,596,14,0x2A2016);
+    for(int m=0;m<DG_NMISSION;m++){ const mission_t*ms=&DG_MISSION[m];        /* the lands */
+        ellipse(ms->mx,ms->my,78,56,shade(BIOME_C[ms->biome],0.55f)); }
+    for(int m=0;m<DG_NMISSION;m++){ const mission_t*ms=&DG_MISSION[m];
+        ellipse(ms->mx,ms->my,54,38,shade(BIOME_C[ms->biome],0.75f)); }
+    { int y=404; for(int x=20;x<460;x+=14) rect(x,y,8,2,0x6A5A44);              /* the border between the acts */
+      text(16,y-12,"ACT II",1,0xC0A080); text(16,y+6,"ACT I",1,0xC0A080); }
+    for(int m=0;m<DG_NMISSION;m++){ const mission_t*ms=&DG_MISSION[m]; if(ms->req<0) continue;   /* roads */
+        const mission_t*r=&DG_MISSION[ms->req]; int open=dg_mission_open(&A,m);
+        line(r->mx,r->my,ms->mx,ms->my,open?4:3,open?0xC0A080:0x3A2E22);
+        if(ms->rescue){ int x=(r->mx+ms->mx)/2, y=(r->my+ms->my)/2; circle(x,y,3,open?0xE0C060:0x3A2E22); } }
+    int64_t now=now_us(); float pulse=0.5f+0.5f*sinf((float)(now%2000000)/2000000.0f*6.2832f);
+    for(int m=0;m<DG_NMISSION;m++){ const mission_t*ms=&DG_MISSION[m];
+        int open=dg_mission_open(&A,m), done=A.done>>m&1, x=ms->mx, y=ms->my;
+        uint32_t c = done?0x4A8A3A : open?lerpc(0xB85518,0xE8731C,pulse) : 0x2A221A;
+        if(m==sel) ring(x,y,29,3,0xFFE0A0);
+        circle(x,y,23,0x0E0A08); circle(x,y,20,c);
+        char b[8]; snprintf(b,sizeof b,"%d",m+1); textc(x,y-6,b,2,open||done?0x101010:0x5A4A3A);
+        if(ms->rescue){ int cx=x+18, cy=y-26, rc2=(A.rescued>>m&1)?0x90F090:open?0xE0C060:0x5A4A3A;   /* a little cage */
+            rect(cx-1,cy-1,16,16,0x0E0A08); frame(cx,cy,14,14,2,rc2); for(int k=1;k<3;k++) rect(cx+k*4+1,cy,2,14,rc2); }
+        int ly = y>580 ? y-40 : y+26;
+        textcs(x,ly,ms->name,1,open||done?0xF4E4D0:0x6A5A4A); }
+    rect(0,TOP,CW,32,0x16110C); frame(8,56,464,596,2,0x4A3A2A);       /* over the lands that spill upwards */
+    textcs(CW/2,TOP+6,"WORLD MAP",3,0xE8731C);
+    /* status + buttons */
+    int y=TOP+636; char b[64];
+    snprintf(b,sizeof b,"CLEARED %d/%d",done_n(),DG_NMISSION); text(16,y+8,b,2,0xF4E4D0);
+    snprintf(b,sizeof b,"SOLDIER SLOTS %d/%d",A.slots,DG_MAXU); text(16,y+32,b,1,0xC0A080);
+    rbox(300,y,168,52,12,0x3A2A1A); frame(300,y,168,52,2,0xE8731C); textc(384,y+16,"SQUAD",3,0xF4E4D0);
+    if(now<map_msg_until){ rbox(40,300,400,44,10,0x000000); frame(40,300,400,44,2,0xE8731C); textc(CW/2,316,map_msg,1,0xFFE0A0); }
+    text(8,TOP+4,"HOLD POWER: LEAVE",1,0x6A5A4A);
+}
+/* before marching: the land, the foes, what to win, who marches */
+static void draw_brief(void){
+    const mission_t*m=&DG_MISSION[sel]; char b[96];
+    rect(0,TOP,CW,CH-TOP,0x120E0C);
+    for(int y=TOP;y<TOP+120;y++){ uint16_t k=rgb(lerpc(shade(BIOME_C[m->biome],0.8f),0x120E0C,(float)(y-TOP)/120)); for(int x=0;x<CW;x++) CV(x,y)=k; }
+    snprintf(b,sizeof b,"%d. %s",sel+1,m->name); textcs(CW/2,TOP+12,b,3,0xF4E4D0);
+    textcs(CW/2,TOP+44,m->brief,1,0xFFE0A0);
+    int y=TOP+66;
+    snprintf(b,sizeof b,"LAND: %s     STATUS: %s",BIOME_NAME[m->biome],(A.done>>sel&1)?"CLEARED":"NEW"); text(16,y,b,1,0xC0A080); y+=14;
+    snprintf(b,sizeof b,"SQUAD LIMIT: %d SOLDIERS (YOU HAVE %d)",m->cap,A.nsquad); text(16,y,b,1,0xF4E4D0); y+=14;
+    if(m->rescue){ snprintf(b,sizeof b,(A.rescued>>sel&1)?"RESCUE: DONE":"RESCUE: BREAK THE CAGES, WIN +%d SOLDIER SLOT",m->rescue);
+        text(16,y,b,1,(A.rescued>>sel&1)?0x80E080:0x90F090); y+=14; }
+    { char bo[32]; boss_of(m,bo,sizeof bo); snprintf(b,sizeof b,"BOSS: %s",bo); text(16,y,b,1,0xFF7050); y+=14; }
+    /* scout report */
+    y+=8; text(16,y,"SCOUT REPORT",2,0xE8731C); y+=20;
+    int seen[ET_N]={0};
+    for(int pass=0;pass<2;pass++) for(int i=m->ne-1;i>=0;i--){ int t=m->e[i].type; if(seen[t]) continue;
+        int boss=DG_ETYPE[t].boss>=0; if(pass==0 && !boss) continue; if(pass==1 && boss) continue; seen[t]=1;
+        if(y>TOP+446) break;
+        text(16,y,DG_ETYPE[t].name,1,boss?0xFF7050:0xF4E4D0); text(130,y,DG_ETYPE[t].hint,1,0xA08870); y+=13; }
+    /* spoils */
+    y+=12; text(16,y,"SPOILS",2,0xE8731C); y+=20;
+    { int x=16; for(int i=0;i<m->nreward;i++){ const char*n=code_name(m->reward[i]); int w=text_w(n,1)+14;
+        if(x+w>468){ x=16; y+=14; } text(x,y,n,1,owned(m->reward[i])?0x6A5A4A:0xF4E4D0); x+=w; } }
+    /* who marches: right under the spoils */
+    y+=28; if(y>TOP+512) y=TOP+512; text(16,y,"MARCHING",2,0xE8731C);
+    int n=dg_deploy(&A,sel), gy=y+100; for(int i=0;i<A.nsquad;i++){ int x=40+i*56; if(x>460) break;
+        draw_mini_unit(x,gy,&A.squad[i],1); if(i>=n){ dim(x-24,gy-72,48,76); textc(x,gy-12,"RESERVE",1,0x8A6A4A); } }
+    /* buttons */
+    y=TOP+636;
+    rbox(12,y,130,52,10,0x2A2018); frame(12,y,130,52,1,0x5A4A3A); textc(77,y+16,"MAP",3,0xF4E4D0);
+    rbox(152,y,150,52,10,0x2A2018); frame(152,y,150,52,1,0x5A4A3A); textc(227,y+16,"SQUAD",3,0xF4E4D0);
+    rbox(312,y,156,52,12,0xE8731C); textc(390,y+12,"MARCH!",4,0x101010);
+}
+/* the roster: up to 8 soldiers, the first ones march (as many as the mission takes) */
+#define SQ_Y (TOP+100)
+#define SQ_H 76
 static void draw_camp(void){
     rect(0,TOP,CW,CH-TOP,0x120E0C);
     for(int y=TOP;y<TOP+70;y++){ uint16_t k=rgb(lerpc(0x3A1A10,0x120E0C,(float)(y-TOP)/70)); for(int x=0;x<CW;x++) CV(x,y)=k; }
-    textcs(CW/2,TOP+10,"DRUMFOLK",5,0xE8731C);
+    textcs(CW/2,TOP+8,"SQUAD",4,0xE8731C);
     rbox(120,TOP+48,240,20,10,music_opt?0x3A2A1A:0x1E1814); frame(120,TOP+48,240,20,1,music_opt?0xE8731C:0x4A3A2A);
     textc(CW/2,TOP+54,music_opt?"BEAT: MY MUSIC":"BEAT: DRUMS",1,music_opt?0xFFE0A0:0xC0A080);
-    for(int i=0;i<DG_NMISSION;i++){ int y=TOP+70+i*50; int locked=i>A.cleared, on=i==sel;
-        rbox(12,y,456,44,10,on?0x3A2A1A:0x1E1814); if(on) frame(12,y,456,44,2,0xE8731C);
-        char t[48]; snprintf(t,sizeof t,"%d. %s",i+1,DG_MISSION[i].name);
-        text(24,y+8,t,2,locked?0x5A4A3A:0xF4E4D0);
-        text(24,y+28,locked?"LOCKED":DG_MISSION[i].brief,1,locked?0x4A3A2A:0xC0A080);
-        if(i<A.cleared) text(424,y+14,"OK",2,0x80E080); }
-    /* scout report */
-    int y=TOP+276; text(16,y,"SCOUT REPORT",2,0xE8731C); y+=22;
-    const mission_t*m=&DG_MISSION[sel]; int seen[ET_N]={0};
-    for(int pass=0;pass<2;pass++) for(int i=m->ne-1;i>=0;i--){ int t=m->e[i].type; if(seen[t]) continue;
-        int boss=DG_ETYPE[t].boss>=0; if(pass==0 && !boss) continue; if(pass==1 && boss) continue; seen[t]=1;
-        if(y+9>TOP+448) break;   /* a line is 7 px: keep clear of the SQUAD heading below */
-        text(16,y,DG_ETYPE[t].name,1,boss?0xFF7050:0xF4E4D0); text(130,y,DG_ETYPE[t].hint,1,0xA08870); y+=13; }
-    /* squad */
-    y=TOP+462; text(16,y-14,"SQUAD - TAP TO EQUIP",1,0xE8731C);
-    for(int i=0;i<DG_MAXU;i++){ int x=12+(i%2)*232, yy=y+(i/2)*84; rbox(x,yy,224,78,10,0x1E1814);
-        if(i<A.nsquad){ const loadout_t*l=&A.squad[i];
-            draw_mini_unit(x+30,yy+70,l,1);
-            text(x+60,yy+10,DG_CLASS[l->cls].name,2,DG_CLASS[l->cls].color);
-            text(x+60,yy+34,l->weapon>=0?DG_WEAPON[l->weapon].name:"-",1,0xF4E4D0);
-            text(x+60,yy+50,DG_SHIELD[l->shield].name,1,l->shield?0xC0A080:0x5A4A3A); }
-        else textc(x+112,yy+32,"+ ADD",2,0x8A6A4A); }
-    /* buttons */
-    y=TOP+636; rbox(12,y,224,52,10,0x2A2018); frame(12,y,224,52,1,0x5A4A3A);
+    int cap=dg_deploy(&A,sel); char b[80];
+    snprintf(b,sizeof b,"SLOTS %d/%d   %s TAKES %d",A.slots,DG_MAXU,DG_MISSION[sel].name,DG_MISSION[sel].cap); textc(CW/2,TOP+78,b,1,0xC0A080);
+    for(int i=0;i<DG_MAXU;i++){ int x=12+(i%2)*232, yy=SQ_Y+(i/2)*(SQ_H+6);
+        if(i<A.nsquad){ const loadout_t*l=&A.squad[i]; rbox(x,yy,224,SQ_H,10,0x1E1814); if(i<cap) frame(x,yy,224,SQ_H,1,0x4A6A3A);
+            draw_mini_unit(x+30,yy+SQ_H-6,l,1);
+            text(x+60,yy+8,DG_CLASS[l->cls].name,2,DG_CLASS[l->cls].color);
+            text(x+60,yy+28,l->weapon>=0?DG_WEAPON[l->weapon].name:"-",1,0xF4E4D0);
+            text(x+60,yy+42,DG_SHIELD[l->shield].name,1,l->shield?0xC0A080:0x5A4A3A);
+            text(x+60,yy+58,i<cap?"MARCHES":"RESERVE",1,i<cap?0x80E080:0x8A6A4A); }
+        else if(i<A.slots){ rbox(x,yy,224,SQ_H,10,0x1A1410); textc(x+112,yy+28,"+ ADD",2,0x8A6A4A); }
+        else { rbox(x,yy,224,SQ_H,10,0x100C0A); textc(x+112,yy+20,"LOCKED",2,0x3A2E22); textc(x+112,yy+46,"RESCUE PRISONERS",1,0x4A3A2A); } }
+    textc(CW/2,SQ_Y+4*(SQ_H+6)+6,"TAP A SOLDIER TO EQUIP OR REORDER. THE FIRST ONES MARCH.",1,0x8A6A4A);
+    int y=TOP+636; rbox(12,y,224,52,10,0x2A2018); frame(12,y,224,52,1,0x5A4A3A);
     textc(124,y+10,"RHYTHM TEST",2,0xF4E4D0);
-    { char b[48]; snprintf(b,sizeof b,"TOUCH %+d  PAD %+d  KEYS %+d",off_src[0],off_src[1],off_src[2]); textc(124,y+34,b,1,0xC0A080); }
-    text(8,TOP+4,"HOLD POWER: LEAVE",1,0x6A5A4A);
-    rbox(244,y,224,52,12,0xE8731C); textc(356,y+12,"MARCH!",4,0x101010);
+    { char o[48]; snprintf(o,sizeof o,"TOUCH %+d  PAD %+d  KEYS %+d",off_src[0],off_src[1],off_src[2]); textc(124,y+34,o,1,0xC0A080); }
+    rbox(244,y,224,52,12,0xE8731C); textc(356,y+14,"DONE",3,0x101010);
 }
 static void cycle_weapon(loadout_t*l,int dir){
     for(int n=1;n<=DG_NWEAPON;n++){ int w=((l->weapon<0?0:l->weapon)+dir*n+DG_NWEAPON*4)%DG_NWEAPON;
@@ -1103,7 +1340,7 @@ static void fix_loadout(loadout_t*l){
 static void draw_edit(void){
     rect(0,TOP,CW,CH-TOP,0x120E0C);
     loadout_t*l=&A.squad[slot]; char b[64];
-    snprintf(b,sizeof b,"SQUAD MEMBER %d",slot+1); textcs(CW/2,TOP+12,b,3,0xE8731C);
+    snprintf(b,sizeof b,"SOLDIER %d%s",slot+1,slot<dg_deploy(&A,sel)?"  MARCHES":"  RESERVE"); textcs(CW/2,TOP+12,b,3,0xE8731C);
     const char*lab[3]={"CLASS","WEAPON","SHIELD"};
     for(int r=0;r<3;r++){ int y=TOP+56+r*112; rbox(12,y,456,100,12,0x1E1814);
         text(28,y+8,lab[r],1,0xC0A080);
@@ -1121,6 +1358,8 @@ static void draw_edit(void){
                 textc(CW/2,y+72,s->special&SH_REFLECT?"REFLECTS MISSILES ON GUARD":s->special&SH_THORNS?"HURTS MELEE ATTACKERS":s->special&SH_HEAVY?"HEAVY: SLOWER MARCH":"",1,0xC0A080); } } }
     rbox(12,TOP+396,456,180,12,0x1A1410);
     draw_unit(CW/2,TOP+560,l->cls,l->weapon,l->shield,0,0,0,0,3,1);
+    if(slot>0){ rbox(20,TOP+404,130,40,10,0x3A2A1A); textc(85,TOP+416,"MOVE UP",2,0xF4E4D0); }              /* order = who marches */
+    if(slot<A.nsquad-1){ rbox(330,TOP+404,130,40,10,0x3A2A1A); textc(395,TOP+416,"MOVE DOWN",2,0xF4E4D0); }
     int y=TOP+590; if(A.nsquad>1){ rbox(12,y,180,52,10,0x3A1A14); textc(102,y+18,"REMOVE",2,0xFF8070); }
     rbox(288,y,180,52,12,0xE8731C); textc(378,y+14,"DONE",3,0x101010);
 }
@@ -1128,31 +1367,56 @@ static void draw_result(void){
     rect(0,TOP,CW,CH-TOP,0x120E0C);
     textcs(CW/2,TOP+40,victory?"VICTORY!":"RETREAT...",5,victory?0xFFE040:0xFF6050);
     textc(CW/2,TOP+100,DG_MISSION[sel].name,2,0xC0A080);
-    int y=TOP+150; if(nnew){ textc(CW/2,y,"NEW GEAR",3,0xE8731C); y+=40;
+    int y=TOP+150;
+    if(new_slots){ char b[64]; snprintf(b,sizeof b,"PRISONERS FREED: +%d SOLDIER SLOT (%d/%d)",new_slots,A.slots,DG_MAXU);
+        rbox(12,y-8,456,new_recruit>=0?62:40,10,0x2A3A1A); textc(CW/2,y,b,2,0x90F090);
+        if(new_recruit>=0){ snprintf(b,sizeof b,"A %s JOINS THE SQUAD",DG_CLASS[new_recruit].name); textc(CW/2,y+26,b,2,DG_CLASS[new_recruit].color); }
+        y+=new_recruit>=0?72:48; }
+    if(victory && first_clear){ int opened=0; for(int m=0;m<DG_NMISSION;m++) if(DG_MISSION[m].req==sel) opened++;
+        if(opened){ char b[48]; snprintf(b,sizeof b,"%d NEW MISSION%s ON THE MAP",opened,opened>1?"S":""); textc(CW/2,y,b,2,0xE8731C); y+=36; } }
+    if(nnew){ textc(CW/2,y,"NEW GEAR",3,0xE8731C); y+=40;
         for(int i=0;i<nnew && y<TOP+600;i++){ textc(CW/2,y,code_name(newly[i]),2,0xF4E4D0); y+=26; } }
     else textc(CW/2,y,victory?"NOTHING NEW THIS TIME":"THE SQUAD WILL BE BACK",2,0x8A6A4A);
-    textc(CW/2,TOP+640,"TAP TO RETURN TO CAMP",2,0xC0A080);
+    textc(CW/2,TOP+640,"TAP TO RETURN TO THE MAP",2,0xC0A080);
 }
 static void test_enter(void);
 static void tap(int x,int y){
+    if(st==ST_MAP){
+        for(int m=0;m<DG_NMISSION;m++){ const mission_t*ms=&DG_MISSION[m]; int dx=x-ms->mx, dy=y-ms->my;
+            if(dx*dx+dy*dy>30*30) continue;
+            if(dg_mission_open(&A,m)){ sel=m; st=ST_BRIEF; save_game(); snd(S_KA,0.7f,0); }
+            else { snprintf(map_msg,sizeof map_msg,"LOCKED: CLEAR %s FIRST",DG_MISSION[ms->req].name); map_msg_until=now_us()+2000000; snd(S_MISS,0.6f,0); }
+            return; }
+        if(y>=TOP+636 && x>=300){ st=ST_CAMP; snd(S_TOK,0.7f,0); }
+        return; }
+    if(st==ST_BRIEF){
+        if(y>=TOP+636 && y<TOP+688){
+            if(x<147){ st=ST_MAP; snd(S_TOK,0.6f,0); }
+            else if(x<307){ st=ST_CAMP; snd(S_TOK,0.6f,0); }
+            else { save_game(); snd(S_DUM,1,0); start_battle(); } }
+        return; }
     if(st==ST_CAMP){
         if(y>=TOP+40 && y<TOP+70 && x>=110 && x<370){ music_opt=!music_opt; save_game(); snd(S_TOK,0.7f,0); return; }
-        for(int i=0;i<DG_NMISSION;i++){ int yy=TOP+70+i*50; if(y>=yy&&y<yy+44&&i<=A.cleared){ sel=i; snd(S_TOK,0.7f,0); return; } }
-        int sy=TOP+462; for(int i=0;i<DG_MAXU;i++){ int xx=12+(i%2)*232, yy=sy+(i/2)*84;
-            if(x>=xx&&x<xx+224&&y>=yy&&y<yy+78){ if(i>=A.nsquad){ i=A.nsquad++; A.squad[i]=(loadout_t){CL_LANCER,-1,0}; fix_loadout(&A.squad[i]); }
+        for(int i=0;i<DG_MAXU;i++){ int xx=12+(i%2)*232, yy=SQ_Y+(i/2)*(SQ_H+6);
+            if(x>=xx&&x<xx+224&&y>=yy&&y<yy+SQ_H){
+                if(i>=A.slots){ snd(S_MISS,0.6f,0); return; }
+                if(i>=A.nsquad){ i=A.nsquad++; A.squad[i]=(loadout_t){CL_LANCER,-1,0}; fix_loadout(&A.squad[i]); }
                 slot=i; st=ST_EDIT; snd(S_KA,0.7f,0); return; } }
         int by=TOP+636; if(y>=by&&y<by+52){ if(x<240){ test_enter(); snd(S_TOK,0.6f,0); }
-            else if(x>=244){ save_game(); snd(S_DUM,1,0); start_battle(); } }
+            else if(x>=244){ save_game(); st=ST_BRIEF; snd(S_KA,0.7f,0); } }
         return; }
     if(st==ST_EDIT){ loadout_t*l=&A.squad[slot];
         for(int r=0;r<3;r++){ int yy=TOP+56+r*112; if(y<yy||y>=yy+100) continue; int dir = x<120?-1 : x>360?1 : 0; if(!dir) return;
             if(r==0){ l->cls=(l->cls+dir+CL_N)%CL_N; fix_loadout(l); } if(r==1) cycle_weapon(l,dir); if(r==2 && !DG_CLASS[l->cls].two_handed) cycle_shield(l,dir);
             snd(S_TOK,0.6f,0); return; }
+        if(y>=TOP+404 && y<TOP+444){ int to = x<160 ? slot-1 : x>320 ? slot+1 : -1;
+            if(to>=0 && to<A.nsquad){ loadout_t t=A.squad[to]; A.squad[to]=A.squad[slot]; A.squad[slot]=t; slot=to; snd(S_TOK,0.6f,0); }
+            return; }
         int by=TOP+590; if(y>=by&&y<by+52){
             if(x<192 && A.nsquad>1){ for(int i=slot;i<A.nsquad-1;i++) A.squad[i]=A.squad[i+1]; A.nsquad--; st=ST_CAMP; save_game(); }
             else if(x>=288){ st=ST_CAMP; save_game(); snd(S_KA,0.7f,0); } }
         return; }
-    if(st==ST_RESULT){ st=ST_CAMP; if(sel<A.cleared && sel<DG_NMISSION-1 && victory) sel++; return; }
+    if(st==ST_RESULT){ st=ST_MAP; return; }
 }
 
 /* ======================================================================= rhythm test
@@ -1274,10 +1538,12 @@ static void poll_touch(void){
 }
 static int64_t pwr_t; static int pwr_down;
 static void test_leave(void);
-static void short_back(void){                                       /* short power / Joy-Con minus: pause, or back to camp */
+static void short_back(void){                                       /* short power / Joy-Con minus: pause, or one screen back */
     if(st==ST_BATTLE && end_t<=0){ if(!paused){ paused=1; bk_on=0; } else resume_play(); }
     else if(st==ST_TEST) test_leave();
-    else if(st!=ST_CAMP && st!=ST_BATTLE){ if(st==ST_LISTEN) music_stop(); st=ST_CAMP; save_game(); }
+    else if(st==ST_EDIT){ st=ST_CAMP; save_game(); }
+    else if(st==ST_CAMP||st==ST_LISTEN){ if(st==ST_LISTEN) music_stop(); st=ST_BRIEF; save_game(); }
+    else if(st==ST_BRIEF||st==ST_RESULT){ st=ST_MAP; save_game(); }
 }
 static void poll_keys(void){
     struct input_event e;
@@ -1315,8 +1581,11 @@ static void write_ppm(const char*path){ FILE*f=fopen(path,"wb"); if(!f) return; 
     for(int y=t0;y<CH;y++) for(int x=0;x<CW;x++){ uint16_t c=CV(x,y); fputc((c>>11)<<3,f); fputc(((c>>5)&63)<<2,f); fputc((c&31)<<3,f); }
     fclose(f); }
 static int shot(const char*scene,const char*out){
-    dg_armory_default(&A); A.cleared=3; A.weapons=0xFFFFFFFFu; A.shields=0xFFu;
+    dg_armory_default(&A); A.done=0x1FF; A.rescued=1u<<4|1u<<6; A.slots=6; A.weapons=0xFFFFFFFFu; A.shields=0x1FFu;
+    A.nsquad=6; A.squad[4]=(loadout_t){CL_BREAKER,25,0}; A.squad[5]=(loadout_t){CL_WARDEN,23,7}; sel=7;
     if(!strcmp(scene,"camp")) draw_camp();
+    else if(!strcmp(scene,"map")) draw_map();
+    else if(!strncmp(scene,"brief",5)){ if(scene[5]==':') sel=atoi(scene+6); draw_brief(); }
     else if(!strcmp(scene,"edit")){ slot=1; A.squad[1]=(loadout_t){CL_LANCER,4,5}; draw_edit(); }
     else if(!strcmp(scene,"test")){ test_enter(); for(int i=0;i<14;i++){ test_hit(i%3==0?SRC_PAD:SRC_TOUCH,test_t0+i*test_beat+(i%3==0?7200:1200+(i%4)*700)); } draw_test(0); }
     else if(!strncmp(scene,"battle:",7)){ int m=0,x=600; char boss[8]=""; sscanf(scene+7,"%d:%d:%7s",&m,&x,boss); if(strstr(scene,"land")){ set_mode(1); if(!strncmp(boss,"land",4)) boss[0]=0; }
@@ -1340,6 +1609,13 @@ int main(int argc,char**argv){
     setvbuf(stderr,NULL,_IONBF,0); signal(SIGSEGV,on_crash); signal(SIGBUS,on_crash); signal(SIGFPE,on_crash);
     synth_init();
     if(argc>3 && !strcmp(argv[1],"--shot")) return shot(argv[2],argv[3]);
+    if(argc>1 && !strcmp(argv[1],"--savecheck")){                       /* what a save holds, after conversion */
+        load_game(); printf("missions done 0x%03x (%d/%d), rescued 0x%03x, slots %d, squad %d, weapons 0x%08x, shields 0x%03x, sel %d, music %d, offsets %d %d %d\n",
+            A.done,done_n(),DG_NMISSION,A.rescued,A.slots,A.nsquad,A.weapons,A.shields,sel,music_opt,off_src[0],off_src[1],off_src[2]);
+        for(int i=0;i<A.nsquad;i++) printf("  %d %s / %s / %s\n",i+1,DG_CLASS[A.squad[i].cls].name,A.squad[i].weapon>=0?DG_WEAPON[A.squad[i].weapon].name:"-",DG_SHIELD[A.squad[i].shield].name);
+        if(argc>2 && !strcmp(argv[2],"--roundtrip")){ armory_t a0=A; int s0=sel; save_game(); load_game();
+            int ok=!memcmp(&a0,&A,sizeof A) && s0==sel; printf("v4 round trip: %s\n",ok?"identical":"DIFFERENT"); return !ok; }
+        return 0; }
     if(argc>3 && !strcmp(argv[1],"--audiotest")){        /* r3drum --audiotest PERIOD COUNT: 4 s of beat */
         struct pcm_config cfg; memset(&cfg,0,sizeof cfg); int P=atoi(argv[2]), N=atoi(argv[3]);
         cfg.channels=2; cfg.rate=DR_RATE; cfg.period_size=P; cfg.period_count=N; cfg.format=PCM_FORMAT_S16_LE;
@@ -1361,6 +1637,7 @@ int main(int argc,char**argv){
                (c1.tv_sec-c0.tv_sec)+(c1.tv_nsec-c0.tv_nsec)/1e9);
         pcm_close(pcm); return 0; }
     load_game(); for(int i=0;i<A.nsquad;i++) fix_loadout(&A.squad[i]);
+    demo = getenv("R3DRUM_DEMO")!=NULL;
     int fd=open("/dev/fb0",O_RDWR); struct fb_var_screeninfo vi; struct fb_fix_screeninfo fi;
     if(fd<0||ioctl(fd,FBIOGET_VSCREENINFO,&vi)||ioctl(fd,FBIOGET_FSCREENINFO,&fi)){ fprintf(stderr,"no fb\n"); return 1; }
     vi.xoffset=0; vi.yoffset=0; ioctl(fd,FBIOPAN_DISPLAY,&vi);
@@ -1376,7 +1653,7 @@ int main(int argc,char**argv){
     anchor_us=now_us();
     pthread_t at; pthread_create(&at,NULL,audio_thread,NULL);
     /* no real-time priority: a misbehaving audio loop must never be able to starve the device */
-    fprintf(stderr,"[r3drum] start, sound %s, cleared %d\n",pcm||bt_fd>=0?out_name:"off",A.cleared);
+    fprintf(stderr,"[r3drum] start, sound %s, cleared %d/%d, slots %d\n",pcm||bt_fd>=0?out_name:"off",done_n(),DG_NMISSION,A.slots);
     if(argc>2 && !strcmp(argv[1],"--battle")){ sel=atoi(argv[2]); if(sel<0||sel>=DG_NMISSION) sel=0; start_battle(); }   /* testing */
     int64_t last=now_us(); uint32_t vt=0;
     while(!quit){
@@ -1386,6 +1663,7 @@ int main(int argc,char**argv){
         { int want=(st==ST_BATTLE||st==ST_LISTEN) && pad_count()>0; if(want!=land) set_mode(want); }
         if(st==ST_LISTEN) listen_tick(dt);
         if(st==ST_BATTLE) draw_battle(); else if(st==ST_CAMP) draw_camp(); else if(st==ST_EDIT) draw_edit();
+        else if(st==ST_MAP) draw_map(); else if(st==ST_BRIEF) draw_brief();
         else if(st==ST_LISTEN) draw_listen(); else if(st==ST_TEST) draw_test(dt); else draw_result();
         present();
         if(r3_tick_ms()<vb_until) vb_draw(fb,fbstride,land,vol);
