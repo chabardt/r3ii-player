@@ -2,7 +2,8 @@
 
 A fast, minimalist music-player firmware UI for the **HiBy R3 Pro II** DAP. It replaces
 the stock `hiby_player` interface with a clean, touch- and button-driven player that boots
-straight to your library, with Bluetooth, games and a music server built in.
+straight to your library, with genre-based discovery, Bluetooth, games and a music server
+built in.
 
 Built from scratch in C on **LVGL**, running as static MIPS binaries directly on the
 device's framebuffer. No HiBy code is included — the firmware interop was reverse-engineered
@@ -25,6 +26,10 @@ for this one model.
 | <img src="docs/screenshots/settings.png" width="220"> | <img src="docs/screenshots/watchface.png" width="220"> | |
 | **Playlists & nearby devices** | **Import a shared playlist** | **New playlist** |
 | <img src="docs/screenshots/playlists.png" width="220"> | <img src="docs/screenshots/sharing.png" width="220"> | <img src="docs/screenshots/newplaylist.png" width="220"> |
+| **Explorer: genres** | **Explorer: subgenres** | **Explorer: artist card** |
+| <img src="docs/screenshots/explorer.png" width="220"> | <img src="docs/screenshots/explorer_subgenres.png" width="220"> | <img src="docs/screenshots/explorer_card.png" width="220"> |
+| **Drumfolk: world map** | **Drumfolk: briefing** | **Drumfolk: boss fight** |
+| <img src="docs/screenshots/drumfolk_map.png" width="220"> | <img src="docs/screenshots/drumfolk_brief.png" width="220"> | <img src="docs/screenshots/drumfolk_boss.png" width="220"> |
 
 ---
 
@@ -38,12 +43,15 @@ for this one model.
   MP4 cover), a **seekable progress bar**, play/pause, and **album auto-advance**.
 - **Resume** the last track across power-off.
 - Formats: **MP3, FLAC, WAV, M4A/AAC** (minimp3 / dr_flac / dr_wav / faad2+minimp4).
-- Dark theme (black + orange), retro-styled home menu: **Music · Podcasts · Games · Settings**.
+- Dark theme (black + orange), home menu: **Music · Explorer · Podcasts · Playlists · Games ·
+  Settings**.
+- After 30 s idle: Now Playing if music plays, else an analog **watch face**; the screen
+  turns off on its own (Settings › Display) while music keeps playing.
 - **Podcasts** tab browses a separate `Others/` folder on the card.
 
 **Controls**
-- **Power button:** short press → Now Playing; press again → back; **long press → power off**
-  (saves the current track to resume on next boot).
+- **Power button:** short press → Now Playing; press again → back; **double press → Home**;
+  **long press → power off** (saves the current track to resume on next boot).
 - **Touch lock:** press **Power + Volume** together (either volume key, either order) to lock
   the touchscreen — touches are ignored and can't wake the screen, so it's safe in a pocket,
   while the hardware keys keep working. A padlock shows in the corner; the same combo unlocks.
@@ -71,8 +79,11 @@ for this one model.
   artist** (same subgenre, then same genre, close in era), **Different artist**, and **Keep**
   (adds the album to a `Discovered` playlist).
 - **Explorer radio:** when an album started from Explorer ends, an album by a similar artist
-  follows. **Double-press ▶▶** to jump to it right away; the orange button on Now Playing
-  returns to the artist card.
+  follows. **Double-press ▶▶** to jump to it right away; the orange button (or ← back) on Now
+  Playing returns to the artist card, and **Browse this album** opens its track list —
+  picking a song there keeps the radio going.
+- Explorer **remembers where you were**: the tile reopens the current artist card, and the
+  radio carries on after a restart if its album is the one resumed.
 - Genres come from the files' tags, cleaned up (`Punkrock` = `Punk Rock`, `métal`, `B.O.`…);
   each artist gets the genre most of its tracks have. Fix or complete them in `Genres.txt`
   at the root of the card:
@@ -109,12 +120,17 @@ for this one model.
 - **Doom** (`doomgeneric`) — supply your own `doom.wad` / `doom2.wad`.
 - **Blockfall** (Tetris-style), **Brickstorm** (breakout), **Coil** (snake-style),
   **Sapper** (minesweeper-style), all from scratch.
-- **Drumfolk**, a rhythm-marching battle game: drum commands on the beat (or the beat of your
-  own songs) to lead a squad through 12 missions on a world map, two acts and six lands.
-  Gear beats foes (crush cracks armour, fire burns wood, only ranged hits flyers…), bosses
-  telegraph their blows, and in fever the squad dances on the beat. Rescue missions free caged
-  prisoners: they fight with you on the spot and win a soldier slot for good (squad of 4 → 8);
-  each mission sets how many march.
+- **Drumfolk**, a rhythm-marching battle game (from scratch): drum four-beat commands —
+  MARCH, STRIKE, GUARD, RETREAT, RALLY, and the SPECIAL in super fever — on the beat of a
+  built-in drum track or **of your own songs** (the beat is detected), with the touch pads,
+  the R3's keys or a Bluetooth controller (landscape).
+  - **12 missions on a world map**, two acts and six lands (forest, desert, snow, volcano,
+    swamp, peaks), each with forts, a sub-boss and a boss that telegraphs its blows.
+  - **Gear beats foes:** crush cracks armour, fire burns wood, only ranged units hit flyers,
+    missiles glance off shieldbearers, blastcaps explode — 5 classes, 30 weapons, 9 shields.
+  - **Squads of up to 8:** rescue missions free caged prisoners who fight with you on the spot
+    and win a soldier slot for good (4 → 8); each mission sets how many march.
+  - In fever the squad **dances on the beat**; a rhythm test measures each input's latency.
 - **Game Boy** emulator (`Peanut-GB`) — supply your own ROMs.
 - **Game Boy Advance** emulator (`gpSP` with its MIPS dynarec, full speed) — your own ROMs in
   `Games/GBA`, optional `gba_bios.bin`; landscape with a controller, save + resume on quit.
@@ -150,6 +166,8 @@ Put your content on the microSD like this:
 /Games/GameBoy/*.gb                      # your Game Boy ROMs
 /Games/GBA/*.gba                         # your GBA ROMs (+ optional gba_bios.bin)
 /Fonts/*.ttf                             # optional: font for CJK names
+/Playlists/*.m3u                         # your playlists + Favorites / Discovered (made by the player)
+/Genres.txt                              # optional: genre corrections for Explorer (see above)
 ```
 
 Album art is read from the audio files' embedded tags (no separate cover files needed).
@@ -166,10 +184,17 @@ sh scripts/build.sh        # the player UI + audio  -> build/r3player
 sh scripts/build_doom.sh   # Doom                   -> build/r3doom
 sh scripts/build_gb.sh     # Game Boy               -> build/r3gb
 sh scripts/build_gba.sh    # Game Boy Advance       -> build/r3gba
-sh scripts/build_srv.sh    # music server           -> build/r3srv
+sh scripts/build_drum.sh   # Drumfolk               -> build/r3drum
+sh scripts/build_srv.sh    # music server + radio   -> build/r3srv
 ```
 
 No make/cmake needed. All third-party code is vendored under `vendor/`.
+
+Host tests (plain `gcc` on a PC) live in `tests/`: game rules and an autopilot that plays every
+Drumfolk mission (`drum_game_test.c`), the genre clean-up and Explorer on a real library index
+(`genre_test.c`, `explore_test.c`), and the other games' cores; each file's header has its
+command line. `r3drum --shot <scene>` renders Drumfolk screens to an image, and
+`R3DRUM_DEMO=1` makes it drum by itself (testing on the device).
 
 ---
 
@@ -214,12 +239,14 @@ slot (B) is left intact, so a stock restore is always available.
 ## Repo layout
 
 ```
-src/ui/      player UI (main, audio, bt, pad, cover, games, settings…)
-src/doom/    Doom backend        src/gb/   Game Boy frontend
-src/net/     r3srv music server  src/bringup/ dev/bring-up helpers
-scripts/     build.sh + per-component build scripts + build_upt.sh
+src/ui/      player UI (main, audio, bt, pad, cover, smartmix index, genre + explore, games…)
+src/drum/    Drumfolk            src/doom/ Doom backend
+src/gb/      Game Boy frontend   src/gba/  Game Boy Advance frontend
+src/net/     r3srv music server + radio     src/bringup/ dev/bring-up helpers (r3tap…)
+scripts/     build scripts, build_upt.sh, lang.py (translations), genres_mb.py (MusicBrainz)
+lang/        translations (.po)  tests/    host tests
 device/      modified launcher (hiby_player.sh)
-docs/        DEVICE_R3PROII.md (hardware), PERSIST.md (install), PLAN.md
+docs/        DEVICE_R3PROII.md (hardware), PERSIST.md (install), TRANSLATING.md, PLAN.md
 vendor/      third-party libraries (see Credits)
 ```
 
