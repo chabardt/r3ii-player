@@ -17,6 +17,11 @@
 #define SD_ROOT  "/usr/data/mnt/sd_0"
 #define IDX_CACHE "/usr/data/r3_mix.idx"
 #define FULL_FLAG "/usr/data/r3_mix.full"    /* present once genre/year enrichment has finished */
+#define TAGS_VER 2      /* in FULL_FLAG: 2 = every genre value kept ("a;b"), M4A tags read */
+static volatile int g_version;   /* bumped whenever tags / the index change (explore.c rebuilds) */
+static int tags_ver(void){ FILE*f=fopen(FULL_FLAG,"r"); int v=0; if(!f) return -1;
+    if(fscanf(f,"%d",&v)!=1) v=1; fclose(f); return v; }   /* old builds left an empty flag = v1 */
+static void mark_full(void){ FILE*f=fopen(FULL_FLAG,"w"); if(f){ fprintf(f,"%d\n",TAGS_VER); fclose(f); } }
 #define STATS_FILE "/usr/data/r3_stats"
 #define FAV_M3U  SD_ROOT "/Playlists/Favorites.m3u"
 #define BLISS_FILE SD_ROOT "/.r3bliss"     /* PC-built: <rel>\t f0 f1 ... per line */
@@ -41,6 +46,11 @@ static const char* rel_of(const char*full){ size_t n=strlen(SD_ROOT); return !st
 static int y4(const char*s){ while(*s&&!isdigit((unsigned char)*s))s++; int y=atoi(s); return (y>=1900&&y<=2100)?y:0; }
 
 /* --- read genre + year from the first part of a track --- */
+static int valid_utf8(const unsigned char*t,int n){ int multi=0;
+    for(int k=0;k<n&&t[k];){ unsigned c=t[k]; int l= c<0x80?1 : (c>>5)==6?2 : (c>>4)==14?3 : (c>>3)==30?4 : 0;
+        if(!l||k+l>n) return 0; for(int m=1;m<l;m++) if((t[k+m]&0xC0)!=0x80) return 0;
+        if(l>1) multi=1; k+=l; }
+    return multi; }
 static unsigned sid(const unsigned char*p){ return ((p[0]&0x7f)<<21)|((p[1]&0x7f)<<14)|((p[2]&0x7f)<<7)|(p[3]&0x7f); }
 static void id3_text(const unsigned char*b,int n,const char*id,char*out,int cap){ out[0]=0;
     if(n<10||memcmp(b,"ID3",3)) return; int ver=b[3]; long sz=sid(b+6); int i=10; if(sz>n)sz=n;
@@ -48,16 +58,41 @@ static void id3_text(const unsigned char*b,int n,const char*id,char*out,int cap)
         long fs = ver==4 ? (long)sid(b+i+4) : (((long)b[i+4]<<24)|((long)b[i+5]<<16)|((long)b[i+6]<<8)|b[i+7]);
         if(fs<=0||i+10+fs>n) break;
         if(!memcmp(b+i,id,4)){ const unsigned char*d=b+i+10; int enc=d[0]; const unsigned char*t=d+1; int tl=fs-1;
-            /* stop at the first NUL: ID3v2.4 separates multiple values (e.g. several genres)
-             * with NUL — without this they concatenate into "Alternative MetalAlternative Rock". */
-            int j=0; if(enc==1||enc==2){ for(int k=0;k+1<tl&&j<cap-1;k+=2){ unsigned char c=enc==1?t[k]:t[k+1]; if(c==0)break; if(c>=32)out[j++]=c; } }
-            else { for(int k=0;k<tl&&j<cap-1;k++){ unsigned char c=t[k]; if(c==0)break; if(c>=32)out[j++]=c; } }
+            /* ID3v2.4 separates several values (e.g. genres) with NUL: keep them all, as
+             * "Heavy Metal;Power Metal" (glued, they used to read "Heavy MetalPower Metal") */
+            int j=0, sep=0; const int w=(enc==1||enc==2)?2:1;
+            /* enc 0 is Latin-1 by the spec, but many taggers put UTF-8 there: keep valid UTF-8 as is */
+            int utf8 = enc==3 || (enc==0 && valid_utf8(t,tl));
+            if(w==2 && tl>=2 && ((t[0]==0xFF&&t[1]==0xFE)||(t[0]==0xFE&&t[1]==0xFF))){ if(enc==1) enc=t[0]==0xFF?1:2; t+=2; tl-=2; }  /* BOM */
+            for(int k=0;k+w-1<tl&&j<cap-2;k+=w){
+                unsigned char c = w==1 ? t[k] : enc==1 ? t[k] : t[k+1];
+                unsigned char hi = w==1 ? 0 : enc==1 ? t[k+1] : t[k];
+                if(c==0&&hi==0){ sep=1; if(w==2 && k+3<tl && t[k+2]==0xFF && t[k+3]==0xFE) k+=2; continue; }  /* next value (maybe with a BOM) */
+                if(hi || c<32) continue;          /* UTF-16 beyond Latin-1 / control chars: skip */
+                if(sep && j){ out[j++]=';'; } sep=0;
+                if(c<0x80 || utf8) out[j++]=(char)c;  /* UTF-8 text (enc 3, or enc 0 written as UTF-8 anyway) */
+                else if(j<cap-3){ out[j++]=(char)(0xC0|(c>>6)); out[j++]=(char)(0x80|(c&0x3F)); } }   /* Latin-1 -> UTF-8 */
             out[j]=0; return; }
         i+=10+fs; }
 }
+/* value of a Vorbis comment; a key present several times (GENRE=Metal, GENRE=Rock) gives "Metal;Rock" */
 static void vorbis_field(const char*b,int n,const char*key,char*out,int cap){ out[0]=0;
-    int kl=strlen(key); for(int i=0;i+kl<n;i++){ if(!strncasecmp(b+i,key,kl)&&b[i+kl]=='='){ int j=0,k=i+kl+1;
-        while(k<n&&b[k]>=32&&j<cap-1) out[j++]=b[k++]; out[j]=0; return; } }
+    int kl=strlen(key), j=0;
+    for(int i=0;i+kl<n;i++){ if(strncasecmp(b+i,key,kl)||b[i+kl]!='=') continue;
+        if(i>0 && isalpha((unsigned char)b[i-1])) continue;          /* SUBGENRE= is not GENRE= */
+        if(j && j<cap-1) out[j++]=';';
+        int k=i+kl+1; while(k<n&&(unsigned char)b[k]>=32&&j<cap-1) out[j++]=b[k++];
+        i=k; }
+    out[j]=0;
+}
+/* MP4/M4A: the text of an ilst atom ("\xA9gen", "\xA9day") — size, name, then a "data" atom */
+static void mp4_text(const unsigned char*b,int n,const char*name,char*out,int cap){ out[0]=0;
+    for(int i=4;i+24<n;i++){ if(memcmp(b+i,name,4)||memcmp(b+i+8,"data",4)) continue;
+        long dsz=((long)b[i+4]<<24)|((long)b[i+5]<<16)|((long)b[i+6]<<8)|b[i+7];
+        int len=(int)dsz-16, j=0; const unsigned char*t=b+i+20;
+        if(len<=0||t+len>b+n) continue;
+        for(int k=0;k<len&&j<cap-1;k++) if(t[k]>=32||t[k]>=0x80) out[j++]=(char)t[k];
+        out[j]=0; return; }
 }
 static void read_meta(const char*full,char*genre,int gcap,int*year){
     genre[0]=0; *year=0;
@@ -72,6 +107,13 @@ static void read_meta(const char*full,char*genre,int gcap,int*year){
     } else if(!memcmp(buf,"fLaC",4)){ char yr[16];
         vorbis_field((char*)buf,n,"GENRE",genre,gcap);
         vorbis_field((char*)buf,n,"DATE",yr,sizeof yr); if(!yr[0]) vorbis_field((char*)buf,n,"YEAR",yr,sizeof yr); *year=y4(yr);
+    } else if(n>12 && !memcmp(buf+4,"ftyp",4)){ char yr[16];   /* M4A: tags in moov/udta/meta/ilst */
+        mp4_text(buf,n,"\xA9gen",genre,gcap); mp4_text(buf,n,"\xA9day",yr,sizeof yr);
+        if(!genre[0] && !yr[0]){                                /* moov at the end of the file */
+            f=fopen(full,"rb"); if(f){ if(fseek(f,-(long)sizeof buf,SEEK_END)!=0) fseek(f,0,SEEK_SET);
+                n=(int)fread(buf,1,sizeof buf,f); fclose(f);
+                mp4_text(buf,n,"\xA9gen",genre,gcap); mp4_text(buf,n,"\xA9day",yr,sizeof yr); } }
+        *year=y4(yr);
     }
 }
 static int is_audio(const char*n){ const char*d=strrchr(n,'.'); if(!d)return 0;
@@ -99,14 +141,23 @@ static void walk_paths(const char*dir,int artist){
 }
 /* PHASE 2 — open each track and read genre + year (the slow pass). Runs in the background
  * after phase 1; browsing + artist-based mixes already work while this fills in tags. */
-static void enrich_all(void){
-    for(int i=0;i<NE;i++){
+#define PROG_FILE "/usr/data/r3_mix.prog"   /* tag pass in progress: "<next track> <track count>" */
+static void save_cache(void);
+/* The tag pass reads ~24k files (tens of minutes on the R3's SD): checkpoint it, so a reboot
+ * resumes where it stopped instead of starting over. */
+static void enrich_all(int from){
+    for(int i=from;i<NE;i++){
         char full[1024]; snprintf(full,sizeof full,"%s/%s",SD_ROOT,E[i].rel);
-        char genre[48]; int yr; read_meta(full,genre,sizeof genre,&yr);
+        char genre[200]; int yr; read_meta(full,genre,sizeof genre,&yr);
         E[i].genre = genre[0]?intern(GEN,&NGEN,genre):-1; E[i].yr=yr;
-        if((i&63)==0) usleep(300);   /* yield to playback/UI periodically */
+        /* leave the SD to playback: a track starting waits behind these reads */
+        if((i&7)==7) usleep(15000);
+        if(i%1500==1499){ save_cache(); FILE*f=fopen(PROG_FILE,"w"); if(f){ fprintf(f,"%d %d\n",i+1,NE); fclose(f); } }
     }
+    remove(PROG_FILE);
 }
+static int enrich_resume_at(void){ FILE*f=fopen(PROG_FILE,"r"); int at=0,n=0; if(!f) return 0;
+    if(fscanf(f,"%d %d",&at,&n)!=2 || n!=NE || at<0 || at>NE) at=0; fclose(f); return at; }
 
 static void load_stats(void){ FILE*f=fopen(STATS_FILE,"r"); if(!f) return; char l[1200];
     while(fgets(l,sizeof l,f)){ l[strcspn(l,"\n")]=0; char*t1=strchr(l,'\t'); if(!t1)continue; *t1=0;
@@ -165,10 +216,12 @@ static void* idx_thread(void*a){ (void)a;
     g_ready=1;                        /* browsing + artist mixes available from here */
     { FILE*r=fopen("/tmp/r3mix.ready","w"); if(r){ fprintf(r,"%d tracks ready\n",NE); fclose(r); } }
     if(!cached) save_cache();         /* persist paths right away */
-    /* phase 2: enrich genre/year unless the cache already had them (or a prior run finished it) */
-    int full = (access(FULL_FLAG,F_OK)==0) || g_cache_has_genre;
-    if(!full && NE>0){ enrich_all(); save_cache(); }
-    if(NE>0){ FILE*ff=fopen(FULL_FLAG,"w"); if(ff) fclose(ff); }
+    /* phase 2: enrich genre/year unless the cache already had them from this tag reader
+     * (an older reader dropped or glued multi-value genres: re-read them once) */
+    int full = tags_ver()>=TAGS_VER;
+    g_version++;
+    if(!full && NE>0){ enrich_all(cached?enrich_resume_at():0); save_cache(); g_version++; }
+    if(NE>0) mark_full();
     FILE*m=fopen("/tmp/r3mix.done","w"); if(m){ fprintf(m,"%d tracks (%s), %d with vectors\n",NE,cached?"cached":"scanned",VEC?1:0); fclose(m); }
     return 0;
 }
@@ -178,6 +231,15 @@ void smartmix_start(const char*music_root){
     pthread_create(&t,&at,idx_thread,0); pthread_attr_destroy(&at); pthread_detach(t);
 }
 int smartmix_ready(void){ return g_ready; }
+int smartmix_version(void){ return g_ready ? g_version : 0; }
+int smartmix_tags_done(void){ return tags_ver()>=TAGS_VER; }
+int smartmix_each(smartmix_track_fn fn,void*u){
+    if(!g_ready) return -1;
+    pthread_mutex_lock(&mu);
+    for(int i=0;i<NE;i++){ const ent_t*e=&E[i];
+        fn(u,e->rel, e->artist>=0?ART[e->artist]:"", e->genre>=0?GEN[e->genre]:"", e->yr, e->plays, e->skips, e->fav); }
+    pthread_mutex_unlock(&mu);
+    return NE; }
 int smartmix_count(void){ return NE; }
 
 /* --- index-backed browsing: enumerate the index instead of hitting the slow SD --- */
@@ -233,12 +295,13 @@ static void reset_index(void){
 static void* rescan_thread(void*a){ (void)a;
     g_ready=0;              /* browser falls back to live SD reads while we rebuild */
     reset_index(); g_cache_has_genre=0;
-    remove(IDX_CACHE); remove(FULL_FLAG);
+    remove(IDX_CACHE); remove(FULL_FLAG); remove(PROG_FILE);
     walk_paths(g_root,-1);                 /* phase 1 */
     load_stats(); load_fav(); load_bliss();
     g_ready=1; save_cache();
-    enrich_all(); save_cache();            /* phase 2 */
-    { FILE*ff=fopen(FULL_FLAG,"w"); if(ff) fclose(ff); }
+    g_version++;
+    enrich_all(0); save_cache();           /* phase 2 */
+    mark_full(); g_version++;
     FILE*m=fopen("/tmp/r3mix.done","w"); if(m){ fprintf(m,"%d tracks (rescan), %d with vectors\n",NE,VEC?1:0); fclose(m); }
     return 0;
 }

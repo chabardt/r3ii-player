@@ -25,4 +25,15 @@ int  smartmix_listdir(const char *dir, char names[][256], char *isdir, int cap);
 int  smartmix_folder(const char *dir, char out[][1024], int cap);
 /* Forget the cache and re-scan the SD in the background (Settings "Rescan library"). */
 void smartmix_rescan(void);
+
+/* --- raw access for explore.c --- */
+/* changes whenever the index or its tags change (0 = not ready yet) */
+int  smartmix_version(void);
+/* 1 once every track's tags were read by the current tag reader (else still re-reading) */
+int  smartmix_tags_done(void);
+/* call fn for every indexed track (rel = path under the SD root, genre may hold several values
+ * separated by ';'); returns the track count, -1 if the index isn't ready */
+typedef void (*smartmix_track_fn)(void*u,const char*rel,const char*artist,const char*genre,
+                                  int year,int plays,int skips,int fav);
+int  smartmix_each(smartmix_track_fn fn,void*u);
 #endif
