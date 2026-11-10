@@ -87,6 +87,11 @@ for this one model.
 **Wi-Fi & music server**
 - Wi-Fi settings; **r3srv**, a UPnP/DLNA + HTTP server that serves your library (incl. album art)
   over the network.
+- **R3 radio for VLC:** an endless mix from the library, Explorer-style (an album, then a
+  similar artist's album…), streamed straight from the card in original quality. Open
+  `http://<R3 address>:8200/radio` for the genres and subgenres, or paste a link like
+  `http://<R3 address>:8200/radio.m3u?genre=Metal&sub=Power%20metal` in VLC (Media > Open
+  Network Stream). Also under VLC's Local Network > Universal Plug'n'Play > R3 Radio.
 
 **Languages**
 - **English** and **Français** (Settings → Language); accents and non-ASCII names display

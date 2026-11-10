@@ -28,6 +28,7 @@ const char* explore_fam_name(int fam);   /* English, translate with _() */
 int  explore_subs(int fam,int*ids,int cap);
 const char* explore_sub_name(int id);
 int  explore_sub_artists(int id);
+int  explore_sub_fam(int id);             /* main genre of a subgenre */
 
 /* pick a random artist: fam -1 = any, sub -1 = any in the family. Prefers artists you play
  * little and skips those seen recently. Returns an artist index or -1. */

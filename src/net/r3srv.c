@@ -6,6 +6,10 @@
  *         /f/<file>    the file, with Range (seeking)
  * One poll() loop, no threads. Folders are read when browsed (no scan, no database).
  *
+ *   Radio: /radio (page), /radio.m3u?genre=Metal[&sub=Power metal] — an endless Explorer-style mix
+ *         (an album, then a similar artist's album...), and "R3 Radio" folders over UPnP.
+ *         Genres come from r3player's library index (/usr/data/r3_mix.idx) and <ROOT>/Genres.txt.
+ *
  *   r3srv [-r ROOT] [-p PORT] [-n NAME] [-m MAXSTREAMS] [-u UUIDFILE] [-s STATUSFILE]
  */
 #define _GNU_SOURCE
@@ -28,6 +32,8 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include "explore.h"
+#include "smartmix.h"
 
 static const char *ROOT = "/usr/data/mnt/sd_0", *NAME = "HiBy R3", *UUIDF = "/usr/data/r3srv_uuid", *STATF = NULL;
 static int PORT = 8200, MAXSTREAMS = 8;
@@ -291,6 +297,7 @@ static void page_browse(conn_t *c, const char *rel) {
                 "a{color:#e8731c;text-decoration:none}li{margin:6px 0}.m{color:#8a6a4a;font-size:13px}</style>"
                 "<h2>"); bxml(&b, NAME); bprintf(&b, "</h2><p>/"); bxml(&b, rel);
     if (rel[0]) { bprintf(&b, " &nbsp; <a href='/m3u/"); burl(&b, rel); bprintf(&b, "'>&#9654; play all (m3u for VLC)</a>"); }
+    if (!rel[0]) bprintf(&b, " &nbsp; <a href='/radio'>&#128251; radio</a>");
     bprintf(&b, "</p><ul>");
     if (rel[0]) { char up[1024]; snprintf(up, sizeof up, "%s", rel); char *s = strrchr(up, '/'); if (s) *s = 0; else up[0] = 0;
         bprintf(&b, "<li><a href='/browse/"); burl(&b, up); bprintf(&b, "'>..</a>"); }
@@ -474,6 +481,7 @@ static void soap_fault(conn_t *c, int code, const char *desc) {
         "<errorCode>%d</errorCode><errorDescription>%s</errorDescription></UPnPError></detail></s:Fault></s:Body></s:Envelope>", code, desc);
     respond(c, 500, "text/xml; charset=\"utf-8\"", body, n, NULL);
 }
+static int radio_browse(buf_t *d, const char *host, const char *id, int meta, int start, int count, int *total);
 static void cds_control(conn_t *c, const char *soapaction, const char *body) {
     const char *svc = "urn:schemas-upnp-org:service:ContentDirectory:1";
     if (strstr(soapaction, "GetSystemUpdateID")) { buf_t i = { 0 }; bprintf(&i, "<Id>1</Id>"); soap_reply(c, "GetSystemUpdateID", svc, &i); return; }
@@ -484,16 +492,17 @@ static void cds_control(conn_t *c, const char *soapaction, const char *body) {
     soap_arg(body, "ObjectID", id, sizeof id); soap_arg(body, "BrowseFlag", flag, sizeof flag);
     soap_arg(body, "StartingIndex", si, sizeof si); soap_arg(body, "RequestedCount", rc, sizeof rc);
     const char *rel = rel_of_id(id);
-    if (!safe_rel(rel)) { soap_fault(c, 701, "No such object"); return; }
     int start = atoi(si), count = atoi(rc); if (count <= 0) count = 1 << 30;
     buf_t d = { 0 }; int returned = 0, total = 0;
     bprintf(&d, "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" "
                 "xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\">");
+    if (!strncmp(id, "radio:", 6)) { returned = radio_browse(&d, c->host, id, !strcmp(flag, "BrowseMetadata"), start, count, &total); goto done; }
+    if (!safe_rel(rel)) { free(d.p); soap_fault(c, 701, "No such object"); return; }
     char parent[1024]; snprintf(parent, sizeof parent, "%s", rel); { char *s = strrchr(parent, '/'); if (s) *s = 0; else snprintf(parent, sizeof parent, "%s", rel[0] ? "0" : "-1"); }
     if (!strcmp(flag, "BrowseMetadata")) {
         char p[1600]; struct stat st; snprintf(p, sizeof p, "%s/%s", ROOT, rel);
         char art[1700];
-        if (!rel[0]) didl_container(&d, c->host, "0", "-1", NAME, 2, NULL);
+        if (!rel[0]) didl_container(&d, c->host, "0", "-1", NAME, 3, NULL);
         else if (stat(p, &st) == 0 && S_ISDIR(st.st_mode)) { const char *t = strrchr(rel, '/');
             didl_container(&d, c->host, rel, parent, t ? t + 1 : rel, 0, art_for(rel, 1, art, sizeof art) ? art : NULL); }
         else if (stat(p, &st) == 0 && audio_mime(rel)) { const char *t = strrchr(rel, '/'); char dn[300]; display_name(t ? t + 1 : rel, 0, dn, sizeof dn);
@@ -509,6 +518,8 @@ static void cds_control(conn_t *c, const char *soapaction, const char *body) {
             if (find_cover(rel, cover, sizeof cover)) { snprintf(fcov, sizeof fcov, "f/%s", cover); has_cover = 1; }
             else if (!rich) has_cover = art_for(rel, 1, fcov, sizeof fcov); }
         total = n;
+        int radio = !rel[0] && explore_refresh();                     /* the root also holds "R3 Radio", last */
+        if (radio) { total = n + 1; if (start <= n && returned < count && start + count > n) { didl_container(&d, c->host, "radio:", "0", "R3 Radio", 0, NULL); } }
         for (int i = start; i < n && returned < count; i++, returned++) {
             char sub[1600], dn[300], art[1700]; snprintf(sub, sizeof sub, "%s%s%s", rel, rel[0] ? "/" : "", v[i].name);
             display_name(v[i].name, v[i].dir, dn, sizeof dn);
@@ -516,8 +527,10 @@ static void cds_control(conn_t *c, const char *soapaction, const char *body) {
                                          rel[0] && rich && art_for(sub, 1, art, sizeof art) ? art : NULL);
             else didl_item(&d, c->host, sub, rel[0] ? rel : "0", dn,
                            has_cover ? fcov : rich && art_for(sub, 0, art, sizeof art) ? art : NULL); }
+        if (radio && start <= n && start + count > n) returned++;
         free(v);
     }
+done:
     bprintf(&d, "</DIDL-Lite>");
     buf_t i = { 0 }; bprintf(&i, "<Result>"); bxml(&i, d.p); free(d.p);
     bprintf(&i, "</Result><NumberReturned>%d</NumberReturned><TotalMatches>%d</TotalMatches><UpdateID>1</UpdateID>", returned, total);
@@ -530,6 +543,165 @@ static void cms_control(conn_t *c, const char *soapaction) {
         soap_reply(c, "GetProtocolInfo", svc, &i); return; }
     soap_fault(c, 401, "Invalid Action");
 }
+
+/* ---------------------------------------------------------------- radio
+ * explore.c (shared with r3player) reads the library through smartmix_each(): here that is
+ * r3player's index file, read again whenever it (or Genres.txt) changes. */
+#define IDX_FILE "/usr/data/r3_mix.idx"
+#define STATS_FILE "/usr/data/r3_stats"
+int smartmix_version(void) {
+    struct stat a, g; char gp[1200]; snprintf(gp, sizeof gp, "%s/Genres.txt", ROOT);
+    if (stat(IDX_FILE, &a) != 0) return 0;
+    int v = (int)(a.st_mtime ^ a.st_size); if (stat(gp, &g) == 0) v ^= (int)(g.st_mtime * 31 + g.st_size);
+    return v ? v : 1; }
+int smartmix_tags_done(void) { return 1; }
+static unsigned hs(const char *s) { unsigned h = 2166136261u; while (*s) { h ^= (unsigned char)*s++; h *= 16777619u; } return h; }
+int smartmix_each(smartmix_track_fn fn, void *u) {
+    FILE *f = fopen(IDX_FILE, "r"); if (!f) return -1;
+    enum { HP = 8192 }; char **pk = calloc(HP, sizeof *pk); int *pv = calloc(HP, sizeof *pv);   /* plays per track */
+    FILE *sf = fopen(STATS_FILE, "r"); char l[1600];
+    if (sf && pk && pv) { while (fgets(l, sizeof l, sf)) { l[strcspn(l, "\n")] = 0; char *t = strchr(l, '\t'); if (!t) continue; *t = 0;
+        unsigned k = hs(l) & (HP - 1); for (int n = 0; n < HP && pk[k]; n++) k = (k + 1) & (HP - 1);
+        if (!pk[k]) { pk[k] = strdup(l); pv[k] = atoi(t + 1); } } }
+    if (sf) fclose(sf);
+    int n = 0;
+    while (fgets(l, sizeof l, f)) { l[strcspn(l, "\n")] = 0;
+        char *a = strchr(l, '\t'); if (!a) continue; *a++ = 0; char *g = strchr(a, '\t'); if (!g) continue; *g++ = 0;
+        char *y = strchr(g, '\t'); if (!y) continue; *y++ = 0;
+        int plays = 0; if (pk) { unsigned k = hs(l) & (HP - 1);
+            for (int c = 0; c < HP && pk[k]; c++, k = (k + 1) & (HP - 1)) if (!strcmp(pk[k], l)) { plays = pv[k]; break; } }
+        fn(u, l, a, g, atoi(y), plays, 0, 0); n++; }
+    fclose(f);
+    if (pk) for (int i = 0; i < HP; i++) free(pk[i]);
+    free(pk); free(pv); return n; }
+
+#define RMAX 160
+typedef struct { char rel[RMAX][1024]; char title[RMAX][300]; int n; char last[128]; } mix_t;
+/* the next artist: similar to a, but inside the chosen genre / subgenre (a radio asked for
+ * Power metal stays in Power metal; "similar" alone only keeps to the main genre) */
+static int radio_next(int a, int fam, int sub) {
+    int b = a >= 0 ? explore_similar(a) : -1;
+    if (b < 0) return explore_pick(fam, sub);
+    if (sub >= 0 && strcmp(explore_artist_sub(b), explore_sub_name(sub))) return explore_pick(fam, sub);
+    if (fam >= 0 && explore_artist_fam(b) != fam) return explore_pick(fam, -1);
+    return b; }
+/* about `albums` albums: a pick in the genre (or after `from`: the next one after it), then the next ones */
+static int radio_mix(mix_t *m, int fam, int sub, const char *from, int albums) {
+    m->n = 0; m->last[0] = 0;
+    if (!explore_refresh()) return 0;
+    int a = from && from[0] && explore_find(from) >= 0 ? radio_next(explore_find(from), fam, sub) : explore_pick(fam, sub);
+    size_t rl = strlen(ROOT);
+    for (int k = 0; k < albums && a >= 0 && m->n < RMAX; k++) {
+        char dir[1024], t[256]; if (!explore_album(a, NULL, dir, sizeof dir, t, sizeof t)) break;
+        explore_seen(a);
+        const char *rel = !strncmp(dir, ROOT, rl) && dir[rl] == '/' ? dir + rl + 1 : dir;
+        int nv; ent_t *v = list_dir(rel, &nv);
+        for (int i = 0; v && i < nv && m->n < RMAX; i++) { if (v[i].dir) continue;
+            char dn[300]; display_name(v[i].name, 0, dn, sizeof dn);
+            snprintf(m->rel[m->n], 1024, "%s/%s", rel, v[i].name);
+            snprintf(m->title[m->n], 300, "%s - %s", explore_artist(a), dn); m->n++; }
+        free(v);
+        snprintf(m->last, sizeof m->last, "%s", explore_artist(a));
+        a = radio_next(a, fam, sub); }
+    return m->n; }
+static void q_param(const char *q, const char *key, char *out, size_t cap) {   /* ?a=b&c=d, decoded ('+' = space) */
+    out[0] = 0; if (!q) return; size_t kl = strlen(key);
+    for (const char *p = q; p && *p; ) { if (!strncmp(p, key, kl) && p[kl] == '=') { p += kl + 1; size_t n = strcspn(p, "&");
+            if (n >= cap) n = cap - 1; memcpy(out, p, n); out[n] = 0;
+            for (char *c = out; *c; c++) if (*c == '+') *c = ' ';
+            url_decode(out); return; }
+        p = strchr(p, '&'); if (p) p++; } }
+static int fam_of(const char *g) {                     /* "Metal", "metal" or "0"; -1 = any */
+    if (!g[0]) return -1; if (isdigit((unsigned char)g[0])) { int f = atoi(g); return f >= 0 && f < EX_NFAM ? f : -1; }
+    for (int f = 0; f < EX_NFAM; f++) if (!strcasecmp(g, explore_fam_name(f))) return f;
+    return -1; }
+static int sub_of(int fam, const char *s) {
+    if (!s[0]) return -1;
+    for (int f = fam < 0 ? 0 : fam; f < (fam < 0 ? EX_NFAM : fam + 1); f++) { int ids[64], n = explore_subs(f, ids, 64);
+        for (int i = 0; i < n; i++) if (!strcasecmp(s, explore_sub_name(ids[i]))) return ids[i]; }
+    return -1; }
+static void burlq(buf_t *b, const char *s) {            /* percent-encode a query value */
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        if (isalnum(*p) || strchr("-_.~", *p)) bput(b, (const char *)p, 1); else bprintf(b, "%%%02X", *p); } }
+static void radio_link(buf_t *b, const char *host, int fam, int sub, const char *from) {
+    bprintf(b, "http://%s/radio.m3u?", host);
+    if (fam >= 0) { bprintf(b, "genre="); burlq(b, explore_fam_name(fam)); }
+    if (sub >= 0) { bprintf(b, "&sub="); burlq(b, explore_sub_name(sub)); }
+    if (from && from[0]) { bprintf(b, "&from="); burlq(b, from); } }
+static void radio_m3u(conn_t *c, const char *query) {
+    char g[96], sb[96], from[160]; q_param(query, "genre", g, sizeof g); q_param(query, "sub", sb, sizeof sb); q_param(query, "from", from, sizeof from);
+    static mix_t m;
+    if (!explore_refresh()) { respond(c, 503, "text/plain", "library index not ready (start r3player once)\n", 46, NULL); return; }
+    int fam = fam_of(g), sub = sub_of(fam, sb); if (sub >= 0 && fam < 0) fam = explore_sub_fam(sub);
+    radio_mix(&m, fam, sub, from, 3);
+    buf_t b = { 0 }; bprintf(&b, "#EXTM3U\n");
+    for (int i = 0; i < m.n; i++) { bprintf(&b, "#EXTINF:-1,%s\nhttp://%s/f/", m.title[i], c->host); burl(&b, m.rel[i]); bput(&b, "\n", 1); }
+    /* the last entry is the next batch: VLC opens it when it gets there, so the radio never ends */
+    bprintf(&b, "#EXTINF:-1,R3 radio (more)\n"); radio_link(&b, c->host, fam, sub, m.last); bput(&b, "\n", 1);
+    respond_buf(c, 200, "audio/x-mpegurl; charset=utf-8", &b); }
+static void radio_page(conn_t *c) {
+    buf_t b = { 0 };
+    bprintf(&b, "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>R3 radio</title>"
+                "<style>body{font:16px sans-serif;background:#0a0a0a;color:#f4e4d0;margin:16px}a{color:#e8731c;text-decoration:none}"
+                "li{margin:6px 0}.m{color:#8a6a4a;font-size:13px}ul ul{margin:4px 0 10px}</style><h2>R3 radio</h2>");
+    if (!explore_refresh()) { bprintf(&b, "<p>The library index isn't ready yet (r3player builds it).</p>"); respond_buf(c, 200, "text/html; charset=utf-8", &b); return; }
+    bprintf(&b, "<p class=m>An endless mix from the library: an album, then an album by a similar artist, and so on. "
+                "In VLC: Media &gt; Open Network Stream and paste a link, or Local Network &gt; Universal Plug'n'Play &gt; R3 Radio.</p><ul>");
+    buf_t u = { 0 }; radio_link(&u, c->host, -1, -1, NULL);
+    bprintf(&b, "<li><a href='"); bxml(&b, u.p); bprintf(&b, "'>&#9654; Surprise me</a> <span class=m>(%d artists)</span>", explore_artists()); free(u.p);
+    for (int f = 0; f < EX_NFAM; f++) { int na = explore_fam_artists(f); if (!na) continue;
+        buf_t l = { 0 }; radio_link(&l, c->host, f, -1, NULL);
+        bprintf(&b, "<li><a href='"); bxml(&b, l.p); bprintf(&b, "'>&#9654; "); bxml(&b, explore_fam_name(f)); bprintf(&b, "</a> <span class=m>(%d)</span>", na); free(l.p);
+        int ids[64], ns = f < EX_UNSORTED ? explore_subs(f, ids, 64) : 0;
+        if (ns) { bprintf(&b, "<ul>"); for (int i = 0; i < ns; i++) { buf_t s2 = { 0 }; radio_link(&s2, c->host, f, ids[i], NULL);
+            bprintf(&b, "<li><a href='"); bxml(&b, s2.p); bprintf(&b, "'>"); bxml(&b, explore_sub_name(ids[i]));
+            bprintf(&b, "</a> <span class=m>(%d)</span>", explore_sub_artists(ids[i])); free(s2.p); } bprintf(&b, "</ul>"); } }
+    bprintf(&b, "</ul><p><a href='/'>&larr; library</a></p>");
+    respond_buf(c, 200, "text/html; charset=utf-8", &b); }
+/* UPnP: "R3 Radio" > genres > subgenres; a leaf is a fresh mix (kept for a while, so a client
+ * paging through it sees one list). ids: radio:  radio:f<F>  leaves radio:x  radio:a<F>  radio:s<S> */
+static struct { char id[32]; mix_t m; long long at; } RC[4]; static int rc_next;
+static mix_t *radio_cached(const char *id, int fam, int sub, int fresh) {
+    long long t = now_ms();
+    for (int i = 0; i < 4; i++) if (!strcmp(RC[i].id, id) && (!fresh || t - RC[i].at < 15000) && t - RC[i].at < 30 * 60 * 1000) return &RC[i].m;
+    int k = -1; for (int i = 0; i < 4; i++) if (!strcmp(RC[i].id, id)) k = i;
+    if (k < 0) { k = rc_next; rc_next = (rc_next + 1) % 4; }
+    snprintf(RC[k].id, sizeof RC[k].id, "%s", id); RC[k].at = t; radio_mix(&RC[k].m, fam, sub, NULL, 3); return &RC[k].m; }
+static void didl_container(buf_t *d, const char *host, const char *id, const char *parent, const char *title, int childs, const char *art);
+static void didl_item(buf_t *d, const char *host, const char *rel, const char *parent, const char *title, const char *cover);
+static int art_for(const char *rel, int is_dir, char *out, size_t cap);
+/* children (or metadata) of a radio id into d; returns how many were returned, *total set */
+static int radio_browse(buf_t *d, const char *host, const char *id, int meta, int start, int count, int *total) {
+    *total = 0; if (!explore_refresh()) return 0;
+    char cid[40], title[160]; int returned = 0;
+    if (meta) { *total = 1; const char *t = "R3 Radio"; int f = -1, s = -1;
+        if (id[6] == 'f') { f = atoi(id + 7); t = explore_fam_name(f); }
+        else if (id[6] == 'a') { f = atoi(id + 7); snprintf(title, sizeof title, "All of %s", explore_fam_name(f)); t = title; }
+        else if (id[6] == 's') { s = atoi(id + 7); t = explore_sub_name(s); }
+        else if (id[6] == 'x') t = "Surprise me";
+        didl_container(d, host, id, id[6] ? (id[6] == 's' ? "radio:" : "radio:") : "0", t, 0, NULL); return 1; }
+    if (!id[6]) {                                                     /* radio: -> surprise + families */
+        int fams[EX_NFAM], nf = 0; for (int f = 0; f < EX_NFAM; f++) if (explore_fam_artists(f)) fams[nf++] = f;
+        *total = nf + 1;
+        for (int i = start; i < nf + 1 && returned < count; i++, returned++) {
+            if (!i) { didl_container(d, host, "radio:x", "radio:", "Surprise me", 0, NULL); continue; }
+            int f = fams[i - 1]; snprintf(cid, sizeof cid, "radio:f%d", f);
+            didl_container(d, host, cid, "radio:", explore_fam_name(f), 0, NULL); }
+        return returned; }
+    if (id[6] == 'f') { int f = atoi(id + 7), ids[64], ns = f < EX_UNSORTED ? explore_subs(f, ids, 64) : 0;   /* family -> all + subs */
+        *total = ns + 1;
+        for (int i = start; i < ns + 1 && returned < count; i++, returned++) {
+            if (!i) { snprintf(cid, sizeof cid, "radio:a%d", f); snprintf(title, sizeof title, "All of %s", explore_fam_name(f));
+                didl_container(d, host, cid, id, title, 0, NULL); continue; }
+            snprintf(cid, sizeof cid, "radio:s%d", ids[i - 1]); didl_container(d, host, cid, id, explore_sub_name(ids[i - 1]), 0, NULL); }
+        return returned; }
+    int fam = -1, sub = -1;                                           /* a leaf: the mix itself */
+    if (id[6] == 'a') fam = atoi(id + 7); else if (id[6] == 's') { sub = atoi(id + 7); fam = explore_sub_fam(sub); }
+    mix_t *m = radio_cached(id, fam, sub, start == 0);
+    *total = m->n;
+    for (int i = start; i < m->n && returned < count; i++, returned++) { char art[1700];
+        didl_item(d, host, m->rel[i], id, m->title[i], art_for(m->rel[i], 0, art, sizeof art) ? art : NULL); }
+    return returned; }
 
 /* ---------------------------------------------------------------- request dispatch */
 static const char *header(const char *req, const char *name, char *out, size_t cap) {
@@ -573,7 +745,7 @@ static void serve_playlist(conn_t *c, const char *name) {
 static void handle(conn_t *c) {
     char method[8] = "", path[4096] = "";
     if (sscanf(c->req, "%7s %4095s", method, path) != 2) { respond(c, 400, "text/plain", "bad request\n", 12, NULL); return; }
-    char *q = strchr(path, '?'); if (q) *q = 0;
+    char *q = strchr(path, '?'); char query[1024] = ""; if (q) { snprintf(query, sizeof query, "%s", q + 1); *q = 0; }
     url_decode(path);
     char range[128], sa[256], *body = strstr(c->req, "\r\n\r\n"); body = body ? body + 4 : "";
     int head = !strcmp(method, "HEAD");
@@ -585,6 +757,8 @@ static void handle(conn_t *c) {
     if (!strncmp(path, "/evt/", 5)) {   /* no eventing: accept subscriptions so clients stay happy */
         char ex[128]; snprintf(ex, sizeof ex, "SID: uuid:%s-evt\r\nTIMEOUT: Second-1800\r\n", UUID); respond(c, 200, "text/plain", "", 0, ex); return; }
     if (!strcmp(path, "/playlists")) { page_playlists(c); return; }
+    if (!strcmp(path, "/radio") || !strcmp(path, "/radio/")) { radio_page(c); return; }
+    if (!strcmp(path, "/radio.m3u")) { radio_m3u(c, query); return; }
     if (!strncmp(path, "/pl/", 4)) { serve_playlist(c, path + 4); return; }
     const char *rel = NULL; int kind = 0;
     if (!strcmp(path, "/") || !strcmp(path, "/browse") || !strcmp(path, "/browse/")) { rel = ""; kind = 1; }

@@ -165,6 +165,7 @@ int explore_subs(int fam,int*ids,int cap){ int n=0;
     return n; }
 const char* explore_sub_name(int id){ return id>=0&&id<NS ? S[id].name : ""; }
 int explore_sub_artists(int id){ return id>=0&&id<NS ? S[id].nart : 0; }
+int explore_sub_fam(int id){ return id>=0&&id<NS ? S[id].fam : -1; }
 
 /* ---- picking ---- */
 static int in_hist(const char*n){ for(int i=0;i<g_hn;i++) if(!strcmp(g_hist[i],n)) return 1; return 0; }
