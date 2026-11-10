@@ -40,7 +40,9 @@
 #define SW 480
 #define SH 720
 #define TOP 24                         /* the bezel hides the first rows of the panel */
+#ifndef SAVE
 #define SAVE "/usr/data/r3drum.sav"
+#endif
 static uint16_t cvbuf[SW*SH];          /* the frame, drawn in RAM: CW x CH (portrait 480x720, landscape 720x480) */
 static int CW=SW, CH=SH, land;         /* landscape: R3 turned clockwise, a controller in hand */
 #define CV(x,y) cvbuf[(y)*CW+(x)]
@@ -1586,6 +1588,13 @@ int main(int argc,char**argv){
     setvbuf(stderr,NULL,_IONBF,0); signal(SIGSEGV,on_crash); signal(SIGBUS,on_crash); signal(SIGFPE,on_crash);
     synth_init();
     if(argc>3 && !strcmp(argv[1],"--shot")) return shot(argv[2],argv[3]);
+    if(argc>1 && !strcmp(argv[1],"--savecheck")){                       /* what a save holds, after conversion */
+        load_game(); printf("missions done 0x%03x (%d/%d), rescued 0x%03x, slots %d, squad %d, weapons 0x%08x, shields 0x%03x, sel %d, music %d, offsets %d %d %d\n",
+            A.done,done_n(),DG_NMISSION,A.rescued,A.slots,A.nsquad,A.weapons,A.shields,sel,music_opt,off_src[0],off_src[1],off_src[2]);
+        for(int i=0;i<A.nsquad;i++) printf("  %d %s / %s / %s\n",i+1,DG_CLASS[A.squad[i].cls].name,A.squad[i].weapon>=0?DG_WEAPON[A.squad[i].weapon].name:"-",DG_SHIELD[A.squad[i].shield].name);
+        if(argc>2 && !strcmp(argv[2],"--roundtrip")){ armory_t a0=A; int s0=sel; save_game(); load_game();
+            int ok=!memcmp(&a0,&A,sizeof A) && s0==sel; printf("v4 round trip: %s\n",ok?"identical":"DIFFERENT"); return !ok; }
+        return 0; }
     if(argc>3 && !strcmp(argv[1],"--audiotest")){        /* r3drum --audiotest PERIOD COUNT: 4 s of beat */
         struct pcm_config cfg; memset(&cfg,0,sizeof cfg); int P=atoi(argv[2]), N=atoi(argv[3]);
         cfg.channels=2; cfg.rate=DR_RATE; cfg.period_size=P; cfg.period_count=N; cfg.format=PCM_FORMAT_S16_LE;
