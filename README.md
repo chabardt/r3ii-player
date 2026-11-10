@@ -64,6 +64,26 @@ for this one model.
   playlists and **import** one — songs you already have resolve locally, and the ones you're
   missing are copied from the peer **after you confirm**.
 
+**Explorer** (Home tile)
+- Dig through the library by **main genre › subgenre** (Metal › Power metal, Rock › Grunge…), or
+  **Surprise me**. The player picks a random artist, preferring the ones you rarely play, and
+  shows its card: **Listen to this album** (least-played first), **Another album**, **Similar
+  artist** (same subgenre, then same genre, close in era), **Different artist**, and **Keep**
+  (adds the album to a `Discovered` playlist).
+- **Explorer radio:** when an album started from Explorer ends, an album by a similar artist
+  follows. **Double-press ▶▶** to jump to it right away; the orange button on Now Playing
+  returns to the artist card.
+- Genres come from the files' tags, cleaned up (`Punkrock` = `Punk Rock`, `métal`, `B.O.`…);
+  each artist gets the genre most of its tracks have. Fix or complete them in `Genres.txt`
+  at the root of the card:
+  ```
+  Rammstein = Metal > Industrial metal          # main genre > subgenre
+  Ghost = heavy metal; doom metal               # or tag values
+  genre: neue deutsche härte = industrial metal # a spelling, for every artist
+  ```
+  For artists with no usable tags, `python3 scripts/genres_mb.py --sd <card>` (or `--adb`)
+  fetches their genres from MusicBrainz into a `[musicbrainz]` section of that file.
+
 **Wi-Fi & music server**
 - Wi-Fi settings; **r3srv**, a UPnP/DLNA + HTTP server that serves your library (incl. album art)
   over the network.

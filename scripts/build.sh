@@ -12,7 +12,7 @@ command -v python3 >/dev/null && python3 scripts/lang.py gen
 
 TA="vendor/tinyalsa/src/pcm.c vendor/tinyalsa/src/pcm_hw.c vendor/tinyalsa/src/pcm_plugin.c vendor/tinyalsa/src/snd_card_plugin.c vendor/tinyalsa/src/mixer.c vendor/tinyalsa/src/mixer_hw.c vendor/tinyalsa/src/mixer_plugin.c vendor/tinyalsa/src/limits.c"
 FAAD="$(find vendor/faad2/libfaad -name '*.c')"
-SRCS="$(find vendor/lvgl/src -name '*.c') $TA $FAAD src/ui/audio.c src/ui/m4a.c src/ui/bt.c src/ui/cover.c src/ui/game.c src/ui/hiscore.c src/ui/brick_core.c src/ui/brick.c src/ui/coil_core.c src/ui/coil.c src/ui/sapper_core.c src/ui/sapper.c src/ui/pet_core.c src/ui/pet.c src/ui/pad.c src/ui/wifi.c src/ui/share.c src/ui/heart_img.c src/ui/smartmix.c src/ui/fonts.c src/ui/i18n.c src/ui/lang_tables.c src/ui/main.c"
+SRCS="$(find vendor/lvgl/src -name '*.c') $TA $FAAD src/ui/audio.c src/ui/m4a.c src/ui/bt.c src/ui/cover.c src/ui/game.c src/ui/hiscore.c src/ui/brick_core.c src/ui/brick.c src/ui/coil_core.c src/ui/coil.c src/ui/sapper_core.c src/ui/sapper.c src/ui/pet_core.c src/ui/pet.c src/ui/pad.c src/ui/wifi.c src/ui/share.c src/ui/heart_img.c src/ui/smartmix.c src/ui/genre.c src/ui/explore.c src/ui/fonts.c src/ui/i18n.c src/ui/lang_tables.c src/ui/main.c"
 
 N=$(nproc 2>/dev/null || echo 4); i=0
 for s in $SRCS; do
@@ -25,7 +25,7 @@ $CC $CFLAGS -c src/ui/audio.c -o src/ui/audio.c.o
 $CC $CFLAGS -c src/ui/bt.c   -o src/ui/bt.c.o
 $CC $CFLAGS -c src/ui/cover.c -o src/ui/cover.c.o
 $CC $CFLAGS -c src/ui/game.c  -o src/ui/game.c.o
-for f in hiscore brick_core brick coil_core coil sapper_core sapper pet_core pet pad wifi share heart_img smartmix fonts i18n lang_tables; do $CC $CFLAGS -c src/ui/$f.c -o src/ui/$f.c.o; done
+for f in hiscore brick_core brick coil_core coil sapper_core sapper pet_core pet pad wifi share heart_img smartmix genre explore fonts i18n lang_tables; do $CC $CFLAGS -c src/ui/$f.c -o src/ui/$f.c.o; done
 $CC $CFLAGS -c src/ui/main.c  -o src/ui/main.c.o
 
 OBJS=""; for s in $SRCS; do OBJS="$OBJS $s.o"; done
