@@ -58,6 +58,7 @@ static const lang_entry_t L_fr[] = {
     { "Behaving now", "Il est sage" },
     { "Bluetooth", "Bluetooth" },
     { "Bluetooth receiver", "R\303\251cepteur Bluetooth" },
+    { "Browse this album", "Parcourir cet album" },
     { "CLEARED!", "D\303\211MIN\303\211 !" },
     { "CONTROLLERS", "MANETTES" },
     { "Classical / Soundtrack", "Classique / B.O." },
@@ -336,6 +337,6 @@ static const lang_entry_t L_fr[] = {
     { "went back to the stars", "est reparti vers les \303\251toiles" },
 };
 const lang_t LANGS[] = {
-    { "fr", "Fran\303\247ais", 332, L_fr },
+    { "fr", "Fran\303\247ais", 333, L_fr },
 };
 const int LANG_N = 1;
