@@ -78,9 +78,13 @@ def artists_sd(sd):
 def adb(*args, **kw):
     return subprocess.run(["adb", *args], check=True, capture_output=True, **kw)
 
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
 def artists_adb():
-    out = adb("shell", f"ls -1 '{DEV_SD}/Music'").stdout.decode("utf-8", "replace")
-    return sorted(l.strip() for l in out.splitlines() if l.strip() and not l.startswith("."))
+    # the R3's busybox ls colours its output (escape codes around every name): turn that off,
+    # and strip any left. Folders only: files carry an extension.
+    out = adb("shell", f"ls -1 --color=never '{DEV_SD}/Music'").stdout
+    names = (ANSI.sub("", l).strip() for l in out.decode("utf-8", "replace").splitlines())
+    return sorted(n for n in names if n and not n.startswith(".") and not re.search(r"\.(mp3|flac|m4a|wav|jpg|png|txt|m3u)$", n, re.I))
 
 def merge(existing, lines):
     """keep the manual part of Genres.txt, replace the [musicbrainz] section"""
