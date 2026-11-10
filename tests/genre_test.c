@@ -38,7 +38,7 @@ int main(int ac,char**av){
     check("Other",GF_NONE,""); check("<Inconnu>",GF_NONE,""); check("Folk-Rock",GF_ROCK,"Folk-rock");
     check("Chanson Française",GF_POP,"Chanson française"); check("(17)Rock",GF_ROCK,""); check("(17)",GF_NONE,"");
     check("Neue Deutsche Härte",GF_METAL,"Industrial metal"); check("R&B",GF_JAZZ,"R&B"); check("Britpop",GF_ROCK,"Britpop");
-    check("Viking Metal",GF_METAL,"Viking metal"); check("Electronic",GF_ELECTRO,""); check("Grunge",GF_ROCK,"Grunge");
+    check("Viking Metal",GF_METAL,"Viking metal"); check("Chanson Fran\xc3\x83\xc2\xa7" "aise",GF_POP,"Chanson française"); check("Pop rock fran\xc3\xa7" "ais",GF_ROCK,"Pop rock français"); check("Electronic",GF_ELECTRO,""); check("Grunge",GF_ROCK,"Grunge");
     check_split("Heavy MetalRock",2,"Heavy Metal","Rock"); check_split("Stoner Rock, Desert Rock",2,"Stoner Rock","Desert Rock");
     check_split("Rock;Pop",2,"Rock","Pop"); check_split("R&B",1,"R&B",0); check_split("Hard Rock / Blues",2,"Hard Rock","Blues");
     printf("unit checks: %s\n",fails?"FAILED":"ok");

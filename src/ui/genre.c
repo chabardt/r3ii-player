@@ -99,8 +99,25 @@ static int word_has(const char*s,const char*kw){
     for(const char*p=s; (p=strstr(p,kw)); p++) if(p==s || p[-1]==' ') return 1;
     (void)n; return 0; }
 
+/* "franÃ§aise": UTF-8 that was read as Latin-1 and encoded again (older indexes). If every
+ * character is below U+0100 and their bytes form UTF-8, return those bytes. */
+static const char* fix_double_utf8(const char*in,char*out,int cap){
+    int j=0, multi=0; const unsigned char*p=(const unsigned char*)in;
+    while(*p){ unsigned cp;
+        if(*p<0x80) cp=*p++;
+        else if((*p&0xE0)==0xC0 && (p[1]&0xC0)==0x80){ cp=((p[0]&0x1Fu)<<6)|(p[1]&0x3Fu); p+=2; }
+        else return in;
+        if(cp>0xFF || j>=cap-1) return in;
+        out[j++]=(char)cp; }
+    out[j]=0;
+    for(int k=0;k<j;){ unsigned char c=(unsigned char)out[k]; int l= c<0x80?1 : (c>>5)==6?2 : (c>>4)==14?3 : 0;
+        if(!l||k+l>j) return in; for(int m=1;m<l;m++) if(((unsigned char)out[k+m]&0xC0)!=0x80) return in;
+        if(l>1) multi=1; k+=l; }
+    return multi ? out : in; }
+
 int genre_classify(const char*value,char*sub,int subcap){
-    char k[96], c[96]; sub[0]=0;
+    char k[96], c[96], fx[96]; sub[0]=0;
+    value=fix_double_utf8(value,fx,sizeof fx);
     /* "(17)Rock" / "(17)" — old ID3v1 numeric wrapper */
     while(*value==' ') value++;
     if(*value=='('){ const char*e=strchr(value,')'); if(e && e[1]) value=e+1; }

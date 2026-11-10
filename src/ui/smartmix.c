@@ -46,6 +46,11 @@ static const char* rel_of(const char*full){ size_t n=strlen(SD_ROOT); return !st
 static int y4(const char*s){ while(*s&&!isdigit((unsigned char)*s))s++; int y=atoi(s); return (y>=1900&&y<=2100)?y:0; }
 
 /* --- read genre + year from the first part of a track --- */
+static int valid_utf8(const unsigned char*t,int n){ int multi=0;
+    for(int k=0;k<n&&t[k];){ unsigned c=t[k]; int l= c<0x80?1 : (c>>5)==6?2 : (c>>4)==14?3 : (c>>3)==30?4 : 0;
+        if(!l||k+l>n) return 0; for(int m=1;m<l;m++) if((t[k+m]&0xC0)!=0x80) return 0;
+        if(l>1) multi=1; k+=l; }
+    return multi; }
 static unsigned sid(const unsigned char*p){ return ((p[0]&0x7f)<<21)|((p[1]&0x7f)<<14)|((p[2]&0x7f)<<7)|(p[3]&0x7f); }
 static void id3_text(const unsigned char*b,int n,const char*id,char*out,int cap){ out[0]=0;
     if(n<10||memcmp(b,"ID3",3)) return; int ver=b[3]; long sz=sid(b+6); int i=10; if(sz>n)sz=n;
@@ -56,6 +61,8 @@ static void id3_text(const unsigned char*b,int n,const char*id,char*out,int cap)
             /* ID3v2.4 separates several values (e.g. genres) with NUL: keep them all, as
              * "Heavy Metal;Power Metal" (glued, they used to read "Heavy MetalPower Metal") */
             int j=0, sep=0; const int w=(enc==1||enc==2)?2:1;
+            /* enc 0 is Latin-1 by the spec, but many taggers put UTF-8 there: keep valid UTF-8 as is */
+            int utf8 = enc==3 || (enc==0 && valid_utf8(t,tl));
             if(w==2 && tl>=2 && ((t[0]==0xFF&&t[1]==0xFE)||(t[0]==0xFE&&t[1]==0xFF))){ if(enc==1) enc=t[0]==0xFF?1:2; t+=2; tl-=2; }  /* BOM */
             for(int k=0;k+w-1<tl&&j<cap-2;k+=w){
                 unsigned char c = w==1 ? t[k] : enc==1 ? t[k] : t[k+1];
@@ -63,7 +70,7 @@ static void id3_text(const unsigned char*b,int n,const char*id,char*out,int cap)
                 if(c==0&&hi==0){ sep=1; if(w==2 && k+3<tl && t[k+2]==0xFF && t[k+3]==0xFE) k+=2; continue; }  /* next value (maybe with a BOM) */
                 if(hi || c<32) continue;          /* UTF-16 beyond Latin-1 / control chars: skip */
                 if(sep && j){ out[j++]=';'; } sep=0;
-                if(c<0x80) out[j++]=(char)c;
+                if(c<0x80 || utf8) out[j++]=(char)c;  /* UTF-8 text (enc 3, or enc 0 written as UTF-8 anyway) */
                 else if(j<cap-3){ out[j++]=(char)(0xC0|(c>>6)); out[j++]=(char)(0x80|(c&0x3F)); } }   /* Latin-1 -> UTF-8 */
             out[j]=0; return; }
         i+=10+fs; }
