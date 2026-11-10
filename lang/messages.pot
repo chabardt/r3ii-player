@@ -287,27 +287,27 @@ msgstr ""
 msgid "December"
 msgstr ""
 
-#: src/ui/main.c:729
+#: src/ui/main.c:734
 msgid "Up"
 msgstr ""
 
-#: src/ui/main.c:729
+#: src/ui/main.c:734
 msgid "Down"
 msgstr ""
 
-#: src/ui/main.c:729
+#: src/ui/main.c:734
 msgid "Left"
 msgstr ""
 
-#: src/ui/main.c:729
+#: src/ui/main.c:734
 msgid "Right"
 msgstr ""
 
-#: src/ui/main.c:729
+#: src/ui/main.c:734
 msgid "Home"
 msgstr ""
 
-#: src/ui/main.c:732
+#: src/ui/main.c:737
 #, c-format
 msgid ""
 "%d controller(s)%s%s\n"
@@ -315,836 +315,840 @@ msgid ""
 "%s"
 msgstr ""
 
-#: src/ui/main.c:733
+#: src/ui/main.c:738
 msgid "key"
 msgstr ""
 
-#: src/ui/main.c:733
+#: src/ui/main.c:738
 msgid "axis"
 msgstr ""
 
-#: src/ui/main.c:733
+#: src/ui/main.c:738
 msgid "event"
 msgstr ""
 
-#: src/ui/main.c:741
-#: src/ui/main.c:802
+#: src/ui/main.c:746
+#: src/ui/main.c:807
 msgid "Test buttons"
 msgstr ""
 
-#: src/ui/main.c:753
+#: src/ui/main.c:758
 msgid ""
 "Press buttons: the matching action lights up.\n"
 "Pair a Joy-Con: hold its small sync button\n"
 "until the lights run, then Scan."
 msgstr ""
 
-#: src/ui/main.c:767
+#: src/ui/main.c:772
 msgid "OUTPUT"
 msgstr ""
 
-#: src/ui/main.c:768
+#: src/ui/main.c:773
 msgid "Headphone jack"
 msgstr ""
 
-#: src/ui/main.c:775
+#: src/ui/main.c:780
 #, c-format
 msgid "connected - battery %d%%"
 msgstr ""
 
-#: src/ui/main.c:775
-#: src/ui/main.c:790
-#: src/ui/main.c:799
+#: src/ui/main.c:780
+#: src/ui/main.c:795
+#: src/ui/main.c:804
 msgid "connected"
 msgstr ""
 
-#: src/ui/main.c:776
+#: src/ui/main.c:781
 msgid "selected - not connected"
 msgstr ""
 
-#: src/ui/main.c:776
-#: src/ui/main.c:790
+#: src/ui/main.c:781
+#: src/ui/main.c:795
 msgid "hold to forget"
 msgstr ""
 
-#: src/ui/main.c:781
+#: src/ui/main.c:786
 msgid "RECEIVE FROM PHONE"
 msgstr ""
 
-#: src/ui/main.c:782
+#: src/ui/main.c:787
 msgid "Bluetooth receiver"
 msgstr ""
 
-#: src/ui/main.c:782
+#: src/ui/main.c:787
 msgid "phone -> R3 -> jack"
 msgstr ""
 
-#: src/ui/main.c:794
+#: src/ui/main.c:799
 msgid "CONTROLLERS"
 msgstr ""
 
-#: src/ui/main.c:798
+#: src/ui/main.c:803
 #, c-format
 msgid "connected - battery %d%%%s"
 msgstr ""
 
-#: src/ui/main.c:798
+#: src/ui/main.c:803
 msgid " (charging)"
 msgstr ""
 
-#: src/ui/main.c:799
+#: src/ui/main.c:804
 msgid "press a button on it to reconnect"
 msgstr ""
 
-#: src/ui/main.c:802
+#: src/ui/main.c:807
 msgid "no controller connected"
 msgstr ""
 
-#: src/ui/main.c:805
+#: src/ui/main.c:810
 msgid "ADD A DEVICE"
 msgstr ""
 
-#: src/ui/main.c:806
-#: src/ui/main.c:1259
+#: src/ui/main.c:811
+#: src/ui/main.c:1264
 msgid "Working..."
 msgstr ""
 
-#: src/ui/main.c:806
+#: src/ui/main.c:811
 msgid "Scan for devices"
 msgstr ""
 
-#: src/ui/main.c:810
+#: src/ui/main.c:815
 msgid "tap to pair"
 msgstr ""
 
-#: src/ui/main.c:833
-#: src/ui/main.c:1300
+#: src/ui/main.c:838
+#: src/ui/main.c:1305
 msgid "Bluetooth"
 msgstr ""
 
-#: src/ui/main.c:893
+#: src/ui/main.c:898
 #, c-format
 msgid "%s %d %s %d"
 msgstr ""
 
-#: src/ui/main.c:1033
+#: src/ui/main.c:1038
 msgid "30 s"
 msgstr ""
 
-#: src/ui/main.c:1033
+#: src/ui/main.c:1038
 msgid "1 min"
 msgstr ""
 
-#: src/ui/main.c:1033
+#: src/ui/main.c:1038
 msgid "2 min"
 msgstr ""
 
-#: src/ui/main.c:1033
+#: src/ui/main.c:1038
 msgid "5 min"
 msgstr ""
 
-#: src/ui/main.c:1033
+#: src/ui/main.c:1038
 msgid "Never"
 msgstr ""
 
-#: src/ui/main.c:1041
-#: src/ui/main.c:1300
+#: src/ui/main.c:1046
+#: src/ui/main.c:1305
 msgid "Display"
 msgstr ""
 
-#: src/ui/main.c:1042
+#: src/ui/main.c:1047
 msgid "BRIGHTNESS"
 msgstr ""
 
-#: src/ui/main.c:1054
+#: src/ui/main.c:1059
 msgid "SCREEN OFF AFTER"
 msgstr ""
 
-#: src/ui/main.c:1060
+#: src/ui/main.c:1065
 msgid ""
 "Music keeps playing with the screen off.\n"
 "Power key or a touch wakes it."
 msgstr ""
 
-#: src/ui/main.c:1080
-#: src/ui/main.c:1300
+#: src/ui/main.c:1085
+#: src/ui/main.c:1305
 msgid "Sounds"
 msgstr ""
 
-#: src/ui/main.c:1081
+#: src/ui/main.c:1086
 msgid "MAXIMUM VOLUME"
 msgstr ""
 
-#: src/ui/main.c:1095
+#: src/ui/main.c:1100
 msgid "The volume keys never go above this, in games too."
 msgstr ""
 
-#: src/ui/main.c:1097
+#: src/ui/main.c:1102
 msgid "DAC DIGITAL FILTER"
 msgstr ""
 
-#: src/ui/main.c:1103
+#: src/ui/main.c:1108
 msgid "OVERSAMPLING"
 msgstr ""
 
-#: src/ui/main.c:1104
+#: src/ui/main.c:1109
 msgid "NOS mode"
 msgstr ""
 
-#: src/ui/main.c:1104
+#: src/ui/main.c:1109
 msgid "non-oversampling"
 msgstr ""
 
-#: src/ui/main.c:1110
+#: src/ui/main.c:1115
 msgid "Applied live; kept across restarts."
 msgstr ""
 
-#: src/ui/main.c:1117
+#: src/ui/main.c:1122
 msgid "Hour"
 msgstr ""
 
-#: src/ui/main.c:1117
+#: src/ui/main.c:1122
 msgid "Minute"
 msgstr ""
 
-#: src/ui/main.c:1117
+#: src/ui/main.c:1122
 msgid "Day"
 msgstr ""
 
-#: src/ui/main.c:1117
+#: src/ui/main.c:1122
 msgid "Month"
 msgstr ""
 
-#: src/ui/main.c:1117
+#: src/ui/main.c:1122
 msgid "Year"
 msgstr ""
 
-#: src/ui/main.c:1136
+#: src/ui/main.c:1141
 msgid "Clock set."
 msgstr ""
 
-#: src/ui/main.c:1137
+#: src/ui/main.c:1142
 msgid "Could not set the clock."
 msgstr ""
 
-#: src/ui/main.c:1140
-#: src/ui/main.c:1300
+#: src/ui/main.c:1145
+#: src/ui/main.c:1305
 msgid "Date & time"
 msgstr ""
 
-#: src/ui/main.c:1164
+#: src/ui/main.c:1169
 msgid "Set clock"
 msgstr ""
 
-#: src/ui/main.c:1198
+#: src/ui/main.c:1203
 msgid "Password"
 msgstr ""
 
-#: src/ui/main.c:1205
+#: src/ui/main.c:1210
 msgid "Wi-Fi password"
 msgstr ""
 
-#: src/ui/main.c:1210
+#: src/ui/main.c:1215
 msgid "Show password"
 msgstr ""
 
-#: src/ui/main.c:1214
+#: src/ui/main.c:1219
 #, c-format
 msgid "Tap %s on the keyboard to connect."
 msgstr ""
 
-#: src/ui/main.c:1242
-#: src/ui/main.c:1274
-#: src/ui/main.c:1300
+#: src/ui/main.c:1247
+#: src/ui/main.c:1279
+#: src/ui/main.c:1305
 msgid "Wi-Fi"
 msgstr ""
 
-#: src/ui/main.c:1244
+#: src/ui/main.c:1249
 msgid ""
 "Turn Wi-Fi on to share your music with\n"
 "VLC and other players on this network.\n"
 "Wi-Fi uses more battery."
 msgstr ""
 
-#: src/ui/main.c:1247
+#: src/ui/main.c:1252
 msgid "MUSIC SERVER"
 msgstr ""
 
-#: src/ui/main.c:1248
+#: src/ui/main.c:1253
 msgid "let VLC on this network play your library"
 msgstr ""
 
-#: src/ui/main.c:1249
+#: src/ui/main.c:1254
 msgid "starts once Wi-Fi is connected"
 msgstr ""
 
-#: src/ui/main.c:1250
+#: src/ui/main.c:1255
 msgid "starting..."
 msgstr ""
 
-#: src/ui/main.c:1251
+#: src/ui/main.c:1256
 #, c-format
 msgid "%d playing now - http://%s:%d"
 msgstr ""
 
-#: src/ui/main.c:1252
+#: src/ui/main.c:1257
 #, c-format
 msgid "on - http://%s:%d"
 msgstr ""
 
-#: src/ui/main.c:1253
+#: src/ui/main.c:1258
 msgid "Share music"
 msgstr ""
 
-#: src/ui/main.c:1255
+#: src/ui/main.c:1260
 msgid ""
 "VLC: View > Playlist > Local Network >\n"
 "Universal Plug'n'Play > HiBy R3.\n"
 "Or open the address in a browser."
 msgstr ""
 
-#: src/ui/main.c:1258
+#: src/ui/main.c:1263
 msgid "NETWORKS"
 msgstr ""
 
-#: src/ui/main.c:1259
+#: src/ui/main.c:1264
 msgid "Scan"
 msgstr ""
 
-#: src/ui/main.c:1263
+#: src/ui/main.c:1268
 msgid "not in range"
 msgstr ""
 
-#: src/ui/main.c:1263
+#: src/ui/main.c:1268
 msgid "strong"
 msgstr ""
 
-#: src/ui/main.c:1263
+#: src/ui/main.c:1268
 msgid "good"
 msgstr ""
 
-#: src/ui/main.c:1263
+#: src/ui/main.c:1268
 msgid "weak"
 msgstr ""
 
-#: src/ui/main.c:1264
+#: src/ui/main.c:1269
 #, c-format
 msgid "connected%s%s"
 msgstr ""
 
-#: src/ui/main.c:1265
+#: src/ui/main.c:1270
 #, c-format
 msgid "saved - %s - hold to forget"
 msgstr ""
 
-#: src/ui/main.c:1266
+#: src/ui/main.c:1271
 msgid "password"
 msgstr ""
 
-#: src/ui/main.c:1266
+#: src/ui/main.c:1271
 msgid "open"
 msgstr ""
 
-#: src/ui/main.c:1287
-#: src/ui/main.c:1316
+#: src/ui/main.c:1292
+#: src/ui/main.c:1321
 msgid "Language"
 msgstr ""
 
-#: src/ui/main.c:1293
+#: src/ui/main.c:1298
 msgid ""
 "Want another language? Translations are plain\n"
 "text files: see docs/TRANSLATING.md on GitHub."
 msgstr ""
 
-#: src/ui/main.c:1298
-#: src/ui/main.c:1835
+#: src/ui/main.c:1303
+#: src/ui/main.c:1875
 msgid "Settings"
 msgstr ""
 
-#: src/ui/main.c:1302
+#: src/ui/main.c:1307
 msgid "output: speaker"
 msgstr ""
 
-#: src/ui/main.c:1302
+#: src/ui/main.c:1307
 msgid "output: headphone jack"
 msgstr ""
 
-#: src/ui/main.c:1304
+#: src/ui/main.c:1309
 msgid ", sharing music"
 msgstr ""
 
-#: src/ui/main.c:1305
+#: src/ui/main.c:1310
 #, c-format
 msgid "brightness %d%%, off after %d%s"
 msgstr ""
 
-#: src/ui/main.c:1306
+#: src/ui/main.c:1311
 msgid " min"
 msgstr ""
 
-#: src/ui/main.c:1306
+#: src/ui/main.c:1311
 msgid " s"
 msgstr ""
 
-#: src/ui/main.c:1307
+#: src/ui/main.c:1312
 #, c-format
 msgid "brightness %d%%, always on"
 msgstr ""
 
-#: src/ui/main.c:1308
+#: src/ui/main.c:1313
 #, c-format
 msgid "filter %d%s, max volume %d%%"
 msgstr ""
 
-#: src/ui/main.c:1308
+#: src/ui/main.c:1313
 msgid ", NOS"
 msgstr ""
 
-#: src/ui/main.c:1322
+#: src/ui/main.c:1327
 #, c-format
 msgid "%d tracks indexed"
 msgstr ""
 
-#: src/ui/main.c:1323
+#: src/ui/main.c:1328
 msgid "indexing library..."
 msgstr ""
 
-#: src/ui/main.c:1324
+#: src/ui/main.c:1329
 msgid "Rescan library"
 msgstr ""
 
-#: src/ui/main.c:1406
+#: src/ui/main.c:1411
 msgid "Could not reach this device."
 msgstr ""
 
-#: src/ui/main.c:1416
+#: src/ui/main.c:1421
 msgid "No playlists shared here."
 msgstr ""
 
-#: src/ui/main.c:1425
+#: src/ui/main.c:1430
 msgid "shared"
 msgstr ""
 
-#: src/ui/main.c:1444
+#: src/ui/main.c:1449
 msgid "not on this device"
 msgstr ""
 
-#: src/ui/main.c:1447
+#: src/ui/main.c:1452
 #, c-format
 msgid "%d here, %d to fetch"
 msgstr ""
 
-#: src/ui/main.c:1448
+#: src/ui/main.c:1453
 msgid "Import to my playlists"
 msgstr ""
 
-#: src/ui/main.c:1454
+#: src/ui/main.c:1459
 msgid "Import"
 msgstr ""
 
-#: src/ui/main.c:1455
+#: src/ui/main.c:1460
 #, c-format
 msgid "Playlist saved. %d song not on this device."
 msgstr ""
 
-#: src/ui/main.c:1455
+#: src/ui/main.c:1460
 #, c-format
 msgid "Playlist saved. %d songs not on this device."
 msgstr ""
 
-#: src/ui/main.c:1458
+#: src/ui/main.c:1463
 msgid "Download them from this device"
 msgstr ""
 
-#: src/ui/main.c:1462
+#: src/ui/main.c:1467
 msgid "Done"
 msgstr ""
 
-#: src/ui/main.c:1468
-#: src/ui/main.c:1833
+#: src/ui/main.c:1473
+#: src/ui/main.c:1873
 msgid "Playlists"
 msgstr ""
 
-#: src/ui/main.c:1470
+#: src/ui/main.c:1475
 msgid "For You"
 msgstr ""
 
-#: src/ui/main.c:1471
+#: src/ui/main.c:1476
 msgid "from your favorites & plays"
 msgstr ""
 
-#: src/ui/main.c:1471
+#: src/ui/main.c:1476
 msgid "indexing your library..."
 msgstr ""
 
-#: src/ui/main.c:1473
+#: src/ui/main.c:1478
 msgid "Similar to current song"
 msgstr ""
 
-#: src/ui/main.c:1476
-#: src/ui/main.c:1560
-#: src/ui/main.c:1589
+#: src/ui/main.c:1481
+#: src/ui/main.c:1565
+#: src/ui/main.c:1594
 msgid "Favorites"
 msgstr ""
 
-#: src/ui/main.c:1480
-#: src/ui/main.c:1614
+#: src/ui/main.c:1485
+#: src/ui/main.c:1619
 msgid "New playlist"
 msgstr ""
 
-#: src/ui/main.c:1485
+#: src/ui/main.c:1490
 msgid "Nearby devices"
 msgstr ""
 
-#: src/ui/main.c:1518
+#: src/ui/main.c:1523
 msgid "hold to move / remove"
 msgstr ""
 
-#: src/ui/main.c:1522
+#: src/ui/main.c:1527
 msgid "(empty - add songs from Now Playing)"
 msgstr ""
 
-#: src/ui/main.c:1537
+#: src/ui/main.c:1542
 msgid "Song"
 msgstr ""
 
-#: src/ui/main.c:1541
+#: src/ui/main.c:1546
 msgid "Play now"
 msgstr ""
 
-#: src/ui/main.c:1542
-#: src/ui/main.c:1558
+#: src/ui/main.c:1547
+#: src/ui/main.c:1563
 msgid "Move to..."
 msgstr ""
 
-#: src/ui/main.c:1543
-#: src/ui/main.c:1558
+#: src/ui/main.c:1548
+#: src/ui/main.c:1563
 msgid "Add to..."
 msgstr ""
 
-#: src/ui/main.c:1544
+#: src/ui/main.c:1549
 #, c-format
 msgid "Remove from %s"
 msgstr ""
 
-#: src/ui/main.c:1588
+#: src/ui/main.c:1593
 msgid "Add to playlist"
 msgstr ""
 
-#: src/ui/main.c:1592
+#: src/ui/main.c:1597
 msgid "New playlist..."
 msgstr ""
 
-#: src/ui/main.c:1617
+#: src/ui/main.c:1622
 msgid "Playlist name"
 msgstr ""
 
-#: src/ui/main.c:1622
+#: src/ui/main.c:1627
 #, c-format
 msgid "Tap %s on the keyboard to create."
 msgstr ""
 
-#: src/ui/main.c:1645
+#: src/ui/main.c:1650
 msgid "Metal"
 msgstr ""
 
-#: src/ui/main.c:1645
+#: src/ui/main.c:1650
 msgid "Rock"
 msgstr ""
 
-#: src/ui/main.c:1645
+#: src/ui/main.c:1650
 msgid "Punk"
 msgstr ""
 
-#: src/ui/main.c:1645
+#: src/ui/main.c:1650
 msgid "Electro"
 msgstr ""
 
-#: src/ui/main.c:1645
+#: src/ui/main.c:1650
 msgid "Hip-hop"
 msgstr ""
 
-#: src/ui/main.c:1646
+#: src/ui/main.c:1651
 msgid "Jazz / Blues / Soul"
 msgstr ""
 
-#: src/ui/main.c:1646
+#: src/ui/main.c:1651
 msgid "Pop"
 msgstr ""
 
-#: src/ui/main.c:1646
+#: src/ui/main.c:1651
 msgid "Folk / World"
 msgstr ""
 
-#: src/ui/main.c:1646
+#: src/ui/main.c:1651
 msgid "Classical / Soundtrack"
 msgstr ""
 
-#: src/ui/main.c:1646
+#: src/ui/main.c:1651
 msgid "Unsorted"
 msgstr ""
 
-#: src/ui/main.c:1683
+#: src/ui/main.c:1711
 #, c-format
 msgid "Explorer: %s"
 msgstr ""
 
-#: src/ui/main.c:1704
+#: src/ui/main.c:1733
 #, c-format
 msgid "Added to Discovered (%d tracks)"
 msgstr ""
 
-#: src/ui/main.c:1713
-#: src/ui/main.c:1748
-#: src/ui/main.c:1831
+#: src/ui/main.c:1742
+#: src/ui/main.c:1790
+#: src/ui/main.c:1871
 msgid "Explorer"
 msgstr ""
 
-#: src/ui/main.c:1714
+#: src/ui/main.c:1743
 msgid "The library is still being indexed, try again in a moment."
 msgstr ""
 
-#: src/ui/main.c:1718
+#: src/ui/main.c:1747
 #, c-format
 msgid "any genre, %d artists"
 msgstr ""
 
-#: src/ui/main.c:1719
+#: src/ui/main.c:1748
 msgid "Surprise me"
 msgstr ""
 
-#: src/ui/main.c:1721
+#: src/ui/main.c:1750
 msgid "GENRES"
 msgstr ""
 
-#: src/ui/main.c:1724
+#: src/ui/main.c:1753
 #, c-format
 msgid "%d artists, %d subgenres"
 msgstr ""
 
-#: src/ui/main.c:1724
+#: src/ui/main.c:1753
 #, c-format
 msgid "%d artists, %d subgenre"
 msgstr ""
 
-#: src/ui/main.c:1725
-#: src/ui/main.c:1737
-#: src/ui/main.c:1741
+#: src/ui/main.c:1754
+#: src/ui/main.c:1766
+#: src/ui/main.c:1770
 #, c-format
 msgid "%d artists"
 msgstr ""
 
-#: src/ui/main.c:1729
+#: src/ui/main.c:1758
 msgid "Genres are being re-read in the background: these lists get better once it's done."
 msgstr ""
 
-#: src/ui/main.c:1736
+#: src/ui/main.c:1765
 #, c-format
 msgid "All of %s"
 msgstr ""
 
-#: src/ui/main.c:1739
+#: src/ui/main.c:1768
 msgid "SUBGENRES"
 msgstr ""
 
-#: src/ui/main.c:1766
+#: src/ui/main.c:1805
 #, c-format
 msgid "%d albums, played %d times"
 msgstr ""
 
-#: src/ui/main.c:1766
+#: src/ui/main.c:1805
 #, c-format
 msgid "%d album, played %d times"
 msgstr ""
 
-#: src/ui/main.c:1767
+#: src/ui/main.c:1806
 #, c-format
 msgid "%d albums, never played"
 msgstr ""
 
-#: src/ui/main.c:1767
+#: src/ui/main.c:1806
 #, c-format
 msgid "%d album, never played"
 msgstr ""
 
-#: src/ui/main.c:1769
+#: src/ui/main.c:1808
 msgid "Listen to this album"
 msgstr ""
 
-#: src/ui/main.c:1772
+#: src/ui/main.c:1811
+msgid "Browse this album"
+msgstr ""
+
+#: src/ui/main.c:1812
 msgid "Another album"
 msgstr ""
 
-#: src/ui/main.c:1773
+#: src/ui/main.c:1813
 msgid "Similar artist"
 msgstr ""
 
-#: src/ui/main.c:1774
+#: src/ui/main.c:1814
 msgid "Different artist"
 msgstr ""
 
-#: src/ui/main.c:1775
+#: src/ui/main.c:1815
 msgid "Keep the album (Discovered)"
 msgstr ""
 
-#: src/ui/main.c:1830
+#: src/ui/main.c:1870
 msgid "Music"
 msgstr ""
 
-#: src/ui/main.c:1832
+#: src/ui/main.c:1872
 msgid "Podcasts"
 msgstr ""
 
-#: src/ui/main.c:1834
-#: src/ui/main.c:2251
+#: src/ui/main.c:1874
+#: src/ui/main.c:2293
 msgid "Games"
 msgstr ""
 
-#: src/ui/main.c:1907
+#: src/ui/main.c:1947
 msgid "Screen locked"
 msgstr ""
 
-#: src/ui/main.c:1907
+#: src/ui/main.c:1947
 msgid "Screen unlocked"
 msgstr ""
 
-#: src/ui/main.c:1908
+#: src/ui/main.c:1948
 msgid "Power + Volume to unlock"
 msgstr ""
 
-#: src/ui/main.c:2073
-#: src/ui/main.c:2272
+#: src/ui/main.c:2115
+#: src/ui/main.c:2314
 msgid "Game Boy"
 msgstr ""
 
-#: src/ui/main.c:2078
-#: src/ui/main.c:2141
+#: src/ui/main.c:2120
+#: src/ui/main.c:2183
 msgid "saved game"
 msgstr ""
 
-#: src/ui/main.c:2082
+#: src/ui/main.c:2124
 msgid ""
 "Hold power to save and quit a game.\n"
 "Power: pause. Controllers work too."
 msgstr ""
 
-#: src/ui/main.c:2083
+#: src/ui/main.c:2125
 msgid ""
 "Copy your .gb ROMs to Games/GameBoy\n"
 "on the SD card."
 msgstr ""
 
-#: src/ui/main.c:2134
+#: src/ui/main.c:2176
 msgid "Resume"
 msgstr ""
 
-#: src/ui/main.c:2137
-#: src/ui/main.c:2275
+#: src/ui/main.c:2179
+#: src/ui/main.c:2317
 msgid "Game Boy Advance"
 msgstr ""
 
-#: src/ui/main.c:2141
+#: src/ui/main.c:2183
 msgid "resume where you left"
 msgstr ""
 
-#: src/ui/main.c:2145
+#: src/ui/main.c:2187
 msgid ""
 "Hold power to save and quit: the game\n"
 "resumes there next time. Power: pause.\n"
 "Controller: play in landscape."
 msgstr ""
 
-#: src/ui/main.c:2146
+#: src/ui/main.c:2188
 msgid ""
 "Copy your .gba ROMs to Games/GBA on the\n"
 "SD card (gba_bios.bin there too, optional)."
 msgstr ""
 
-#: src/ui/main.c:2184
+#: src/ui/main.c:2226
 msgid "Restart (keeps game saves)"
 msgstr ""
 
-#: src/ui/main.c:2184
+#: src/ui/main.c:2226
 msgid "New game"
 msgstr ""
 
-#: src/ui/main.c:2186
+#: src/ui/main.c:2228
 #, c-format
 msgid "Resume  (score %d)"
 msgstr ""
 
-#: src/ui/main.c:2203
+#: src/ui/main.c:2245
 msgid "game in progress"
 msgstr ""
 
-#: src/ui/main.c:2204
+#: src/ui/main.c:2246
 #, c-format
 msgid "%s - best %d"
 msgstr ""
 
-#: src/ui/main.c:2211
+#: src/ui/main.c:2253
 msgid "Tap again to erase all scores"
 msgstr ""
 
-#: src/ui/main.c:2215
-#: src/ui/main.c:2268
+#: src/ui/main.c:2257
+#: src/ui/main.c:2310
 msgid "High scores"
 msgstr ""
 
-#: src/ui/main.c:2224
+#: src/ui/main.c:2266
 msgid "no score yet"
 msgstr ""
 
-#: src/ui/main.c:2245
+#: src/ui/main.c:2287
 msgid "Reset all scores"
 msgstr ""
 
-#: src/ui/main.c:2255
+#: src/ui/main.c:2297
 msgid "falling-block puzzle"
 msgstr ""
 
-#: src/ui/main.c:2259
+#: src/ui/main.c:2301
 msgid "break the bricks, catch the balls"
 msgstr ""
 
-#: src/ui/main.c:2261
+#: src/ui/main.c:2303
 msgid "eat, grow, don't bite yourself"
 msgstr ""
 
-#: src/ui/main.c:2263
+#: src/ui/main.c:2305
 msgid "clear the minefield"
 msgstr ""
 
-#: src/ui/main.c:2266
+#: src/ui/main.c:2308
 msgid "drum the beat, lead a tiny army"
 msgstr ""
 
-#: src/ui/main.c:2268
+#: src/ui/main.c:2310
 msgid "top 5 of every game"
 msgstr ""
 
-#: src/ui/main.c:2271
-#: src/ui/main.c:2274
+#: src/ui/main.c:2313
+#: src/ui/main.c:2316
 #, c-format
 msgid "%d games"
 msgstr ""
 
-#: src/ui/main.c:2271
+#: src/ui/main.c:2313
 msgid "copy your ROMs to Games/GameBoy"
 msgstr ""
 
-#: src/ui/main.c:2274
+#: src/ui/main.c:2316
 msgid "copy your ROMs to Games/GBA"
 msgstr ""
 
-#: src/ui/main.c:2285
+#: src/ui/main.c:2327
 msgid ""
 "Doom: copy your doom.wad / doom2.wad\n"
 "(tnt, plutonia, sigil, nerve...) to\n"
 "Games/Doom on the SD card."
 msgstr ""
 
-#: src/ui/main.c:2288
+#: src/ui/main.c:2330
 msgid ""
 "In game: power = menu, hold power = quit,\n"
 "play = use, volume = weapons, next = map."

@@ -210,6 +210,7 @@ static void pretty(const char*in,char*out,int cap){ /* strip leading "NN. " and 
 /* ---- playlist (siblings in the directory of the chosen song) ---- */
 static char **g_pl=0; static int g_pln=0, g_pli=-1;
 static int g_ex_on;   /* playlist started by Explorer (album end -> a similar artist); see Explorer below */
+static char g_ex_playdir[1024];   /* the album Explorer radio is playing: picking a song in it keeps the radio */
 static long g_resume_ms=-1;   /* where Play continues after a stop (boot resume, speaker lost) */
 static char g_pldir[1024]="";
 static char g_pltitle[256]="";
@@ -218,7 +219,8 @@ static int cmp_pstr(const void*a,const void*b){ return strcasecmp(*(char*const*)
 static const char* pl_base(const char*full){ const char*b=strrchr(full,'/'); return b?b+1:full; }
 /* g_pl holds FULL track paths (so a playlist can span folders / a shared list). */
 static void pl_build(const char*dir,const char*selname){
-    pl_free(); g_ex_on=0;   /* anything played from elsewhere ends Explorer radio (Explorer sets it back) */
+    pl_free();
+    if(!(g_ex_on && !strcmp(dir,g_ex_playdir))) g_ex_on=0;   /* played from elsewhere: Explorer radio ends (its own album keeps it) */
     strncpy(g_pldir,dir,sizeof g_pldir-1); g_pldir[sizeof g_pldir-1]=0;
     char **tmp=malloc(sizeof(char*)*4096); int n=0;
     if(!strncmp(dir,MUSIC_ROOT,strlen(MUSIC_ROOT)) && smartmix_ready()){
@@ -342,7 +344,10 @@ static void np_set_cover(void){
 }
 
 /* ---- Now Playing ---- */
-static void np_back_cb(lv_event_t*e){ (void)e; show_browser(g_pldir[0]?g_pldir:MUSIC_ROOT); }
+static void np_explore_cb(lv_event_t*e);
+static void np_back_cb(lv_event_t*e){ (void)e;
+    if(g_ex_on){ np_explore_cb(NULL); return; }               /* Explorer radio: back to its artist card */
+    show_browser(g_pldir[0]?g_pldir:MUSIC_ROOT); }
 static void np_fav_cb(lv_event_t*e){ (void)e;
     if(!(g_pln>0&&g_pli>=0)) return;
     fav_toggle(g_pl[g_pli],g_pltitle);
@@ -1661,19 +1666,42 @@ static void ex_trail_add(const char*n){
     if(g_ex_ntrail && !strcmp(g_ex_trail[g_ex_ntrail-1],n)) return;
     if(g_ex_ntrail==5){ memmove(g_ex_trail,g_ex_trail+1,sizeof g_ex_trail[0]*4); g_ex_ntrail=4; }
     snprintf(g_ex_trail[g_ex_ntrail++],128,"%s",n); }
+/* the session survives leaving Explorer and a restart: /usr/data/r3_explore (key=value). The
+ * subgenre is kept by name (ids change when the index is rebuilt). */
+#define EX_FILE "/usr/data/r3_explore"
+static char g_ex_subname[64];
+static int ex_sub(void){ if(!g_ex_subname[0]||g_ex_fam<0) return -1; int ids[64], n=explore_subs(g_ex_fam,ids,64);
+    for(int i=0;i<n;i++) if(!strcmp(explore_sub_name(ids[i]),g_ex_subname)) return ids[i]; return -1; }
+static void ex_save(void){ FILE*f=fopen(EX_FILE ".tmp","w"); if(!f) return;
+    fprintf(f,"on=%d\nfam=%d\nsub=%s\nartist=%s\nplay=%s\ndir=%s\nalb=%s\nplaydir=%s\n",g_ex_on,g_ex_fam,g_ex_subname,g_ex_artist,g_ex_play,g_ex_dir,g_ex_alb,g_ex_playdir);
+    for(int i=0;i<g_ex_ntrail;i++) fprintf(f,"trail=%s\n",g_ex_trail[i]);
+    fclose(f); rename(EX_FILE ".tmp",EX_FILE); }
+static void ex_load(void){ FILE*f=fopen(EX_FILE,"r"); if(!f) return; char l[1200]; g_ex_ntrail=0;
+    while(fgets(l,sizeof l,f)){ l[strcspn(l,"\n")]=0; char*v=strchr(l,'='); if(!v) continue; *v++=0;
+        if(!strcmp(l,"on")) g_ex_on=atoi(v); else if(!strcmp(l,"fam")) g_ex_fam=atoi(v);
+        else if(!strcmp(l,"sub")) snprintf(g_ex_subname,sizeof g_ex_subname,"%s",v);
+        else if(!strcmp(l,"artist")) snprintf(g_ex_artist,sizeof g_ex_artist,"%s",v);
+        else if(!strcmp(l,"play")) snprintf(g_ex_play,sizeof g_ex_play,"%s",v);
+        else if(!strcmp(l,"dir")) snprintf(g_ex_dir,sizeof g_ex_dir,"%s",v);
+        else if(!strcmp(l,"alb")) snprintf(g_ex_alb,sizeof g_ex_alb,"%s",v);
+        else if(!strcmp(l,"playdir")) snprintf(g_ex_playdir,sizeof g_ex_playdir,"%s",v);
+        else if(!strcmp(l,"trail") && g_ex_ntrail<5) snprintf(g_ex_trail[g_ex_ntrail++],128,"%s",v); }
+    fclose(f); }
 /* put artist a on the card, with the album to propose */
 static int ex_set_artist(int a){
     if(a<0) return 0;
     explore_seen(a); snprintf(g_ex_artist,sizeof g_ex_artist,"%s",explore_artist(a));
     if(!explore_album(a,NULL,g_ex_dir,sizeof g_ex_dir,g_ex_alb,sizeof g_ex_alb)) g_ex_dir[0]=0;
-    return 1; }
+    ex_save(); return 1; }
 static void ex_go(int fam,int sub){ explore_refresh(); g_ex_fam=fam; g_ex_sub=sub;
+    snprintf(g_ex_subname,sizeof g_ex_subname,"%s",sub>=0?explore_sub_name(sub):"");
     if(ex_set_artist(explore_pick(fam,sub))) show_ex_card(); }
 /* start the card's album; Explorer radio stays on until something else is played */
 static int ex_play_album(void){
     if(!g_ex_dir[0]) return 0;
     pl_build(g_ex_dir,NULL); if(g_pln<=0) return 0;
     g_ex_on=1; snprintf(g_ex_play,sizeof g_ex_play,"%s",g_ex_artist); ex_trail_add(g_ex_artist);
+    snprintf(g_ex_playdir,sizeof g_ex_playdir,"%s",g_ex_dir); ex_save();
     pl_play(0); return 1; }
 /* Explorer radio: an album of a similar artist (album end, or double-press next) */
 static void ex_continue(void){
@@ -1694,8 +1722,9 @@ static void ex_another_cb(lv_event_t*e){ (void)e; explore_refresh(); int a=explo
     if(a>=0 && explore_album(a,g_ex_dir,g_ex_dir,sizeof g_ex_dir,g_ex_alb,sizeof g_ex_alb)) show_ex_card(); }
 static void ex_similar_cb(lv_event_t*e){ (void)e; explore_refresh();
     if(ex_set_artist(explore_similar(explore_find(g_ex_artist)))) show_ex_card(); }
-static void ex_different_cb(lv_event_t*e){ (void)e; explore_refresh();
+static void ex_different_cb(lv_event_t*e){ (void)e; explore_refresh(); g_ex_sub=ex_sub();
     if(ex_set_artist(explore_pick(g_ex_fam,g_ex_sub))) show_ex_card(); }
+static void ex_browse_cb(lv_event_t*e){ (void)e; if(g_ex_dir[0]) show_browser(g_ex_dir); }   /* the album's tracks (picking one keeps the radio) */
 static void ex_keep_cb(lv_event_t*e){ (void)e; if(!g_ex_dir[0]) return;
     char (*ff)[1024]=malloc((size_t)256*1024); if(!ff) return;
     int n=smartmix_folder(g_ex_dir,ff,256);
@@ -1779,6 +1808,7 @@ static void show_ex_card(void){
     lv_obj_t*r=set_row(l,LV_SYMBOL_PLAY,_("Listen to this album"),g_ex_alb[0]?g_ex_alb:g_ex_artist,0);
     lv_obj_set_style_border_width(r,2,0);   /* the main action: outlined (no check mark) */
     lv_obj_add_event_cb(r,ex_listen_cb,LV_EVENT_CLICKED,NULL);
+    r=set_row(l,LV_SYMBOL_LIST,_("Browse this album"),NULL,0); lv_obj_add_event_cb(r,ex_browse_cb,LV_EVENT_CLICKED,NULL);
     if(explore_artist_albums(a)>1){ r=set_row(l,LV_SYMBOL_REFRESH,_("Another album"),NULL,0); lv_obj_add_event_cb(r,ex_another_cb,LV_EVENT_CLICKED,NULL); }
     r=set_row(l,LV_SYMBOL_SHUFFLE,_("Similar artist"),NULL,0); lv_obj_add_event_cb(r,ex_similar_cb,LV_EVENT_CLICKED,NULL);
     r=set_row(l,LV_SYMBOL_NEXT,_("Different artist"),NULL,0); lv_obj_add_event_cb(r,ex_different_cb,LV_EVENT_CLICKED,NULL);
@@ -1796,7 +1826,7 @@ static void tile_cb(lv_event_t*e){ const char*name=lv_event_get_user_data(e);
     else if(!strcmp(name,"Playlists")) show_playlists();
     else if(!strcmp(name,"Settings")) show_setup();
     else if(!strcmp(name,"Games")) show_games();
-    else if(!strcmp(name,"Explorer")) show_explore();
+    else if(!strcmp(name,"Explorer")){ if(g_ex_artist[0] && explore_refresh() && explore_find(g_ex_artist)>=0) show_ex_card(); else show_explore(); }   /* where you left it */
     else DBG("tile (todo): %s\n",name); }
 static void make_row(lv_obj_t*c,const char*txt,const char*icon,uint32_t accent){
     lv_obj_t*b=lv_btn_create(c);
@@ -2437,7 +2467,9 @@ int main(int argc,char**argv){
     prefs_load(); bl_set(p_bright); audio_set_dac_filter(p_filter,p_nos);
     make_vol_overlay(); make_lock_overlay();
     show_home();
+    ex_load();                     /* Explorer session (the radio carries on if its album is resumed) */
     load_resume();                 /* if a track was playing at power-off, open it ready */
+    if(g_pln<=0) g_ex_on=0;        /* nothing resumed: no radio running */
     if(argc>2 && (!strcmp(argv[1],"-t")||!strcmp(argv[1],"-a")||!strcmp(argv[1],"-u"))){
         const char*b=strrchr(argv[2],'/');
         if(strcmp(argv[1],"-u")) audio_play(argv[2]);
