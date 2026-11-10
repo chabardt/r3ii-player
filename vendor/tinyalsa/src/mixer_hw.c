@@ -105,7 +105,7 @@ int mixer_hw_open(unsigned int card, void **data,
     char fn[256];
 
     snprintf(fn, sizeof(fn), "/dev/snd/controlC%u", card);
-    fd = open(fn, O_RDWR);
+    fd = open(fn, O_RDWR | O_CLOEXEC);   /* r3: see pcm_hw.c */
     if (fd < 0)
         return fd;
 

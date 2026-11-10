@@ -137,7 +137,9 @@ static struct pcm* jack_open(int hz,int ch){
             pcm=pcm_open(0,0,PCM_OUT,&cfg);
             if(pcm && !pcm_is_ready(pcm)){ pcm_close(pcm); pcm=0; } }
     }
-    if(!pcm||!pcm_is_ready(pcm)){ if(pcm)pcm_close(pcm); return 0; }
+    if(!pcm||!pcm_is_ready(pcm)){
+        fprintf(stderr,"[audio] DAC open failed: %s\n",pcm?pcm_get_error(pcm):"no pcm"); fflush(stderr);
+        if(pcm)pcm_close(pcm); return 0; }
     fprintf(stderr,"[audio] pcm open ok, streaming\n"); fflush(stderr);
     mixer_setup(); mx_fixed();            /* open mixer once + set routing for this track */
     a_on_jack=1; return pcm;
