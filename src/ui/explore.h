@@ -28,6 +28,7 @@ const char* explore_fam_name(int fam);   /* English, translate with _() */
 int  explore_subs(int fam,int*ids,int cap);
 const char* explore_sub_name(int id);
 int  explore_sub_artists(int id);
+int  explore_sub_fam(int id);             /* main genre of a subgenre */
 
 /* pick a random artist: fam -1 = any, sub -1 = any in the family. Prefers artists you play
  * little and skips those seen recently. Returns an artist index or -1. */
@@ -46,4 +47,8 @@ int  explore_artist_plays(int a);
 int  explore_album(int a,const char*not_dir,char*dir,int dcap,char*title,int tcap);
 /* which artist (index) owns a full folder path, -1 if none */
 int  explore_artist_of_dir(const char*dir);
+/* every album folder (path under the SD root, e.g. "Music/Artist/Album") and its artist */
+int  explore_nalbums(void);
+const char* explore_album_dir(int i);
+int  explore_album_artist(int i);
 #endif

@@ -165,6 +165,7 @@ int explore_subs(int fam,int*ids,int cap){ int n=0;
     return n; }
 const char* explore_sub_name(int id){ return id>=0&&id<NS ? S[id].name : ""; }
 int explore_sub_artists(int id){ return id>=0&&id<NS ? S[id].nart : 0; }
+int explore_sub_fam(int id){ return id>=0&&id<NS ? S[id].fam : -1; }
 
 /* ---- picking ---- */
 static int in_hist(const char*n){ for(int i=0;i<g_hn;i++) if(!strcmp(g_hist[i],n)) return 1; return 0; }
@@ -218,6 +219,9 @@ int explore_album(int a,const char*not_dir,char*dir,int dcap,char*title,int tcap
     /* tracks straight in the artist folder: no album folder */
     snprintf(title,tcap,"%s", !strcmp(t,A[a].name) ? "" : t);
     (void)n; return 1; }
+int explore_nalbums(void){ return NL; }
+const char* explore_album_dir(int i){ return i>=0&&i<NL ? L[i].dir : ""; }
+int explore_album_artist(int i){ return i>=0&&i<NL ? L[i].artist : -1; }
 int explore_artist_of_dir(const char*dir){
     if(!hL||!dir) return -1;
     const char*r = !strncmp(dir,EX_SD_ROOT "/",strlen(EX_SD_ROOT)+1) ? dir+strlen(EX_SD_ROOT)+1 : dir;
