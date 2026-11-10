@@ -1171,12 +1171,33 @@ static void drum(int d,int64_t t,int src){
     if(rc.ev_not_ready){ rc.ev_not_ready=0; show_banner("NOT READY","SPECIAL NEEDS 8 IN A ROW"); snd(S_MISS,1,0); }
     if(rc.ev_break||rc.ev_fever_off){ if(rc.ev_break) say(SAY_BREAK); rc.ev_break=0; rc.ev_fever_off=0; bk_fever=0; }
 }
+/* R3DRUM_DEMO=1: the game drums by itself, in time (testing on the device without a drummer):
+ * guard when a boss winds up, rally when hurt, strike when foes are close, march otherwise,
+ * the special in super fever */
+static int demo;
+static int demo_choose(void){
+    int k=dg_boss(&G); const bmove_t*mv=k>=0?dg_boss_move(&G,k):0;
+    if(mv && mv->kind!=MV_SUMMON && mv->kind!=MV_HEAL && mv->kind!=MV_ROAR && G.e[k].windup>=4 && G.e[k].windup<=11) return CMD_GUARD;
+    float h=0,m=0; int mender=0; for(int i=0;i<DG_MAXU;i++) if(G.u[i].on&&G.u[i].hp>0){ h+=G.u[i].hp; m+=G.u[i].maxhp; mender|=G.u[i].cls==CL_MENDER; }
+    if(m>0 && h<m*0.5f && mender) return CMD_RALLY;
+    for(int j=0;j<DG_MAXE;j++){ const enemy_t*e=&G.e[j]; if(e->on&&e->hp>0&&dg_front(e)-G.sx<320) return rc.super?CMD_SPECIAL:CMD_STRIKE; }
+    return CMD_MARCH; }
+static void drum(int d,int64_t t,int src);
+static void demo_tick(int64_t ns){
+    static int64_t done=-1; static int cmd=CMD_MARCH;
+    if(paused || end_t>0) return;
+    int64_t b=rc_nearest_beat(&rc,ns), tb=rc_beat_time(&rc,b);
+    if(ns<tb || b<=done || b<0) return;                         /* once per beat, as it sounds */
+    if(rc_responding(&rc,tb,0)!=CMD_NONE || (rc.next_start>=0 && b<rc.next_start)) return;
+    done=b; if(rc.nseq==0) cmd=demo_choose();
+    drum(DR_PATTERN[cmd][rc.nseq],tb+(int64_t)off_src[SRC_KEYS]*DR_RATE/1000,SRC_KEYS); }
 static void battle_tick(float dt){
     if(paused) return;
     int64_t ns=now_sample();
     { static int seen; if(music_live && beat_ver!=seen && rc.nseq==0 && rc_responding(&rc,ns,0)==CMD_NONE){ seen=beat_ver; music_reanchor(); } }
     { int mo=off_src[0]; for(int i=1;i<SRC_N;i++) if(off_src[i]>mo) mo=off_src[i];   /* lenient: the latest input */
       rc_tick(&rc,ns-(int64_t)mo*DR_RATE/1000); }
+    if(demo) demo_tick(ns);
     if(rc.ev_break||rc.ev_fever_off){ rc.ev_break=0; rc.ev_fever_off=0; bk_fever=0; }
     int64_t cb=(ns-rc.t0)>=0 ? (ns-rc.t0)/rc.beat : -1;
     while(last_beat<cb && end_t<=0){ last_beat++;
@@ -1270,10 +1291,10 @@ static void draw_brief(void){
     y+=12; text(16,y,"SPOILS",2,0xE8731C); y+=20;
     { int x=16; for(int i=0;i<m->nreward;i++){ const char*n=code_name(m->reward[i]); int w=text_w(n,1)+14;
         if(x+w>468){ x=16; y+=14; } text(x,y,n,1,owned(m->reward[i])?0x6A5A4A:0xF4E4D0); x+=w; } }
-    /* who marches */
-    y=TOP+512; text(16,y,"MARCHING",2,0xE8731C);
-    int n=dg_deploy(&A,sel); for(int i=0;i<A.nsquad;i++){ int x=40+i*56; if(x>460) break;
-        draw_mini_unit(x,TOP+612,&A.squad[i],1); if(i>=n){ dim(x-24,TOP+540,48,76); textc(x,TOP+600,"RESERVE",1,0x8A6A4A); } }
+    /* who marches: right under the spoils */
+    y+=28; if(y>TOP+512) y=TOP+512; text(16,y,"MARCHING",2,0xE8731C);
+    int n=dg_deploy(&A,sel), gy=y+100; for(int i=0;i<A.nsquad;i++){ int x=40+i*56; if(x>460) break;
+        draw_mini_unit(x,gy,&A.squad[i],1); if(i>=n){ dim(x-24,gy-72,48,76); textc(x,gy-12,"RESERVE",1,0x8A6A4A); } }
     /* buttons */
     y=TOP+636;
     rbox(12,y,130,52,10,0x2A2018); frame(12,y,130,52,1,0x5A4A3A); textc(77,y+16,"MAP",3,0xF4E4D0);
@@ -1616,6 +1637,7 @@ int main(int argc,char**argv){
                (c1.tv_sec-c0.tv_sec)+(c1.tv_nsec-c0.tv_nsec)/1e9);
         pcm_close(pcm); return 0; }
     load_game(); for(int i=0;i<A.nsquad;i++) fix_loadout(&A.squad[i]);
+    demo = getenv("R3DRUM_DEMO")!=NULL;
     int fd=open("/dev/fb0",O_RDWR); struct fb_var_screeninfo vi; struct fb_fix_screeninfo fi;
     if(fd<0||ioctl(fd,FBIOGET_VSCREENINFO,&vi)||ioctl(fd,FBIOGET_FSCREENINFO,&fi)){ fprintf(stderr,"no fb\n"); return 1; }
     vi.xoffset=0; vi.yoffset=0; ioctl(fd,FBIOPAN_DISPLAY,&vi);
