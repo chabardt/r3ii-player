@@ -297,7 +297,8 @@ static void page_browse(conn_t *c, const char *rel) {
                 "a{color:#e8731c;text-decoration:none}li{margin:6px 0}.m{color:#8a6a4a;font-size:13px}</style>"
                 "<h2>"); bxml(&b, NAME); bprintf(&b, "</h2><p>/"); bxml(&b, rel);
     if (rel[0]) { bprintf(&b, " &nbsp; <a href='/m3u/"); burl(&b, rel); bprintf(&b, "'>&#9654; play all (m3u for VLC)</a>"); }
-    if (!rel[0]) bprintf(&b, " &nbsp; <a href='/radio'>&#128251; radio</a>");
+    if (!rel[0]) bprintf(&b, " &nbsp; <a href='/artists'>artists A-Z</a> &middot; <a href='/albums'>albums A-Z</a> &middot; "
+                             "<a href='/recent'>recently added</a> &middot; <a href='/radio'>&#128251; radio</a>");
     bprintf(&b, "</p><ul>");
     if (rel[0]) { char up[1024]; snprintf(up, sizeof up, "%s", rel); char *s = strrchr(up, '/'); if (s) *s = 0; else up[0] = 0;
         bprintf(&b, "<li><a href='/browse/"); burl(&b, up); bprintf(&b, "'>..</a>"); }
@@ -482,6 +483,8 @@ static void soap_fault(conn_t *c, int code, const char *desc) {
     respond(c, 500, "text/xml; charset=\"utf-8\"", body, n, NULL);
 }
 static int radio_browse(buf_t *d, const char *host, const char *id, int meta, int start, int count, int *total);
+static int lib_browse(buf_t *d, const char *host, const char *id, int meta, int start, int count, int *total);
+static int lib_ready(void);
 static void cds_control(conn_t *c, const char *soapaction, const char *body) {
     const char *svc = "urn:schemas-upnp-org:service:ContentDirectory:1";
     if (strstr(soapaction, "GetSystemUpdateID")) { buf_t i = { 0 }; bprintf(&i, "<Id>1</Id>"); soap_reply(c, "GetSystemUpdateID", svc, &i); return; }
@@ -497,12 +500,13 @@ static void cds_control(conn_t *c, const char *soapaction, const char *body) {
     bprintf(&d, "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" "
                 "xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\">");
     if (!strncmp(id, "radio:", 6)) { returned = radio_browse(&d, c->host, id, !strcmp(flag, "BrowseMetadata"), start, count, &total); goto done; }
+    if (!strncmp(id, "lib:", 4)) { returned = lib_browse(&d, c->host, id, !strcmp(flag, "BrowseMetadata"), start, count, &total); goto done; }
     if (!safe_rel(rel)) { free(d.p); soap_fault(c, 701, "No such object"); return; }
     char parent[1024]; snprintf(parent, sizeof parent, "%s", rel); { char *s = strrchr(parent, '/'); if (s) *s = 0; else snprintf(parent, sizeof parent, "%s", rel[0] ? "0" : "-1"); }
     if (!strcmp(flag, "BrowseMetadata")) {
         char p[1600]; struct stat st; snprintf(p, sizeof p, "%s/%s", ROOT, rel);
         char art[1700];
-        if (!rel[0]) didl_container(&d, c->host, "0", "-1", NAME, 3, NULL);
+        if (!rel[0]) didl_container(&d, c->host, "0", "-1", NAME, 6, NULL);
         else if (stat(p, &st) == 0 && S_ISDIR(st.st_mode)) { const char *t = strrchr(rel, '/');
             didl_container(&d, c->host, rel, parent, t ? t + 1 : rel, 0, art_for(rel, 1, art, sizeof art) ? art : NULL); }
         else if (stat(p, &st) == 0 && audio_mime(rel)) { const char *t = strrchr(rel, '/'); char dn[300]; display_name(t ? t + 1 : rel, 0, dn, sizeof dn);
@@ -517,17 +521,18 @@ static void cds_control(conn_t *c, const char *soapaction, const char *body) {
         if (rel[0]) { char cover[1200];
             if (find_cover(rel, cover, sizeof cover)) { snprintf(fcov, sizeof fcov, "f/%s", cover); has_cover = 1; }
             else if (!rich) has_cover = art_for(rel, 1, fcov, sizeof fcov); }
-        total = n;
-        int radio = !rel[0] && explore_refresh();                     /* the root also holds "R3 Radio", last */
-        if (radio) { total = n + 1; if (start <= n && returned < count && start + count > n) { didl_container(&d, c->host, "radio:", "0", "R3 Radio", 0, NULL); } }
-        for (int i = start; i < n && returned < count; i++, returned++) {
+        /* the root also holds the radio and the A-Z views, before the folders */
+        static const char *VID[] = { "lib:a", "lib:b", "lib:r", "radio:" }, *VT[] = { "Artists A-Z", "Albums A-Z", "Recently added", "R3 Radio" };
+        int nvirt = !rel[0] && lib_ready() ? 4 : 0;
+        total = n + nvirt;
+        for (int k = start; k < nvirt && returned < count; k++, returned++) didl_container(&d, c->host, VID[k], "0", VT[k], 0, NULL);
+        for (int i = start > nvirt ? start - nvirt : 0; i < n && returned < count; i++, returned++) {
             char sub[1600], dn[300], art[1700]; snprintf(sub, sizeof sub, "%s%s%s", rel, rel[0] ? "/" : "", v[i].name);
             display_name(v[i].name, v[i].dir, dn, sizeof dn);
             if (v[i].dir) didl_container(&d, c->host, sub, rel[0] ? rel : "0", dn, 0,
                                          rel[0] && rich && art_for(sub, 1, art, sizeof art) ? art : NULL);
             else didl_item(&d, c->host, sub, rel[0] ? rel : "0", dn,
                            has_cover ? fcov : rich && art_for(sub, 0, art, sizeof art) ? art : NULL); }
-        if (radio && start <= n && start + count > n) returned++;
         free(v);
     }
 done:
@@ -703,6 +708,133 @@ static int radio_browse(buf_t *d, const char *host, const char *id, int meta, in
         didl_item(d, host, m->rel[i], id, m->title[i], art_for(m->rel[i], 0, art, sizeof art) ? art : NULL); }
     return returned; }
 
+/* ---------------------------------------------------------------- library views
+ * Artists A-Z, albums A-Z, recently added: from the same index as the radio (no SD scan).
+ * "Recently added" needs each album folder's date: one SD read per album (slow: ~2700 of
+ * them), so they are read in the background, one per loop turn, and kept in a cache file. */
+typedef struct { const char *name, *dir; int artist; char letter; } lv_t;
+static lv_t *ARTV, *ALBV; static int NARTV, NALBV, lv_ver = -1;
+static int RECV[60], NRECV = -1;
+#define DATES_FILE "/usr/data/r3srv_dates"
+static long long *ALB_MT; static int rec_next = -1, rec_todo, rec_done;   /* background date reading */
+static void dates_load(void) {                         /* "mtime \t folder" lines -> ALB_MT */
+    FILE *f = fopen(DATES_FILE, "r"); if (!f) return; char l[1400];
+    enum { H = 8192 }; int *h = calloc(H, sizeof *h); if (!h) { fclose(f); return; }
+    for (int i = 0; i < NALBV; i++) { unsigned k = hs(ALBV[i].dir) & (H - 1); while (h[k]) k = (k + 1) & (H - 1); h[k] = i + 1; }
+    while (fgets(l, sizeof l, f)) { l[strcspn(l, "\n")] = 0; char *t = strchr(l, '\t'); if (!t) continue; *t++ = 0;
+        unsigned k = hs(t) & (H - 1);
+        for (int n = 0; n < H && h[k]; n++, k = (k + 1) & (H - 1)) if (!strcmp(ALBV[h[k] - 1].dir, t)) { ALB_MT[h[k] - 1] = atoll(l); break; } }
+    free(h); fclose(f); }
+static void dates_save(void) {
+    FILE *f = fopen(DATES_FILE ".tmp", "w"); if (!f) return;
+    for (int i = 0; i < NALBV; i++) if (ALB_MT[i] > 0) fprintf(f, "%lld\t%s\n", ALB_MT[i], ALBV[i].dir);
+    fclose(f); rename(DATES_FILE ".tmp", DATES_FILE); }
+static long long *rec_mt;
+static int rec_cmp(const void *a, const void *b) { long long x = rec_mt[*(const int *)a], y = rec_mt[*(const int *)b]; return x < y ? 1 : x > y ? -1 : 0; }
+static void rec_finish(void) {                         /* all dates known: the 60 newest */
+    int *ix = calloc(NALBV + 1, sizeof *ix); if (!ix) return;
+    for (int i = 0; i < NALBV; i++) ix[i] = i;
+    rec_mt = ALB_MT; qsort(ix, NALBV, sizeof *ix, rec_cmp); rec_mt = NULL;
+    NRECV = NALBV < 60 ? NALBV : 60; memcpy(RECV, ix, NRECV * sizeof *ix); free(ix); rec_done = 1; rec_next = -1; }
+static void rec_begin(void) {                          /* after a (re)build of the album list */
+    free(ALB_MT); ALB_MT = calloc(NALBV + 1, sizeof *ALB_MT); rec_done = 0; NRECV = -1; rec_todo = 0;
+    if (!ALB_MT) return;
+    dates_load(); for (int i = 0; i < NALBV; i++) rec_todo += ALB_MT[i] <= 0;
+    if (rec_todo) rec_next = 0; else rec_finish(); }
+static int rec_step(void) {                            /* one folder date per call; 1 = more to do */
+    if (rec_next < 0 || !ALB_MT) return 0;
+    while (rec_next < NALBV && ALB_MT[rec_next] > 0) rec_next++;
+    if (rec_next >= NALBV) { dates_save(); rec_finish(); return 0; }
+    char p[1200]; struct stat st; snprintf(p, sizeof p, "%s/%s", ROOT, ALBV[rec_next].dir);
+    ALB_MT[rec_next] = stat(p, &st) == 0 && st.st_mtime > 0 ? (long long)st.st_mtime : 1;   /* 1: unreadable, but known */
+    rec_next++; rec_todo--; return 1; }
+static char letter_of(const char *s) {
+    if (!strncasecmp(s, "the ", 4)) s += 4;
+    unsigned char c = (unsigned char)s[0];
+    if (c == 0xC3 && s[1]) { unsigned char d = (unsigned char)s[1] & 0xDF;   /* À..ß: fold the common accents */
+        return d <= 0x86 ? 'A' : d == 0x87 ? 'C' : d <= 0x8B ? 'E' : d <= 0x8F ? 'I' : d == 0x91 ? 'N' : d <= 0x96 ? 'O' : d <= 0x9C ? 'U' : '#'; }
+    return isalpha(c) ? (char)toupper(c) : '#'; }
+static const char *sort_key(const char *s) { return strncasecmp(s, "the ", 4) ? s : s + 4; }
+static int lv_cmp(const void *a, const void *b) { const lv_t *x = a, *y = b;
+    if (x->letter != y->letter) return x->letter == '#' ? -1 : y->letter == '#' ? 1 : x->letter - y->letter;
+    return strcasecmp(sort_key(x->name), sort_key(y->name)); }
+static int lib_ready(void) {
+    if (!explore_refresh()) return 0;
+    int v = smartmix_version(); if (v == lv_ver && ARTV) return 1;
+    free(ARTV); free(ALBV); NARTV = explore_artists(); NALBV = explore_nalbums();
+    ARTV = calloc(NARTV + 1, sizeof *ARTV); ALBV = calloc(NALBV + 1, sizeof *ALBV);
+    static char adirs[4000][140]; int na = 0;
+    for (int i = 0; i < NARTV && i < 4000; i++, na++) { snprintf(adirs[i], sizeof adirs[i], "Music/%s", explore_artist(i));
+        ARTV[i] = (lv_t){ explore_artist(i), adirs[i], i, letter_of(explore_artist(i)) }; }
+    NARTV = na; int nb = 0;
+    for (int i = 0; i < NALBV; i++) { const char *d = explore_album_dir(i), *t = strrchr(d, '/'); int a = explore_album_artist(i);
+        t = t ? t + 1 : d; if (!strcmp(t, explore_artist(a))) continue;           /* loose tracks in the artist folder */
+        ALBV[nb++] = (lv_t){ t, d, a, letter_of(t) }; }
+    NALBV = nb;
+    qsort(ARTV, NARTV, sizeof *ARTV, lv_cmp); qsort(ALBV, NALBV, sizeof *ALBV, lv_cmp);
+    lv_ver = v; rec_begin(); return 1; }
+static int recent_albums(void) { return rec_done ? NRECV : -1; }   /* -1: dates still being read */
+static void album_title(const lv_t *a, char *out, size_t cap) { snprintf(out, cap, "%s (%s)", a->name, explore_artist(a->artist)); }
+/* UPnP: lib:a / lib:b = letters, lib:a:X / lib:b:X = artists / albums (real folders), lib:r = recent */
+static int lib_browse(buf_t *d, const char *host, const char *id, int meta, int start, int count, int *total) {
+    *total = 0; if (!lib_ready()) return 0;
+    char kind = id[4], letter = id[5] == ':' ? id[6] : 0; int returned = 0;
+    if (meta) { *total = 1; char t[40] = "";
+        if (letter) snprintf(t, sizeof t, "%c", letter); else snprintf(t, sizeof t, "%s", kind == 'a' ? "Artists A-Z" : kind == 'b' ? "Albums A-Z" : "Recently added");
+        didl_container(d, host, id, letter ? (kind == 'a' ? "lib:a" : "lib:b") : "0", t, 0, NULL); return 1; }
+    lv_t *v = kind == 'a' ? ARTV : ALBV; int nv = kind == 'a' ? NARTV : NALBV;
+    if (kind == 'r') { int n = recent_albums(); if (n < 0) n = 0; *total = n;
+        for (int i = start; i < n && returned < count; i++, returned++) { const lv_t *a = &ALBV[RECV[i]]; char t[400], art[1700];
+            album_title(a, t, sizeof t); didl_container(d, host, a->dir, id, t, 0, art_for(a->dir, 1, art, sizeof art) ? art : NULL); }
+        return returned; }
+    if (!letter) {                                                    /* the letters that have something */
+        char L[40]; int nl = 0; for (int i = 0; i < nv; i++) if (!nl || L[nl - 1] != v[i].letter) L[nl++] = v[i].letter;
+        *total = nl;
+        for (int i = start; i < nl && returned < count; i++, returned++) { char cid[16], t[4]; snprintf(cid, sizeof cid, "lib:%c:%c", kind, L[i]);
+            snprintf(t, sizeof t, "%c", L[i]); didl_container(d, host, cid, id, t, 0, NULL); }
+        return returned; }
+    int first = -1, n = 0; for (int i = 0; i < nv; i++) if (v[i].letter == letter) { if (first < 0) first = i; n++; }
+    *total = n; int rich = n <= 60;                                   /* covers only for short lists: SD lookups are slow */
+    for (int i = start; i < n && returned < count; i++, returned++) { const lv_t *a = &v[first + i]; char t[400], art[1700];
+        if (kind == 'b') album_title(a, t, sizeof t); else snprintf(t, sizeof t, "%s", a->name);
+        didl_container(d, host, a->dir, id, t, 0, rich && kind == 'b' && art_for(a->dir, 1, art, sizeof art) ? art : NULL); }
+    return returned; }
+/* web pages */
+static void lib_head(buf_t *b, const char *title) {
+    bprintf(b, "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>"); bxml(b, title);
+    bprintf(b, "</title><style>body{font:16px sans-serif;background:#0a0a0a;color:#f4e4d0;margin:16px}a{color:#e8731c;text-decoration:none}"
+               "li{margin:6px 0;list-style:none}ul{padding:0}.m{color:#8a6a4a;font-size:13px}.az a{display:inline-block;min-width:26px;padding:4px;text-align:center}"
+               "h3{color:#e8731c;border-bottom:1px solid #3a2a1a}img{width:48px;height:48px;object-fit:cover;vertical-align:middle;margin-right:10px;border-radius:4px;background:#1a1510}</style>"
+               "<p class=m><a href='/'>library</a> &middot; <a href='/artists'>artists A-Z</a> &middot; <a href='/albums'>albums A-Z</a> &middot; "
+               "<a href='/recent'>recently added</a> &middot; <a href='/radio'>radio</a></p><h2>"); bxml(b, title); bprintf(b, "</h2>"); }
+static void lib_page(conn_t *c, char kind) {
+    buf_t b = { 0 }; lib_head(&b, kind == 'a' ? "Artists A-Z" : kind == 'b' ? "Albums A-Z" : "Recently added");
+    if (!lib_ready()) { bprintf(&b, "<p>The library index isn't ready yet (r3player builds it).</p>"); respond_buf(c, 200, "text/html; charset=utf-8", &b); return; }
+    lv_t *v = kind == 'a' ? ARTV : ALBV; int nv = kind == 'a' ? NARTV : NALBV;
+    if (kind == 'r') { nv = recent_albums();
+        if (nv < 0) { bprintf(&b, "<meta http-equiv=refresh content=10><p>Reading the album dates from the card (once): %d of %d left. "
+                                 "This page refreshes by itself.</p>", rec_todo, NALBV); respond_buf(c, 200, "text/html; charset=utf-8", &b); return; } }
+    else { bprintf(&b, "<p class=az>"); char last = 0;
+        for (int i = 0; i < nv; i++) if (v[i].letter != last) { last = v[i].letter; bprintf(&b, "<a href='#L%c'>%c</a>", last == '#' ? '0' : last, last); }
+        bprintf(&b, "</p>"); }
+    char last = 0; bprintf(&b, "<ul>");
+    for (int i = 0; i < nv; i++) { const lv_t *a = kind == 'r' ? &ALBV[RECV[i]] : &v[i];
+        if (kind != 'r' && a->letter != last) { last = a->letter; bprintf(&b, "</ul><h3 id='L%c'>%c</h3><ul>", last == '#' ? '0' : last, last); }
+        bprintf(&b, "<li>");
+        if (kind != 'a') { bprintf(&b, "<img loading=lazy src='/cover/"); burl(&b, a->dir); bprintf(&b, "' alt=''>"); }
+        bprintf(&b, "<a href='/browse/"); burl(&b, a->dir); bprintf(&b, "'>"); bxml(&b, a->name); bprintf(&b, "</a>");
+        if (kind != 'a') { bprintf(&b, " <span class=m>"); bxml(&b, explore_artist(a->artist)); bprintf(&b, "</span>"); }
+        bprintf(&b, " <a class=m href='/m3u/"); burl(&b, a->dir); bprintf(&b, "'>m3u</a>"); }
+    bprintf(&b, "</ul><p class=m>%d %s. In VLC: Media &gt; Open Network Stream, paste an m3u link; or Local Network &gt; Universal Plug'n'Play.</p>",
+            nv, kind == 'a' ? "artists" : "albums");
+    respond_buf(c, 200, "text/html; charset=utf-8", &b); }
+static void cover_redirect(conn_t *c, const char *dir) {         /* /cover/<album folder> -> its picture */
+    char art[1700], ex[1800];
+    if (!safe_rel(dir) || !art_for(dir, 1, art, sizeof art)) { respond(c, 404, "text/plain", "no picture\n", 11, NULL); return; }
+    buf_t u = { 0 }; bput(&u, "/", 1); burl(&u, art);
+    snprintf(ex, sizeof ex, "Location: %s\r\nCache-Control: max-age=86400\r\n", u.p); free(u.p);
+    respond(c, 302, "text/plain", "", 0, ex); }
+
 /* ---------------------------------------------------------------- request dispatch */
 static const char *header(const char *req, const char *name, char *out, size_t cap) {
     size_t nl = strlen(name); const char *p = req;
@@ -758,6 +890,10 @@ static void handle(conn_t *c) {
         char ex[128]; snprintf(ex, sizeof ex, "SID: uuid:%s-evt\r\nTIMEOUT: Second-1800\r\n", UUID); respond(c, 200, "text/plain", "", 0, ex); return; }
     if (!strcmp(path, "/playlists")) { page_playlists(c); return; }
     if (!strcmp(path, "/radio") || !strcmp(path, "/radio/")) { radio_page(c); return; }
+    if (!strcmp(path, "/artists")) { lib_page(c, 'a'); return; }
+    if (!strcmp(path, "/albums")) { lib_page(c, 'b'); return; }
+    if (!strcmp(path, "/recent")) { lib_page(c, 'r'); return; }
+    if (!strncmp(path, "/cover/", 7)) { cover_redirect(c, path + 7); return; }
     if (!strcmp(path, "/radio.m3u")) { radio_m3u(c, query); return; }
     if (!strncmp(path, "/pl/", 4)) { serve_playlist(c, path + 4); return; }
     const char *rel = NULL; int kind = 0;
@@ -850,13 +986,15 @@ int main(int argc, char **argv) {
     fprintf(stderr, "[r3srv] '%s' on :%d, root %s, max %d streams, uuid %s\n", NAME, PORT, ROOT, MAXSTREAMS, UUID);
     status_write();
     ssdp_notify("ssdp:alive"); long long last_notify = now_ms(), last_beacon = 0;
+    lib_ready();                                       /* album list now: its dates start loading in the background */
     while (!quit) {
+        if (rec_next >= 0) rec_step();                 /* one album date per turn: streams keep flowing */
         struct pollfd pf[MAXC + 2]; int map[MAXC + 2], np = 0;
         pf[np].fd = ls; pf[np].events = POLLIN; map[np++] = -1;
         pf[np].fd = ssdp_fd; pf[np].events = POLLIN; map[np++] = -2;
         for (int i = 0; i < MAXC; i++) if (C[i].fd > 0) {
             pf[np].fd = C[i].fd; pf[np].events = C[i].state == C_READ ? POLLIN : POLLOUT; map[np++] = i; }
-        if (poll(pf, np, 1000) < 0) { if (errno == EINTR) continue; break; }
+        if (poll(pf, np, rec_next >= 0 ? 0 : 1000) < 0) { if (errno == EINTR) continue; break; }   /* dates to read: don't wait */
         long long t = now_ms();
         if (t - last_beacon > 5000 && disc_fd >= 0) { last_beacon = t;   /* announce ourselves to R3 peers */
             char msg[160]; int ml = snprintf(msg, sizeof msg, "R3PLAY\t%s\t%d", NAME, PORT);

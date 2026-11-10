@@ -87,6 +87,9 @@ for this one model.
 **Wi-Fi & music server**
 - Wi-Fi settings; **r3srv**, a UPnP/DLNA + HTTP server that serves your library (incl. album art)
   over the network.
+- **Browse the collection** from VLC (Local Network > Universal Plug'n'Play) or a web browser
+  (`http://<R3 address>:8200/`): by folder, **Artists A–Z**, **Albums A–Z** (with covers) and
+  **Recently added**; every folder has an m3u link for VLC.
 - **R3 radio for VLC:** an endless mix from the library, Explorer-style (an album, then a
   similar artist's album…), streamed straight from the card in original quality. Open
   `http://<R3 address>:8200/radio` for the genres and subgenres, or paste a link like

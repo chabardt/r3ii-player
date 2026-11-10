@@ -47,4 +47,8 @@ int  explore_artist_plays(int a);
 int  explore_album(int a,const char*not_dir,char*dir,int dcap,char*title,int tcap);
 /* which artist (index) owns a full folder path, -1 if none */
 int  explore_artist_of_dir(const char*dir);
+/* every album folder (path under the SD root, e.g. "Music/Artist/Album") and its artist */
+int  explore_nalbums(void);
+const char* explore_album_dir(int i);
+int  explore_album_artist(int i);
 #endif
